@@ -290,11 +290,7 @@ async function getEmbedding(text: string): Promise<number[]> {
 
   if (apiKey && embeddingUrl) {
     try {
-      let cleanUrl = embeddingUrl.trim();
-      if (cleanUrl.endsWith('/')) {
-        cleanUrl = cleanUrl.slice(0, -1);
-      }
-      const response = await fetch(cleanUrl, {
+      const response = await fetch(embeddingUrl.trim(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

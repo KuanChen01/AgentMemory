@@ -175,18 +175,6 @@ async function processQueue() {
   }
 }
 
-// Normalize API Base URL (removes trailing slashes and redundant paths)
-function normalizeApiUrl(url: string): string {
-  let cleanUrl = url.trim();
-  if (cleanUrl.endsWith('/')) {
-    cleanUrl = cleanUrl.slice(0, -1);
-  }
-  if (cleanUrl.endsWith('/chat/completions')) {
-    cleanUrl = cleanUrl.slice(0, -'/chat/completions'.length);
-  }
-  return cleanUrl;
-}
-
 // Highly resilient JSON extractor that works even if LLMs return markdown code blocks
 function parseJSONContent(rawText: string): any {
   const trimmed = rawText.trim();
@@ -219,17 +207,12 @@ async function handleSummarization(log: QueuedToolLog) {
     return;
   }
 
-  const cleanApiUrl = normalizeApiUrl(rawApiUrl);
-  const requestUrl = `${cleanApiUrl}/chat/completions`;
+  const requestUrl = `${rawApiUrl.trim()}/chat/completions`;
 
-  // Parse custom headers if configured
+  // Parse custom headers if configured (will fail loudly if invalid JSON)
   let customHeaders: Record<string, string> = {};
   if (process.env.AGENTVAULT_LLM_HEADERS) {
-    try {
-      customHeaders = JSON.parse(process.env.AGENTVAULT_LLM_HEADERS);
-    } catch (err: any) {
-      console.warn('[Warning] Failed to parse AGENTVAULT_LLM_HEADERS JSON:', err.message);
-    }
+    customHeaders = JSON.parse(process.env.AGENTVAULT_LLM_HEADERS);
   }
 
   const headers: Record<string, string> = {
@@ -359,8 +342,7 @@ async function getEmbedding(text: string): Promise<number[]> {
 
   if (apiKey && embeddingUrl) {
     try {
-      const cleanUrl = normalizeApiUrl(embeddingUrl);
-      const response = await fetch(cleanUrl, {
+      const response = await fetch(embeddingUrl.trim(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
