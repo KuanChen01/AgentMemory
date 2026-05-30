@@ -2,11 +2,12 @@ import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { DatabaseManager, Observation, Session } from './db';
 import { v4 as uuidv4 } from 'uuid';
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: path.join(os.homedir(), '.agentvault', '.env') });
 
 const app = express();
 app.use(express.json({ limit: '10mb' })); // Support large logs

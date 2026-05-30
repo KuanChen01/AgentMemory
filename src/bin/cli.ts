@@ -2,9 +2,14 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import dotenv from 'dotenv';
 
 const homeDir = os.homedir();
 const vaultDir = path.join(homeDir, '.agentvault');
+
+// Load environment variables
+dotenv.config({ path: path.join(vaultDir, '.env') });
+
 const pidFile = path.join(vaultDir, 'worker.pid');
 const PORT = process.env.AGENTVAULT_PORT || 38888;
 

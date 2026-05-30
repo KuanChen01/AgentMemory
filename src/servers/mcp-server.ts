@@ -8,9 +8,10 @@ import { DatabaseManager, Observation } from '../services/db';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import path from 'path';
+import os from 'os';
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: path.join(os.homedir(), '.agentvault', '.env') });
 
 const dbManager = new DatabaseManager();
 
