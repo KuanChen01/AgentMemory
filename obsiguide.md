@@ -48,7 +48,7 @@
 - Configured Antigravity CLI MCP server registration inside the active plugin config `local-game-mcps/mcp_config.json`.
 - Formatted the Obsidian project note `AgentVault.md` to match the exact project card template.
 - Verified MCP server `tools/list` JSON-RPC response over STDIO and confirmed background daemon status is ACTIVE.
-- Ensured environment variables in `.env` are formatted correctly.
+- Refactored dotenv loader globally to read from `C:\Users\Admin\.agentvault\.env` and removed local `.env` from source repository to protect privacy.
 
 ## Verified Commands
 <!-- AGENT-MAINTAINED: update during work -->
@@ -74,6 +74,7 @@
 - Registered MCP server for Antigravity at `C:\Users\Admin\.gemini\config\plugins\local-game-mcps\mcp_config.json`.
 - Created native OpenCode plugin `agentvault-plugin.mjs` and registered in `opencode.jsonc`.
 - Restructured `E:\Kuan\Vault\02_Projects\AgentVault.md` project card.
+- Implemented global configuration directory `.env` loading, removing local config from source repo.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
@@ -82,5 +83,5 @@
 ## Last Sync
 <!-- AGENT-MAINTAINED: update during work -->
 - date: 2026-05-30
-- status: Completed Bug Fixes & Agent Registrations
+- status: Completed Bug Fixes, Agent Registrations & Env Global Refactor
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
