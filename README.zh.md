@@ -73,9 +73,16 @@ npm link
 
 **配置文件路径**：`~/.agentvault/.env` (若 `.agentvault` 文件夹不存在请先手动创建)
 ```env
-# 填入您的 DeepSeek API Key
-DEEPSEEK_API_KEY=您的_deepseek_api_key
-DEEPSEEK_API_URL=https://api.deepseek.com/v1
+# 通用 LLM 接口凭证 (支持 OpenAI, DeepSeek, Mimo, 火山方舟, 本地 Ollama 等)
+AGENTVAULT_LLM_API_KEY=您的_api_key
+AGENTVAULT_LLM_API_URL=https://api.deepseek.com/v1
+AGENTVAULT_LLM_MODEL=deepseek-chat
+
+# 可选：如果中转平台/网关不支持 JSON Mode 参数，设置为 true
+AGENTVAULT_LLM_DISABLE_JSON_MODE=false
+
+# 可选：针对中转网关或订阅令牌池的自定义 JSON 请求头 (如火山引擎方舟)
+# AGENTVAULT_LLM_HEADERS={"X-Custom-Auth":"value"}
 
 # 本地后台服务监听端口
 AGENTVAULT_PORT=38888

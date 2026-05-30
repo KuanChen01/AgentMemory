@@ -73,9 +73,16 @@ Set up your global configuration file in your user home directory:
 
 **File Path**: `~/.agentvault/.env` (Create parent directory `.agentvault` if it doesn't exist)
 ```env
-# DeepSeek API credentials
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_API_URL=https://api.deepseek.com/v1
+# General LLM credentials (supports OpenAI, DeepSeek, Mimo, Ark, local Ollama, etc.)
+AGENTVAULT_LLM_API_KEY=your_api_key_here
+AGENTVAULT_LLM_API_URL=https://api.deepseek.com/v1
+AGENTVAULT_LLM_MODEL=deepseek-chat
+
+# Optional: Set to true if your proxy platform doesn't support JSON Mode parameters
+AGENTVAULT_LLM_DISABLE_JSON_MODE=false
+
+# Optional: Custom JSON headers required by your proxy pools or gateway (e.g. Volcengine Ark)
+# AGENTVAULT_LLM_HEADERS={"X-Custom-Auth":"value"}
 
 # Local service port
 AGENTVAULT_PORT=38888
