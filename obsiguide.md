@@ -80,6 +80,7 @@
 - Registered MCP server for Codex at `C:\Users\Admin\.codex\config.toml`.
 - Re-structured settings installer inside `src/bin/cli.ts` to output correct array-of-matchers hooks config for Claude Code.
 - Created bilingual `README.md` and successfully pushed all repository commits to GitHub.
+- Refactored LLM connectivity to be fully compatible with arbitrary endpoints (OpenAI, DeepSeek, Mimo, Volcengine Ark, Ollama) by implementing custom JSON headers, URL normalization, and a fault-tolerant JSON parser.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
@@ -88,5 +89,5 @@
 ## Last Sync
 <!-- AGENT-MAINTAINED: update during work -->
 - date: 2026-05-30
-- status: Completed Bug Fixes, Agent Registrations, Global Refactor & GitHub Push
+- status: Completed Bug Fixes, Agent Registrations, Global Refactor, Generalized LLM Support & GitHub Push
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
