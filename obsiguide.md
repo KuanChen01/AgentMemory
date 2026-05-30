@@ -49,6 +49,7 @@
 - Formatted the Obsidian project note `AgentVault.md` to match the exact project card template.
 - Verified MCP server `tools/list` JSON-RPC response over STDIO and confirmed background daemon status is ACTIVE.
 - Refactored dotenv loader globally to read from `C:\Users\Admin\.agentvault\.env` and removed local `.env` from source repository to protect privacy.
+- Registered the `agentvault` MCP server inside the global Codex config (`C:\Users\Admin\.codex\config.toml`).
 
 ## Verified Commands
 <!-- AGENT-MAINTAINED: update during work -->
@@ -75,6 +76,7 @@
 - Created native OpenCode plugin `agentvault-plugin.mjs` and registered in `opencode.jsonc`.
 - Restructured `E:\Kuan\Vault\02_Projects\AgentVault.md` project card.
 - Implemented global configuration directory `.env` loading, removing local config from source repo.
+- Registered MCP server for Codex at `C:\Users\Admin\.codex\config.toml`.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
