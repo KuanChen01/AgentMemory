@@ -162,12 +162,28 @@ async function runInstaller() {
 
     // Initialize hook configurations
     if (!settings.hooks) settings.hooks = {};
-    settings.hooks.SessionStart = {
-      command: `node "${claudeStartHook}"`,
-    };
-    settings.hooks.PostToolUse = {
-      command: `node "${claudePostHook}"`,
-    };
+    settings.hooks.SessionStart = [
+      {
+        matcher: '.*',
+        hooks: [
+          {
+            type: 'command',
+            command: `node "${claudeStartHook}"`,
+          }
+        ]
+      }
+    ];
+    settings.hooks.PostToolUse = [
+      {
+        matcher: '.*',
+        hooks: [
+          {
+            type: 'command',
+            command: `node "${claudePostHook}"`,
+          }
+        ]
+      }
+    ];
 
     fs.writeFileSync(claudeSettingsPath, JSON.stringify(settings, null, 2), 'utf8');
     console.log(`[Success] Registered hooks and MCP server in Claude Code: ${claudeSettingsPath}`);

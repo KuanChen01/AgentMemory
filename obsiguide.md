@@ -50,6 +50,7 @@
 - Verified MCP server `tools/list` JSON-RPC response over STDIO and confirmed background daemon status is ACTIVE.
 - Refactored dotenv loader globally to read from `C:\Users\Admin\.agentvault\.env` and removed local `.env` from source repository to protect privacy.
 - Registered the `agentvault` MCP server inside the global Codex config (`C:\Users\Admin\.codex\config.toml`).
+- Resolved Claude Code hook configuration warning by rewriting hooks as arrays of matcher objects inside `settings.json`.
 
 ## Verified Commands
 <!-- AGENT-MAINTAINED: update during work -->
@@ -77,6 +78,7 @@
 - Restructured `E:\Kuan\Vault\02_Projects\AgentVault.md` project card.
 - Implemented global configuration directory `.env` loading, removing local config from source repo.
 - Registered MCP server for Codex at `C:\Users\Admin\.codex\config.toml`.
+- Re-structured settings installer inside `src/bin/cli.ts` to output correct array-of-matchers hooks config for Claude Code.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
