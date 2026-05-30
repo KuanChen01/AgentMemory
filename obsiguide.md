@@ -9,7 +9,7 @@
 ## Obsidian Target
 <!-- USER-OWNED: keep short -->
 - vault_path: E:\Kuan\Vault
-- project_note: E:\Kuan\Vault\Projects\AgentVault.md
+- project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
 - entry:
 - areas:
 - domain:
@@ -44,31 +44,39 @@
 
 ## Current State
 <!-- AGENT-MAINTAINED: update during work -->
-- Completed multi-agent UAM design and obtained user approval.
-- Created `task.md` to track implementation steps.
-- Starting Task 1: Project Initialization & Directory Setup.
+- Completed full implementation of database service, background worker, MCP server, hooks, and CLI installer.
+- Migrated database driver to WebAssembly-based `node-sqlite3-wasm` to bypass Windows compilation issues.
+- Verified FTS5 and vector similarity scoring with a local scratch test.
+- Automatically registered hooks and MCP configuration in Claude Code and OpenCode settings.
+- Staged and committed all code to Git.
 
 ## Verified Commands
 <!-- AGENT-MAINTAINED: update during work -->
 - `git init`: Initializes git repository.
+- `git add <files>`: Stages files.
+- `git commit -m "<msg>"`: Commits staged files.
+- `npm run build`: Compiles TypeScript.
+- `node dist/bin/cli.js install`: Installs configuration hooks and servers.
+- `npx ts-node scratch/test-db.ts`: Runs database validation test.
 
 ## Known Constraints
 <!-- AGENT-MAINTAINED: update during work -->
 
 ## Open Questions
 <!-- AGENT-MAINTAINED: update during work -->
-- None (All design questions resolved. Ready to proceed).
+- None (All design and development tasks completed).
 
 ## Latest Durable Changes
 <!-- AGENT-MAINTAINED: update during work -->
-- Created [task.md](file:///C:/Users/Admin/.gemini/antigravity-cli/brain/17450e12-ec79-4e78-b58e-e445581fe52e/task.md) for execution tracking.
+- Implemented and committed all AgentVault codebase files to Git.
+- Created [walkthrough.md](file:///C:/Users/Admin/.gemini/antigravity-cli/brain/17450e12-ec79-4e78-b58e-e445581fe52e/walkthrough.md) report.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
-- Initialize package.json, TypeScript settings, and configure the local node.js workspace.
+- Hand over to the user for production usage.
 
 ## Last Sync
 <!-- AGENT-MAINTAINED: update during work -->
 - date: 2026-05-30
-- status: Starting Task 1 Execution
-- linked_project_note: E:\Kuan\Vault\Projects\AgentVault.md
+- status: Completed Development & Git Commit
+- linked_project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
