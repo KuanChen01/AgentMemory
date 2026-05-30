@@ -1,10 +1,10 @@
 {
-  "name": "agentvault",
+  "name": "agentmemory",
   "version": "1.0.0",
   "description": "Universal Agent Memory (UAM) system for coding assistants",
   "main": "dist/index.js",
   "bin": {
-    "agentvault": "dist/bin/cli.js"
+    "agentmem": "dist/bin/cli.js"
   },
   "scripts": {
     "build": "tsc",

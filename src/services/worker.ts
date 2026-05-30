@@ -7,12 +7,12 @@ import { DatabaseManager, Observation, Session } from './db';
 import { v4 as uuidv4 } from 'uuid';
 
 // Load environment variables
-dotenv.config({ path: path.join(os.homedir(), '.agentvault', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
 const app = express();
 app.use(express.json({ limit: '10mb' })); // Support large logs
 
-const PORT = process.env.AGENTVAULT_PORT || 38888;
+const PORT = process.env.AGENTMEM_PORT || 38888;
 const dbManager = new DatabaseManager();
 
 // Queue to process tool executions sequentially in the background
@@ -34,10 +34,10 @@ let isProcessingQueue = false;
 // Initialize database before starting the server
 async function startServer() {
   await dbManager.initialize();
-  console.log('AgentVault SQLite database initialized.');
+  console.log('AgentMemory SQLite database initialized.');
   
   app.listen(PORT, () => {
-    console.log(`AgentVault worker service running on port ${PORT}`);
+    console.log(`AgentMemory worker service running on port ${PORT}`);
   });
 }
 
@@ -148,7 +148,7 @@ app.post('/search', async (req, res) => {
 
 // 6. Shutdown Worker Endpoint
 app.post('/shutdown', (req, res) => {
-  res.json({ success: true, message: 'Shutting down AgentVault worker...' });
+  res.json({ success: true, message: 'Shutting down AgentMemory worker...' });
   console.log('Shutdown request received. Exiting...');
   setTimeout(() => {
     dbManager.close();
@@ -195,9 +195,9 @@ function parseJSONContent(rawText: string): any {
 
 // Generalized LLM API Summarization Logic
 async function handleSummarization(log: QueuedToolLog) {
-  const apiKey = process.env.AGENTVAULT_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
-  const rawApiUrl = process.env.AGENTVAULT_LLM_API_URL || process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1';
-  const modelName = process.env.AGENTVAULT_LLM_MODEL || 'deepseek-chat';
+  const apiKey = process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
+  const rawApiUrl = process.env.AGENTMEM_LLM_API_URL || process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1';
+  const modelName = process.env.AGENTMEM_LLM_MODEL || 'deepseek-chat';
 
   // If no API key is specified and it is not a local Ollama setup (which doesn't require a key), save raw observation
   const isLocalOllama = rawApiUrl.includes('localhost') || rawApiUrl.includes('127.0.0.1');
@@ -211,8 +211,8 @@ async function handleSummarization(log: QueuedToolLog) {
 
   // Parse custom headers if configured (will fail loudly if invalid JSON)
   let customHeaders: Record<string, string> = {};
-  if (process.env.AGENTVAULT_LLM_HEADERS) {
-    customHeaders = JSON.parse(process.env.AGENTVAULT_LLM_HEADERS);
+  if (process.env.AGENTMEM_LLM_HEADERS) {
+    customHeaders = JSON.parse(process.env.AGENTMEM_LLM_HEADERS);
   }
 
   const headers: Record<string, string> = {
@@ -263,7 +263,7 @@ ${log.output.substring(0, 20000)}
     };
 
     // Only send response_format if JSON Mode is not explicitly disabled
-    const disableJsonMode = process.env.AGENTVAULT_LLM_DISABLE_JSON_MODE === 'true';
+    const disableJsonMode = process.env.AGENTMEM_LLM_DISABLE_JSON_MODE === 'true';
     if (!disableJsonMode) {
       requestBody.response_format = { type: 'json_object' };
     }

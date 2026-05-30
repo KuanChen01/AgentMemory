@@ -2,9 +2,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
 
-dotenv.config({ path: path.join(os.homedir(), '.agentvault', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
-const PORT = process.env.AGENTVAULT_PORT || 38888;
+const PORT = process.env.AGENTMEM_PORT || 38888;
 
 // Read JSON from stdin
 async function readStdin(): Promise<string> {
@@ -55,10 +55,10 @@ async function main() {
     });
 
     if (!response.ok) {
-      console.error('[AgentVault Hook Error] Worker returned status:', response.status);
+      console.error('[AgentMemory Hook Error] Worker returned status:', response.status);
     }
   } catch (err: any) {
-    console.error('[AgentVault Hook Error] Failed to process tool log:', err.message);
+    console.error('[AgentMemory Hook Error] Failed to process tool log:', err.message);
   }
 }
 

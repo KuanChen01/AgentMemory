@@ -2,9 +2,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
 
-dotenv.config({ path: path.join(os.homedir(), '.agentvault', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
-const PORT = process.env.AGENTVAULT_PORT || 38888;
+const PORT = process.env.AGENTMEM_PORT || 38888;
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -48,7 +48,7 @@ async function main() {
       })
     });
   } catch (err: any) {
-    console.error('[AgentVault Hook Error] OpenCode post-tool failure:', err.message);
+    console.error('[AgentMemory Hook Error] OpenCode post-tool failure:', err.message);
   }
 }
 

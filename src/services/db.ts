@@ -47,16 +47,16 @@ export class DatabaseManager {
   private db: any = null;
 
   constructor() {
-    const customPath = process.env.AGENTVAULT_DB_PATH;
+    const customPath = process.env.AGENTMEM_DB_PATH;
     if (customPath) {
       this.dbPath = path.resolve(customPath);
     } else {
       const homeDir = os.homedir();
-      const vaultDir = path.join(homeDir, '.agentvault');
+      const vaultDir = path.join(homeDir, '.agentmem');
       if (!fs.existsSync(vaultDir)) {
         fs.mkdirSync(vaultDir, { recursive: true });
       }
-      this.dbPath = path.join(vaultDir, 'agentvault.db');
+      this.dbPath = path.join(vaultDir, 'agentmemory.db');
     }
   }
 

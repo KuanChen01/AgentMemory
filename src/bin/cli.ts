@@ -6,13 +6,13 @@ import os from 'os';
 import dotenv from 'dotenv';
 
 const homeDir = os.homedir();
-const vaultDir = path.join(homeDir, '.agentvault');
+const vaultDir = path.join(homeDir, '.agentmem');
 
 // Load environment variables
 dotenv.config({ path: path.join(vaultDir, '.env') });
 
 const pidFile = path.join(vaultDir, 'worker.pid');
-const PORT = process.env.AGENTVAULT_PORT || 38888;
+const PORT = process.env.AGENTMEM_PORT || 38888;
 
 // Helper to check if database directory exists
 if (!fs.existsSync(vaultDir)) {
@@ -42,13 +42,13 @@ async function main() {
 }
 
 function printHelp() {
-  console.log(`AgentVault CLI - Universal Agent Memory Controller
+  console.log(`AgentMemory CLI - Universal Agent Memory Controller
 
 Usage:
-  agentvault start     Start the background memory worker service
-  agentvault stop      Stop the background worker service
-  agentvault status    Check the worker service status
-  agentvault install   Automatically register hooks and MCP servers for Claude Code and OpenCode
+  agentmem start     Start the background memory worker service
+  agentmem stop      Stop the background worker service
+  agentmem status    Check the worker service status
+  agentmem install   Automatically register hooks and MCP servers for Claude Code and OpenCode
 `);
 }
 
@@ -58,7 +58,7 @@ function startWorker() {
     try {
       // Check if process is actually running
       process.kill(parseInt(pid), 0);
-      console.log(`AgentVault worker is already running (PID: ${pid}).`);
+      console.log(`AgentMemory worker is already running (PID: ${pid}).`);
       return;
     } catch (e) {
       // Process not running, clean up file
@@ -77,7 +77,7 @@ function startWorker() {
 
   const runner = isTsNode ? 'ts-node' : process.argv[0];
 
-  console.log(`Starting AgentVault memory worker on port ${PORT}...`);
+  console.log(`Starting AgentMemory memory worker on port ${PORT}...`);
   console.log('Press Ctrl+C to stop the service.\n');
 
   const child = spawn(runner, [workerFile], {
@@ -91,19 +91,19 @@ function startWorker() {
 }
 
 async function stopWorker() {
-  console.log('Sending shutdown request to AgentVault worker...');
+  console.log('Sending shutdown request to AgentMemory worker...');
   try {
     const res = await fetch(`http://localhost:${PORT}/shutdown`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
     if (res.ok) {
-      console.log('Successfully stopped AgentVault background worker.');
+      console.log('Successfully stopped AgentMemory background worker.');
     } else {
       console.log('Worker responded with error status. Cleaning PID files.');
     }
   } catch (e: any) {
-    console.log(`AgentVault worker is not running or unreachable (${e.message}).`);
+    console.log(`AgentMemory worker is not running or unreachable (${e.message}).`);
   } finally {
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile);
@@ -122,14 +122,14 @@ async function checkStatus() {
   } catch (e) {}
 
   if (isRunning) {
-    console.log(`AgentVault Status: ACTIVE (Port: ${PORT})`);
+    console.log(`AgentMemory Status: ACTIVE (Port: ${PORT})`);
   } else {
-    console.log('AgentVault Status: INACTIVE');
+    console.log('AgentMemory Status: INACTIVE');
   }
 }
 
 async function runInstaller() {
-  console.log('Initializing AgentVault configurations...\n');
+  console.log('Initializing AgentMemory configurations...\n');
 
   // Resolve absolute paths to servers/hooks
   const currentDir = path.resolve(__dirname, '../..').replace(/\\/g, '/');
@@ -196,7 +196,7 @@ async function runInstaller() {
     }
 
     if (!globalConfig.mcpServers) globalConfig.mcpServers = {};
-    globalConfig.mcpServers.agentvault = {
+    globalConfig.mcpServers.agentmem = {
       type: 'stdio',
       command: 'node',
       args: [mcpServerPath],
@@ -226,7 +226,7 @@ async function runInstaller() {
     // Set up MCP servers
     if (!opencodeConfig.mcp) opencodeConfig.mcp = {};
     if (!opencodeConfig.mcp.servers) opencodeConfig.mcp.servers = {};
-    opencodeConfig.mcp.servers.agentvault = {
+    opencodeConfig.mcp.servers.agentmem = {
       command: 'node',
       args: [mcpServerPath],
     };
@@ -246,7 +246,7 @@ async function runInstaller() {
     console.warn(`[Warning] Could not configure OpenCode global settings: ${err.message}`);
   }
 
-  console.log('\nAgentVault installation complete! Remember to build the TypeScript files ("npm run build") before starting.');
+  console.log('\nAgentMemory installation complete! Remember to build the TypeScript files ("npm run build") before starting.');
 }
 
 main().catch((err) => {

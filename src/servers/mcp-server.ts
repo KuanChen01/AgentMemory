@@ -11,14 +11,14 @@ import path from 'path';
 import os from 'os';
 
 // Load environment variables
-dotenv.config({ path: path.join(os.homedir(), '.agentvault', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
 const dbManager = new DatabaseManager();
 
 // Create the MCP Server
 const server = new Server(
   {
-    name: 'agentvault-mcp-server',
+    name: 'agentmem-mcp-server',
     version: '1.0.0',
   },
   {
@@ -265,7 +265,7 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
           content: [
             {
               type: 'text',
-              text: `Memory successfully recorded in AgentVault! ID: ${obs.id}. Other agents working on ${projectPath} can now access this entry.`,
+              text: `Memory successfully recorded in AgentMemory! ID: ${obs.id}. Other agents working on ${projectPath} can now access this entry.`,
             },
           ],
         };
@@ -285,7 +285,7 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
 
 // Setup fallback vector generator
 async function getEmbedding(text: string): Promise<number[]> {
-  const apiKey = process.env.AGENTVAULT_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
+  const apiKey = process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
   const embeddingUrl = process.env.EMBEDDING_API_URL;
 
   if (apiKey && embeddingUrl) {
@@ -346,7 +346,7 @@ async function main() {
   await dbManager.initialize();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('AgentVault MCP Server started on STDIO transport.');
+  console.error('AgentMemory MCP Server started on STDIO transport.');
 }
 
 main().catch((err) => {

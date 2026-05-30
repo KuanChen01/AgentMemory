@@ -9,7 +9,7 @@
 ## Obsidian Target
 <!-- USER-OWNED: keep short -->
 - vault_path: E:\Kuan\Vault
-- project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
+- project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
 - entry:
 - areas:
 - domain:
@@ -40,16 +40,16 @@
 
 ## Current Goal
 <!-- AGENT-MAINTAINED: update during work -->
-- Build and verify the Universal Agent Memory (AgentVault) system for OpenCode, Claude Code, Codex, and Antigravity.
+- Build and verify the Universal Agent Memory (AgentMemory) system for OpenCode, Claude Code, Codex, and Antigravity.
 
 ## Current State
 <!-- AGENT-MAINTAINED: update during work -->
-- Resolved OpenCode startup crash by using a native plugin `agentvault-plugin.mjs` loaded via `opencode.jsonc` instead of raw static root fields in `opencode.json`.
+- Resolved OpenCode startup crash by using a native plugin `agentmem-plugin.mjs` loaded via `opencode.jsonc` instead of raw static root fields in `opencode.json`.
 - Configured Antigravity CLI MCP server registration inside the active plugin config `local-game-mcps/mcp_config.json`.
-- Formatted the Obsidian project note `AgentVault.md` to match the exact project card template.
+- Formatted the Obsidian project note `AgentMemory.md` to match the exact project card template.
 - Verified MCP server `tools/list` JSON-RPC response over STDIO and confirmed background daemon status is ACTIVE.
-- Refactored dotenv loader globally to read from `C:\Users\Admin\.agentvault\.env` and removed local `.env` from source repository to protect privacy.
-- Registered the `agentvault` MCP server inside the global Codex config (`C:\Users\Admin\.codex\config.toml`).
+- Refactored dotenv loader globally to read from `C:\Users\Admin\.agentmem\.env` and removed local `.env` from source repository to protect privacy.
+- Registered the `agentmem` MCP server inside the global Codex config (`C:\Users\Admin\.codex\config.toml`).
 - Resolved Claude Code hook configuration warning by rewriting hooks as arrays of matcher objects inside `settings.json`.
 
 ## Verified Commands
@@ -74,8 +74,8 @@
 ## Latest Durable Changes
 <!-- AGENT-MAINTAINED: update during work -->
 - Registered MCP server for Antigravity at `C:\Users\Admin\.gemini\config\plugins\local-game-mcps\mcp_config.json`.
-- Created native OpenCode plugin `agentvault-plugin.mjs` and registered in `opencode.jsonc`.
-- Restructured `E:\Kuan\Vault\02_Projects\AgentVault.md` project card.
+- Created native OpenCode plugin `agentmem-plugin.mjs` and registered in `opencode.jsonc`.
+- Restructured `E:\Kuan\Vault\02_Projects\AgentMemory.md` project card.
 - Implemented global configuration directory `.env` loading, removing local config from source repo.
 - Registered MCP server for Codex at `C:\Users\Admin\.codex\config.toml`.
 - Re-structured settings installer inside `src/bin/cli.ts` to output correct array-of-matchers hooks config for Claude Code, and corrected the MCP server registration to write to `~/.claude.json` instead of `~/.claude/settings.json`.
@@ -90,4 +90,4 @@
 <!-- AGENT-MAINTAINED: update during work -->
 - date: 2026-05-30
 - status: Completed Bug Fixes, Agent Registrations, Global Refactor, Simplified LLM Support & GitHub Push
-- linked_project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
+- linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

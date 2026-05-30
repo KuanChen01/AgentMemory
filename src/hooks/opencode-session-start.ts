@@ -2,9 +2,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
 
-dotenv.config({ path: path.join(os.homedir(), '.agentvault', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
-const PORT = process.env.AGENTVAULT_PORT || 38888;
+const PORT = process.env.AGENTMEM_PORT || 38888;
 
 async function main() {
   const projectPath = path.resolve(process.cwd()).replace(/\\/g, '/');
@@ -15,7 +15,7 @@ async function main() {
 
     const data: any = await response.json();
     if (Array.isArray(data) && data.length > 0) {
-      console.log('\n=== AgentVault: Memory Restored from Previous Sessions ===');
+      console.log('\n=== AgentMemory: Memory Restored from Previous Sessions ===');
       console.log('You are continuing work in this workspace. Here is a summary of past activities and decisions:');
       
       data.forEach((obs: any, idx: number) => {
