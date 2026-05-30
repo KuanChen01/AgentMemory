@@ -44,11 +44,11 @@
 
 ## Current State
 <!-- AGENT-MAINTAINED: update during work -->
-- Completed full implementation of database service, background worker, MCP server, hooks, and CLI installer.
-- Migrated database driver to WebAssembly-based `node-sqlite3-wasm` to bypass Windows compilation issues.
-- Verified FTS5 and vector similarity scoring with a local scratch test.
-- Automatically registered hooks and MCP configuration in Claude Code and OpenCode settings.
-- Staged and committed all code to Git.
+- Resolved OpenCode startup crash by using a native plugin `agentvault-plugin.mjs` loaded via `opencode.jsonc` instead of raw static root fields in `opencode.json`.
+- Configured Antigravity CLI MCP server registration inside the active plugin config `local-game-mcps/mcp_config.json`.
+- Formatted the Obsidian project note `AgentVault.md` to match the exact project card template.
+- Verified MCP server `tools/list` JSON-RPC response over STDIO and confirmed background daemon status is ACTIVE.
+- Ensured environment variables in `.env` are formatted correctly.
 
 ## Verified Commands
 <!-- AGENT-MAINTAINED: update during work -->
@@ -58,25 +58,29 @@
 - `npm run build`: Compiles TypeScript.
 - `node dist/bin/cli.js install`: Installs configuration hooks and servers.
 - `npx ts-node scratch/test-db.ts`: Runs database validation test.
+- `npx ts-node scratch/test-mcp.ts`: Runs MCP server JSON-RPC test.
+- `node dist/bin/cli.js start`: Starts the background memory daemon.
+- `node dist/bin/cli.js status`: Verifies memory daemon status.
 
 ## Known Constraints
 <!-- AGENT-MAINTAINED: update during work -->
 
 ## Open Questions
 <!-- AGENT-MAINTAINED: update during work -->
-- None (All design and development tasks completed).
+- None.
 
 ## Latest Durable Changes
 <!-- AGENT-MAINTAINED: update during work -->
-- Implemented and committed all AgentVault codebase files to Git.
-- Created [walkthrough.md](file:///C:/Users/Admin/.gemini/antigravity-cli/brain/17450e12-ec79-4e78-b58e-e445581fe52e/walkthrough.md) report.
+- Registered MCP server for Antigravity at `C:\Users\Admin\.gemini\config\plugins\local-game-mcps\mcp_config.json`.
+- Created native OpenCode plugin `agentvault-plugin.mjs` and registered in `opencode.jsonc`.
+- Restructured `E:\Kuan\Vault\02_Projects\AgentVault.md` project card.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
-- Hand over to the user for production usage.
+- Hand over to the user to test memory capture across OpenCode, Claude Code, Codex, and Antigravity.
 
 ## Last Sync
 <!-- AGENT-MAINTAINED: update during work -->
 - date: 2026-05-30
-- status: Completed Development & Git Commit
+- status: Completed Bug Fixes & Agent Registrations
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
