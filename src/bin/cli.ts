@@ -142,6 +142,7 @@ async function runInstaller() {
 
   // 1. Claude Code Settings Installation
   const claudeSettingsPath = path.join(homeDir, '.claude', 'settings.json');
+  const claudeGlobalPath = path.join(homeDir, '.claude.json');
   try {
     const claudeDir = path.dirname(claudeSettingsPath);
     if (!fs.existsSync(claudeDir)) {
@@ -154,12 +155,10 @@ async function runInstaller() {
       settings = JSON.parse(raw || '{}');
     }
 
-    // Initialize mcpServers configuration
-    if (!settings.mcpServers) settings.mcpServers = {};
-    settings.mcpServers.agentvault = {
-      command: 'node',
-      args: [mcpServerPath],
-    };
+    // Remove mcpServers from settings.json as it belongs in .claude.json
+    if (settings.mcpServers) {
+      delete settings.mcpServers;
+    }
 
     // Initialize hook configurations
     if (!settings.hooks) settings.hooks = {};
@@ -187,7 +186,25 @@ async function runInstaller() {
     ];
 
     fs.writeFileSync(claudeSettingsPath, JSON.stringify(settings, null, 2), 'utf8');
-    console.log(`[Success] Registered hooks and MCP server in Claude Code: ${claudeSettingsPath}`);
+    console.log(`[Success] Registered hooks in Claude Code: ${claudeSettingsPath}`);
+
+    // Register MCP Server in global .claude.json
+    let globalConfig: any = {};
+    if (fs.existsSync(claudeGlobalPath)) {
+      const raw = fs.readFileSync(claudeGlobalPath, 'utf8');
+      globalConfig = JSON.parse(raw || '{}');
+    }
+
+    if (!globalConfig.mcpServers) globalConfig.mcpServers = {};
+    globalConfig.mcpServers.agentvault = {
+      type: 'stdio',
+      command: 'node',
+      args: [mcpServerPath],
+      env: {}
+    };
+
+    fs.writeFileSync(claudeGlobalPath, JSON.stringify(globalConfig, null, 2), 'utf8');
+    console.log(`[Success] Registered MCP server in Claude Code global config: ${claudeGlobalPath}`);
   } catch (err: any) {
     console.warn(`[Warning] Could not configure Claude Code settings: ${err.message}`);
   }

@@ -78,7 +78,7 @@
 - Restructured `E:\Kuan\Vault\02_Projects\AgentVault.md` project card.
 - Implemented global configuration directory `.env` loading, removing local config from source repo.
 - Registered MCP server for Codex at `C:\Users\Admin\.codex\config.toml`.
-- Re-structured settings installer inside `src/bin/cli.ts` to output correct array-of-matchers hooks config for Claude Code.
+- Re-structured settings installer inside `src/bin/cli.ts` to output correct array-of-matchers hooks config for Claude Code, and corrected the MCP server registration to write to `~/.claude.json` instead of `~/.claude/settings.json`.
 - Created bilingual `README.md` and successfully pushed all repository commits to GitHub.
 - Refactored LLM connectivity to support arbitrary endpoints (OpenAI, DeepSeek, Mimo, Volcengine Ark, Ollama) and custom JSON headers without auto-corrective URL normalization, allowing configuration errors to fail loudly and transparently for easier debugging.
 
