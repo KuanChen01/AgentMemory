@@ -1,10 +1,13 @@
 # AgentVault 🛡️
 
-[English](#english) | [中文](#中文)
+Select Language / 选择语言：
 
 ---
 
-## English
+<details open>
+<summary>🇺🇸 <b>English</b> (Click to collapse/expand)</summary>
+
+<br/>
 
 AgentVault is a compilation-free, lightweight, and universal persistent memory system (Universal Agent Memory - UAM). It allows multiple developer agents (such as **Claude Code**, **OpenCode**, **Codex**, and **Antigravity CLI**) to share, record, and query context observations and decisions across different workspaces.
 
@@ -170,9 +173,12 @@ Expose memory tools inside your configured plugin's `mcp_config.json`:
 }
 ```
 
----
+</details>
 
-## 中文
+<details>
+<summary>🇨🇳 <b>中文说明</b> (点击展开/收起)</summary>
+
+<br/>
 
 AgentVault 是一个免编译、轻量化的全局持久化智能体记忆系统 (Universal Agent Memory - UAM)。它支持多个主流 AI 辅助编程助理（如 **Claude Code**、**OpenCode**、**Codex**、**Antigravity CLI** 等）在不同工作区开发时共同读取和沉淀开发经验、技术决策和历史上下文。
 
@@ -305,7 +311,9 @@ args = [ "您的开发路径/AgentVault/dist/servers/mcp-server.js" ]
 }
 ```
 
+</details>
+
 ---
 
-### 📄 开源协议
+### 📄 License
 Apache-2.0 License
