@@ -79,6 +79,7 @@
 - Implemented global configuration directory `.env` loading, removing local config from source repo.
 - Registered MCP server for Codex at `C:\Users\Admin\.codex\config.toml`.
 - Re-structured settings installer inside `src/bin/cli.ts` to output correct array-of-matchers hooks config for Claude Code.
+- Created bilingual `README.md` and successfully pushed all repository commits to GitHub.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
@@ -87,5 +88,5 @@
 ## Last Sync
 <!-- AGENT-MAINTAINED: update during work -->
 - date: 2026-05-30
-- status: Completed Bug Fixes, Agent Registrations & Env Global Refactor
+- status: Completed Bug Fixes, Agent Registrations, Global Refactor & GitHub Push
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentVault.md
