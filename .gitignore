@@ -1,0 +1,36 @@
+# Node modules
+node_modules/
+
+# Build artifacts
+dist/
+out/
+build/
+
+# Local configuration and environment keys
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Databases and locks
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS Files
+Thumbs.db
+EHthumbs.db
+Desktop.ini
+.DS_Store
