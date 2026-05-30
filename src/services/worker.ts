@@ -175,16 +175,71 @@ async function processQueue() {
   }
 }
 
-// DeepSeek API Summarization Logic
+// Normalize API Base URL (removes trailing slashes and redundant paths)
+function normalizeApiUrl(url: string): string {
+  let cleanUrl = url.trim();
+  if (cleanUrl.endsWith('/')) {
+    cleanUrl = cleanUrl.slice(0, -1);
+  }
+  if (cleanUrl.endsWith('/chat/completions')) {
+    cleanUrl = cleanUrl.slice(0, -'/chat/completions'.length);
+  }
+  return cleanUrl;
+}
+
+// Highly resilient JSON extractor that works even if LLMs return markdown code blocks
+function parseJSONContent(rawText: string): any {
+  const trimmed = rawText.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch (e) {
+    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch (innerErr) {
+        // Fall through to throw error
+      }
+    }
+    throw new Error('Failed to parse JSON response from LLM');
+  }
+}
+
+// Generalized LLM API Summarization Logic
 async function handleSummarization(log: QueuedToolLog) {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
-    console.warn('[Warning] DEEPSEEK_API_KEY not found in environment. Saving raw observation without LLM summarization.');
-    await saveMockObservation(log, 'Missing DeepSeek API Key. Running in Raw Mode.');
+  const apiKey = process.env.AGENTVAULT_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
+  const rawApiUrl = process.env.AGENTVAULT_LLM_API_URL || process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1';
+  const modelName = process.env.AGENTVAULT_LLM_MODEL || 'deepseek-chat';
+
+  // If no API key is specified and it is not a local Ollama setup (which doesn't require a key), save raw observation
+  const isLocalOllama = rawApiUrl.includes('localhost') || rawApiUrl.includes('127.0.0.1');
+  if (!apiKey && !isLocalOllama) {
+    console.warn('[Warning] LLM API credentials not found in environment. Saving raw observation without LLM summarization.');
+    await saveMockObservation(log, 'Missing LLM API credentials. Running in Raw Mode.');
     return;
   }
 
-  const apiUrl = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1';
+  const cleanApiUrl = normalizeApiUrl(rawApiUrl);
+  const requestUrl = `${cleanApiUrl}/chat/completions`;
+
+  // Parse custom headers if configured
+  let customHeaders: Record<string, string> = {};
+  if (process.env.AGENTVAULT_LLM_HEADERS) {
+    try {
+      customHeaders = JSON.parse(process.env.AGENTVAULT_LLM_HEADERS);
+    } catch (err: any) {
+      console.warn('[Warning] Failed to parse AGENTVAULT_LLM_HEADERS JSON:', err.message);
+    }
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...customHeaders
+  };
+
+  if (!headers['Authorization'] && !headers['authorization'] && apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
 
   // Build the summarization prompt
   const systemPrompt = `You are a developer memory synthesis assistant.
@@ -215,35 +270,38 @@ ${log.output.substring(0, 20000)}
 `;
 
   try {
-    const response = await fetch(`${apiUrl}/chat/completions`, {
+    const requestBody: any = {
+      model: modelName,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.1
+    };
+
+    // Only send response_format if JSON Mode is not explicitly disabled
+    const disableJsonMode = process.env.AGENTVAULT_LLM_DISABLE_JSON_MODE === 'true';
+    if (!disableJsonMode) {
+      requestBody.response_format = { type: 'json_object' };
+    }
+
+    const response = await fetch(requestUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat', // Default for DeepSeek V4 Flash/Chat
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.1,
-        response_format: { type: 'json_object' }
-      })
+      headers,
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`DeepSeek API error: ${response.status} - ${errText}`);
+      throw new Error(`LLM API error: ${response.status} - ${errText}`);
     }
 
     const data: any = await response.json();
     const content = data.choices?.[0]?.message?.content;
-    if (!content) throw new Error('Empty response from DeepSeek API');
+    if (!content) throw new Error('Empty response from LLM API');
 
-    // Parse structured JSON
-    const cleanContent = content.trim().replace(/^```json/, '').replace(/```$/, '');
-    const parsedObs = JSON.parse(cleanContent);
+    // Resilient parsing of JSON content
+    const parsedObs = parseJSONContent(content);
 
     // Compute embedding for vector search
     const textToEmbed = `${parsedObs.title} ${parsedObs.narrative} ${parsedObs.facts.join(' ')} ${parsedObs.concepts.join(' ')}`;
@@ -296,12 +354,13 @@ async function saveMockObservation(log: QueuedToolLog, reason: string) {
 
 // Embedding helper with local compilation-free Feature Hashing fallback
 async function getEmbedding(text: string): Promise<number[]> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = process.env.AGENTVAULT_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
   const embeddingUrl = process.env.EMBEDDING_API_URL; // e.g. OpenAI or Gemini embedding endpoints
 
   if (apiKey && embeddingUrl) {
     try {
-      const response = await fetch(embeddingUrl, {
+      const cleanUrl = normalizeApiUrl(embeddingUrl);
+      const response = await fetch(cleanUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
