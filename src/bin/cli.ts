@@ -139,6 +139,8 @@ async function runInstaller() {
   const claudePostHook = `${currentDir}/dist/hooks/claude-post-tool.js`;
   const opencodeStartHook = `${currentDir}/dist/hooks/opencode-session-start.js`;
   const opencodePostHook = `${currentDir}/dist/hooks/opencode-post-tool.js`;
+  const codexStartHook = `${currentDir}/dist/hooks/codex-session-start.js`;
+  const codexPostHook = `${currentDir}/dist/hooks/codex-post-tool.js`;
 
   // 1. Claude Code Settings Installation
   const claudeSettingsPath = path.join(homeDir, '.claude', 'settings.json');
@@ -266,6 +268,78 @@ async function runInstaller() {
     }
   } catch (err: any) {
     console.warn(`[Warning] Could not configure OpenCode global settings: ${err.message}`);
+  }
+
+  // 3. Codex Global Configuration Installation
+  const codexConfigDir = path.join(homeDir, '.codex');
+  const codexConfigPath = path.join(codexConfigDir, 'config.toml');
+  try {
+    if (fs.existsSync(codexConfigPath)) {
+      let toml = fs.readFileSync(codexConfigPath, 'utf8');
+      
+      // Ensure [features] section contains hooks = true
+      if (toml.includes('[features]')) {
+        const featuresIndex = toml.indexOf('[features]');
+        const nextSectionIndex = toml.indexOf('[', featuresIndex + 1);
+        const featuresSection = nextSectionIndex !== -1 
+          ? toml.substring(featuresIndex, nextSectionIndex) 
+          : toml.substring(featuresIndex);
+        
+        if (!/hooks\s*=\s*true/i.test(featuresSection)) {
+          toml = toml.replace('[features]', '[features]\nhooks = true');
+        }
+      } else {
+        toml = `[features]\nhooks = true\n\n${toml}`;
+      }
+      
+      // Clean up legacy codex_hooks = true if present
+      toml = toml.replace(/codex_hooks\s*=\s*true\n?/gi, '');
+
+      // Remove any existing codex start/post hooks pointing to our scripts to avoid duplicates
+      toml = toml.replace(/\[\[hooks\.SessionStart\]\][\s\S]*?codex-session-start\.js['"][\s\S]*?(?=\[\[|\[\w|\Z)/gi, '');
+      toml = toml.replace(/\[\[hooks\.PostToolUse\]\][\s\S]*?codex-post-tool\.js['"][\s\S]*?(?=\[\[|\[\w|\Z)/gi, '');
+      
+      fs.writeFileSync(codexConfigPath, toml, 'utf8');
+      
+      // Write hooks.json
+      const codexHooksPath = path.join(codexConfigDir, 'hooks.json');
+      let hooksConfig: any = {};
+      if (fs.existsSync(codexHooksPath)) {
+        try {
+          const raw = fs.readFileSync(codexHooksPath, 'utf8');
+          hooksConfig = JSON.parse(raw || '{}');
+        } catch (e) {}
+      }
+      
+      if (!hooksConfig.hooks) hooksConfig.hooks = {};
+      hooksConfig.hooks.SessionStart = [
+        {
+          matcher: '.*',
+          hooks: [
+            {
+              type: 'command',
+              command: `node "${codexStartHook}"`
+            }
+          ]
+        }
+      ];
+      hooksConfig.hooks.PostToolUse = [
+        {
+          matcher: '.*',
+          hooks: [
+            {
+              type: 'command',
+              command: `node "${codexPostHook}"`
+            }
+          ]
+        }
+      ];
+      
+      fs.writeFileSync(codexHooksPath, JSON.stringify(hooksConfig, null, 2), 'utf8');
+      console.log(`[Success] Registered hooks in Codex hooks.json: ${codexHooksPath}`);
+    }
+  } catch (err: any) {
+    console.warn(`[Warning] Could not configure Codex settings: ${err.message}`);
   }
 
   console.log('\nAgentMemory installation complete! Remember to build the TypeScript files ("npm run build") before starting.');

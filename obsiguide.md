@@ -1,89 +1,87 @@
 # obsiguide.md
 
 ## Repo Identity
-<!-- USER-OWNED: keep short -->
 - repo_path: E:\Kuan\Projects\Codex\AgentMemory
-- repo_kind: OpenCode Memory Adapter / System
-- primary_stack: Python / Node.js / MCP
+- repo_kind: Universal Agent Memory / MCP Integration
+- primary_stack: TypeScript / Node.js / MCP
 
 ## Obsidian Target
-<!-- USER-OWNED: keep short -->
 - vault_path: E:\Kuan\Vault
 - project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
-- entry:
-- areas:
-- domain:
+- entry: [[03_Areas/MCP]]
+- areas: MCP, AI Interaction
+- domain: agent-tooling
 
 ## Sync Rules
-<!-- USER-OWNED: keep short -->
+- project_contract:
+  - `obsiguide.md` 是这个工作区唯一的项目级同步合同。
+  - 不要再创建或依赖 repo 根目录 `AGENTS.md`、`CLAUDE.md` 或 `GEMINI.md`。
+- note_language_contract:
+  - 文件名、H1 标题、章节标题、frontmatter 字段名、受控值、tags 和 Dataview 语法保持英文。
+  - 正文叙述内容使用中文。
+  - repo 名、工具名、命令、路径、配置键、版本号和原始报错文本保持原文。
+- daily_contract:
+  - daily 使用 `## Focus`、`## Summary` 和 `## Project Ledger`。
+  - 项目专属记录放进 `### [[Project Note]]` 区块。
 - write_obsidian_when:
-  - reusable issue is confirmed
-  - stable decision is made
-  - cross-project knowledge is established
-  - project state changes meaningfully
-  - experiment result is verified
+  - 产生可复用 issue
+  - 形成稳定 decision
+  - 沉淀跨项目 knowledge
+  - 项目状态发生明确变化
+  - experiment 结果被验证
 - keep_local_only_when:
-  - current goal or current next action
-  - repo-local working context
-  - temporary open questions without durable answer yet
+  - 当前目标或当前下一步
+  - 临时工作上下文
+  - 尚未形成 durable 结论的开放问题
 - do_not_record:
-  - speculative conclusions
-  - noisy intermediate steps
-  - low-value recap
-  - raw logs without takeaway
+  - 推测性结论
+  - 噪音式中间步骤
+  - 低价值流水账
+  - 没有结论的原始日志
 - finish_checklist:
-  - update Current State
-  - update Latest Durable Changes
-  - update Next Action
-  - update Last Sync
-  - promote durable Issue, Decision, Knowledge, or Experiment notes into Obsidian when required
+  - 更新 Current State
+  - 更新 Latest Durable Changes
+  - 更新 Next Action
+  - 更新 Last Sync
+  - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-<!-- AGENT-MAINTAINED: update during work -->
-- Build and verify the Universal Agent Memory (AgentMemory) system for OpenCode, Claude Code, Codex, and Antigravity.
+- 构建并验证一个可在 OpenCode、Claude Code、Codex 和 Antigravity 之间共享的持久化记忆系统。
 
 ## Current State
-<!-- AGENT-MAINTAINED: update during work -->
-- Migrated the historical database from C:\Users\Admin\.agentvault\agentvault.db to C:\Users\Admin\.agentmem\agentmemory.db and converted project paths from AgentVault to AgentMemory.
-- Configured Antigravity CLI, Codex, and OpenCode settings to point to the renamed AgentMemory workspace.
-- Re-launched the background memory daemon and verified that historical observations (such as "Rename project to AgentMemory") are correctly queried.
-- Successfully verified the Claude Code PostToolUse integration by running a print command task and observing it register a new summarized observation in the database.
-- Resolved OpenCode startup crash by refactoring the installer script to write valid configurations to `opencode.jsonc` (using a character-by-character JSONC stripper to protect URLs like `file:///`) and automatically deleting the legacy incompatible `opencode.json`.
+- 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
+- 在 `src/hooks/` 下新增了 Codex 专用的 `codex-session-start.ts` 和 `codex-post-tool.ts` 钩子脚本。
+- 在 Codex 的 `AGENTS.md` 尾部追加了独立的 `AgentMemory Sync Rules` 章节，保持原有 Obsidian 规则不受修改或混淆。
+- 已将历史数据库迁移到 `C:\Users\Admin\.agentmem\agentmemory.db`，并把项目路径统一改到 `AgentMemory`。
+- 已完成 OpenCode、Claude Code、Codex 和 Antigravity 的基础配置对接。
+- 已验证 Claude Code 的 PostToolUse hook 到数据库写入链路。
+- 已修复 OpenCode 启动闪退问题：安装器会写入合规 of `opencode.jsonc`，并自动删除冲突的 `opencode.json`。
 
 ## Verified Commands
-<!-- AGENT-MAINTAINED: update during work -->
-- git init: Initializes git repository.
-- git add <files>: Stages files.
-- git commit -m "<msg>": Commits staged files.
-- npm run build: Compiles TypeScript.
-- node dist/bin/cli.js install: Installs configuration hooks and servers.
-- npx ts-node scratch/test-db.ts: Runs database validation test.
-- npx ts-node scratch/test-mcp.ts: Runs MCP server JSON-RPC test.
-- node dist/bin/cli.js start: Starts the background memory daemon.
-- node dist/bin/cli.js status: Verifies memory daemon status.
-- npx ts-node scratch/migrate-db.ts: Migrates historical agentvault database to agentmemory database.
-- npx ts-node scratch/test-search.ts: Validates hybrid search via daemon HTTP endpoint.
+- `npm run build`
+- `node dist/bin/cli.js install`
+- `node dist/bin/cli.js start`
+- `node dist/bin/cli.js status`
+- `npx ts-node scratch/test-db.ts`
+- `npx ts-node scratch/test-mcp.ts`
+- `npx ts-node scratch/test-search.ts`
 
 ## Known Constraints
-<!-- AGENT-MAINTAINED: update during work -->
+- 不同 agent 的配置文件格式不一致，安装器需要分别处理 OpenCode 与 Claude Code 的差异。
 
 ## Open Questions
-<!-- AGENT-MAINTAINED: update during work -->
-- None.
+- 需要继续观察不同 agent 在长会话和多仓库切换下的记忆召回质量。
 
 ## Latest Durable Changes
-<!-- AGENT-MAINTAINED: update during work -->
-- Migrated all database entries and updated paths to AgentMemory.
-- Corrected Antigravity CLI, Codex, and OpenCode path configurations.
-- Verified end-to-end Claude Code hook capture and LLM integration.
-- Implemented robust character-level JSONC parser in `cli.ts` to configure `opencode.jsonc` and delete legacy `opencode.json`.
+- 实现了 Codex 自动化钩子配置并集成了全局 `hooks.json` 规则。
+- 数据库和工作区路径已完成从 `AgentVault` 到 `AgentMemory` 的迁移。
+- OpenCode 安装器已改用字符级 JSONC 注释剥离器。
+- Claude Code 的 hooks 与 MCP server 配置分离规则已被沉淀为知识笔记。
 
 ## Next Action
-<!-- AGENT-MAINTAINED: update during work -->
-- Complete handover to user for normal multi-agent operation using AgentMemory.
+- 对齐 `README.md` 中的 Claude Code 配置说明与安装器实际行为，然后继续在四个 agent 中联调验证记忆写入与拦截效果。
 
 ## Last Sync
-<!-- AGENT-MAINTAINED: update during work -->
 - date: 2026-06-01
-- status: Fixed OpenCode startup crash by refactoring config parser, updating paths to AgentMemory, and removing incompatible legacy config files.
+- status: 实现了 Codex 持久化记忆自动化集成，在 hooks.json 和 config.toml 中配置并启用了相关钩子，同时更新了 AGENTS.md 行为规范。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
