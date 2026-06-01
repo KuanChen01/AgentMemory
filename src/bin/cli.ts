@@ -212,41 +212,102 @@ async function runInstaller() {
   // 2. OpenCode Global Configuration Installation
   const opencodeConfigDir = path.join(homeDir, '.config', 'opencode');
   const opencodeConfigPath = path.join(opencodeConfigDir, 'opencode.json');
+  const opencodeJsoncPath = path.join(opencodeConfigDir, 'opencode.jsonc');
+  let targetPath = opencodeJsoncPath;
+
   try {
     if (!fs.existsSync(opencodeConfigDir)) {
       fs.mkdirSync(opencodeConfigDir, { recursive: true });
     }
 
     let opencodeConfig: any = {};
-    if (fs.existsSync(opencodeConfigPath)) {
+    if (fs.existsSync(opencodeJsoncPath)) {
+      const raw = fs.readFileSync(opencodeJsoncPath, 'utf8');
+      const cleanJson = stripComments(raw);
+      opencodeConfig = JSON.parse(cleanJson || '{}');
+    } else if (fs.existsSync(opencodeConfigPath)) {
+      targetPath = opencodeConfigPath;
       const raw = fs.readFileSync(opencodeConfigPath, 'utf8');
       opencodeConfig = JSON.parse(raw || '{}');
     }
 
-    // Set up MCP servers
+    // Set up MCP server in standard OpenCode format
     if (!opencodeConfig.mcp) opencodeConfig.mcp = {};
-    if (!opencodeConfig.mcp.servers) opencodeConfig.mcp.servers = {};
-    opencodeConfig.mcp.servers.agentmem = {
-      command: 'node',
-      args: [mcpServerPath],
+    opencodeConfig.mcp.agentmem = {
+      type: 'local',
+      command: ['node', mcpServerPath],
+      enabled: true
     };
 
-    // Set up hooks
-    if (!opencodeConfig.hooks) opencodeConfig.hooks = {};
-    opencodeConfig.hooks['session.created'] = {
-      command: `node "${opencodeStartHook}"`,
-    };
-    opencodeConfig.hooks['tool.execute.after'] = {
-      command: `node "${opencodePostHook}"`,
-    };
+    // Set up native plugin
+    if (!Array.isArray(opencodeConfig.plugin)) {
+      opencodeConfig.plugin = [];
+    }
+    const pluginUrl = `file:///${path.join(opencodeConfigDir, 'plugins', 'agentmem-plugin.mjs').replace(/\\/g, '/')}`;
+    if (!opencodeConfig.plugin.includes(pluginUrl)) {
+      opencodeConfig.plugin.push(pluginUrl);
+    }
 
-    fs.writeFileSync(opencodeConfigPath, JSON.stringify(opencodeConfig, null, 2), 'utf8');
-    console.log(`[Success] Registered hooks and MCP server in OpenCode: ${opencodeConfigPath}`);
+    // Clean up obsolete/invalid keys
+    if (opencodeConfig.hooks) {
+      delete opencodeConfig.hooks;
+    }
+    if (opencodeConfig.mcp.servers) {
+      delete opencodeConfig.mcp.servers;
+    }
+
+    fs.writeFileSync(targetPath, JSON.stringify(opencodeConfig, null, 2), 'utf8');
+    console.log(`[Success] Registered plugin and MCP server in OpenCode: ${targetPath}`);
+
+    // Clean up incompatible legacy config file to avoid OpenCode startup crash
+    if (targetPath === opencodeJsoncPath && fs.existsSync(opencodeConfigPath)) {
+      fs.unlinkSync(opencodeConfigPath);
+      console.log(`[Cleaned] Removed legacy incompatible config file: ${opencodeConfigPath}`);
+    }
   } catch (err: any) {
     console.warn(`[Warning] Could not configure OpenCode global settings: ${err.message}`);
   }
 
   console.log('\nAgentMemory installation complete! Remember to build the TypeScript files ("npm run build") before starting.');
+}
+
+function stripComments(jsonc: string): string {
+  let isInsideString = false;
+  let isInsideComment = false;
+  let isSingleLineComment = false;
+  let result = '';
+
+  for (let i = 0; i < jsonc.length; i++) {
+    const char = jsonc[i];
+    const nextChar = jsonc[i + 1];
+
+    if (isInsideComment) {
+      if (isSingleLineComment && char === '\n') {
+        isInsideComment = false;
+        isSingleLineComment = false;
+        result += char;
+      } else if (!isSingleLineComment && char === '*' && nextChar === '/') {
+        isInsideComment = false;
+        i++; // skip '/'
+      }
+    } else {
+      if (char === '"' && jsonc[i - 1] !== '\\') {
+        isInsideString = !isInsideString;
+        result += char;
+      } else if (!isInsideString && char === '/' && nextChar === '/') {
+        isInsideComment = true;
+        isSingleLineComment = true;
+        i++; // skip next '/'
+      } else if (!isInsideString && char === '/' && nextChar === '*') {
+        isInsideComment = true;
+        isSingleLineComment = false;
+        i++; // skip '*'
+      } else {
+        result += char;
+      }
+    }
+  }
+  return result;
 }
 
 main().catch((err) => {

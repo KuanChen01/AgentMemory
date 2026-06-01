@@ -48,7 +48,7 @@
 - Configured Antigravity CLI, Codex, and OpenCode settings to point to the renamed AgentMemory workspace.
 - Re-launched the background memory daemon and verified that historical observations (such as "Rename project to AgentMemory") are correctly queried.
 - Successfully verified the Claude Code PostToolUse integration by running a print command task and observing it register a new summarized observation in the database.
-- Resolved OpenCode startup crash by using a native plugin agentmem-plugin.mjs loaded via opencode.jsonc instead of raw static root fields in opencode.json.
+- Resolved OpenCode startup crash by refactoring the installer script to write valid configurations to `opencode.jsonc` (using a character-by-character JSONC stripper to protect URLs like `file:///`) and automatically deleting the legacy incompatible `opencode.json`.
 
 ## Verified Commands
 <!-- AGENT-MAINTAINED: update during work -->
@@ -76,6 +76,7 @@
 - Migrated all database entries and updated paths to AgentMemory.
 - Corrected Antigravity CLI, Codex, and OpenCode path configurations.
 - Verified end-to-end Claude Code hook capture and LLM integration.
+- Implemented robust character-level JSONC parser in `cli.ts` to configure `opencode.jsonc` and delete legacy `opencode.json`.
 
 ## Next Action
 <!-- AGENT-MAINTAINED: update during work -->
@@ -83,6 +84,6 @@
 
 ## Last Sync
 <!-- AGENT-MAINTAINED: update during work -->
-- date: 2026-05-31
-- status: Completed Database Migration, Path Updates across all 4 agents, and End-to-End Hook Verification.
+- date: 2026-06-01
+- status: Fixed OpenCode startup crash by refactoring config parser, updating paths to AgentMemory, and removing incompatible legacy config files.
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
