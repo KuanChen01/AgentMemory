@@ -6,6 +6,7 @@ dist/
 out/
 build/
 scratch/
+.playwright-mcp/
 
 # Local configuration and environment keys
 .env

@@ -1,0 +1,202 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { spawn } = require('node:child_process');
+
+const { DatabaseManager } = require('../dist/services/db.js');
+
+function makeDbPath() {
+  return path.join(os.tmpdir(), `agentmemory-worker-test-${randomUUID()}.db`);
+}
+
+function makePort() {
+  return 43000 + Math.floor(Math.random() * 1000);
+}
+
+async function seedDatabase(dbPath) {
+  const previous = process.env.AGENTMEM_DB_PATH;
+  process.env.AGENTMEM_DB_PATH = dbPath;
+  const db = new DatabaseManager();
+
+  try {
+    await db.initialize();
+    await db.saveObservation({
+      id: randomUUID(),
+      session_id: randomUUID(),
+      project_path: 'E:/Repo/A',
+      agent_id: 'codex',
+      title: 'Alpha memory',
+      narrative: 'Admin screen seed memory',
+      facts: ['alpha'],
+      concepts: ['admin'],
+      files_read: ['src/a.ts'],
+      files_modified: ['src/a.ts'],
+      embedding: [1, 0, 0],
+    });
+    await db.saveObservation({
+      id: randomUUID(),
+      session_id: randomUUID(),
+      project_path: 'E:/Repo/B',
+      agent_id: 'claudecode',
+      title: 'Beta memory',
+      narrative: 'Second admin seed memory',
+      facts: ['beta'],
+      concepts: ['admin'],
+      files_read: ['src/b.ts'],
+      files_modified: ['src/b.ts'],
+      embedding: [0, 1, 0],
+    });
+  } finally {
+    db.close();
+    if (previous === undefined) {
+      delete process.env.AGENTMEM_DB_PATH;
+    } else {
+      process.env.AGENTMEM_DB_PATH = previous;
+    }
+  }
+}
+
+async function startWorker(dbPath, port) {
+  const child = spawn('node', ['dist/services/worker.js'], {
+    cwd: path.resolve(__dirname, '..'),
+    env: {
+      ...process.env,
+      AGENTMEM_DB_PATH: dbPath,
+      AGENTMEM_PORT: String(port),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Worker did not start in time'));
+    }, 10000);
+
+    const onData = (chunk) => {
+      const text = chunk.toString();
+      if (text.includes(`AgentMemory worker service running on port ${port}`)) {
+        clearTimeout(timeout);
+        child.stdout.off('data', onData);
+        child.stderr.off('data', onData);
+        resolve();
+      }
+    };
+
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    child.once('exit', (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Worker exited early with code ${code}`));
+    });
+  });
+
+  return child;
+}
+
+async function stopWorker(child, port) {
+  try {
+    await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
+  } catch (error) {
+    // Best effort shutdown.
+  }
+
+  await new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve();
+    }, 5000);
+    child.once('exit', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+}
+
+function cleanupDb(dbPath) {
+  for (const suffix of ['', '-shm', '-wal']) {
+    const target = `${dbPath}${suffix}`;
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { force: true });
+    }
+  }
+}
+
+test('worker serves admin UI and admin APIs', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  await seedDatabase(dbPath);
+  const child = await startWorker(dbPath, port);
+
+  try {
+    const adminPage = await fetch(`http://127.0.0.1:${port}/admin`);
+    assert.equal(adminPage.status, 200);
+    const adminHtml = await adminPage.text();
+    assert.match(adminHtml, /AgentMemory/);
+    assert.match(adminHtml, /id="readPolicyState"/);
+    assert.match(adminHtml, /id="writePolicyState"/);
+    assert.match(adminHtml, /Saving\.\.\./);
+    assert.match(adminHtml, /pendingPolicy/);
+
+    const overviewResponse = await fetch(`http://127.0.0.1:${port}/admin/api/overview`);
+    assert.equal(overviewResponse.status, 200);
+    const overview = await overviewResponse.json();
+    assert.equal(overview.policy.readEnabled, true);
+    assert.equal(overview.policy.writeEnabled, true);
+    assert.ok(overview.projects.includes('E:/Repo/A'));
+    assert.ok(overview.agents.includes('codex'));
+
+    const recordsResponse = await fetch(`http://127.0.0.1:${port}/admin/api/records?project=${encodeURIComponent('E:/Repo/A')}&page=1&pageSize=25`);
+    assert.equal(recordsResponse.status, 200);
+    const recordsPayload = await recordsResponse.json();
+    assert.equal(recordsPayload.total, 1);
+    assert.equal(recordsPayload.records[0].title, 'Alpha memory');
+  } finally {
+    await stopWorker(child, port);
+    cleanupDb(dbPath);
+  }
+});
+
+test('worker admin settings toggle read and write gates immediately', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  await seedDatabase(dbPath);
+  const child = await startWorker(dbPath, port);
+
+  try {
+    const settingsResponse = await fetch(`http://127.0.0.1:${port}/admin/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ readEnabled: false, writeEnabled: false }),
+    });
+    assert.equal(settingsResponse.status, 200);
+
+    const contextResponse = await fetch(`http://127.0.0.1:${port}/context?project_path=${encodeURIComponent('E:/Repo/A')}&limit=10`);
+    assert.equal(contextResponse.status, 200);
+    const contextPayload = await contextResponse.json();
+    assert.equal(contextPayload.disabled, true);
+
+    const toolResponse = await fetch(`http://127.0.0.1:${port}/tools`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: randomUUID(),
+        project_path: 'E:/Repo/A',
+        agent_id: 'codex',
+        tool_name: 'test-tool',
+        input: '{}',
+        output: '{}',
+        success: true,
+      }),
+    });
+    assert.equal(toolResponse.status, 200);
+    const toolPayload = await toolResponse.json();
+    assert.equal(toolPayload.disabled, true);
+    assert.equal(toolPayload.success, false);
+  } finally {
+    await stopWorker(child, port);
+    cleanupDb(dbPath);
+  }
+});

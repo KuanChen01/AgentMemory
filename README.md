@@ -13,6 +13,8 @@ AgentMemory is a compilation-free, lightweight, and universal persistent memory 
 *   **Hybrid Search**: Combines SQLite FTS5 BM25 keyword matching with Cosine Similarity vector retrieval for highly relevant results.
 *   **Background Summarization**: Uses the DeepSeek Flash API to summarize session tool logs asynchronously in the background.
 *   **Secure Global Config**: Stores API keys and settings globally (`~/.agentmem/.env`) to keep codebase repositories clean and credentials safe.
+*   **Loopback Admin Console**: Exposes a local-only `/admin` page for inspecting the database, filtering observations, and toggling global memory read/write gates at runtime.
+*   **Persistent Runtime Policy**: Persists `readEnabled` and `writeEnabled` flags in SQLite so runtime gating survives worker restarts.
 
 ---
 
@@ -89,7 +91,7 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. Automatic Agent Registration
-Run the installer to automatically configure settings for **Claude Code** and **OpenCode**:
+Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, and **Codex**:
 ```bash
 agentmem install
 ```
@@ -100,10 +102,50 @@ agentmem install
 
 Run these commands globally from any directory:
 
-*   **Start Daemon**: `agentmem start` (launches the background memory consumer service)
-*   **Stop Daemon**: `agentmem stop` (sends a graceful shutdown trigger to the daemon)
+*   **Start Worker**: `agentmem start` (launches the memory worker service; keep the terminal open while it is running)
+*   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
 *   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
-*   **Run Setup**: `agentmem install` (updates Claude Code and OpenCode settings configurations)
+*   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, and Codex settings configurations)
+
+---
+
+### 🧭 Admin Console
+
+After the worker is running, open:
+
+```text
+http://127.0.0.1:38888/admin
+```
+
+The admin console is intentionally restricted to loopback clients. It is not exposed to non-local network addresses.
+
+The page provides:
+
+*   **Overview cards** for total observations, sessions, projects, and agents
+*   **Global runtime toggles** for `readEnabled` and `writeEnabled`
+*   **Filterable ledger view** across the whole database by project, agent, and free-text query
+*   **Observation detail panel** showing narrative, facts, concepts, files read, and files modified
+
+#### Runtime policy semantics
+
+*   `readEnabled=false` blocks memory restoration and explicit read APIs:
+    *   HTTP: `/context`, `/search`
+    *   MCP: `search_memory`, `memory_timeline`, `get_memory_details`
+    *   Session-start hooks stop printing restored memory into the agent session
+*   `writeEnabled=false` blocks new memory creation:
+    *   HTTP: `/tools`, `/sessions`, `/sessions/close`
+    *   MCP: `record_memory`
+    *   Post-tool hooks stop producing new observations
+
+Both flags are stored in SQLite `app_settings`, so the selected policy survives worker restarts.
+
+#### Operating workflow
+
+1. Start the worker with `agentmem start`
+2. Open `http://127.0.0.1:38888/admin`
+3. Use the `Read Memory` and `Write Memory` switches to change runtime policy
+4. Watch the observation counters and ledger entries to confirm whether new memory is still being read or recorded
+5. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
 
 ---
 
@@ -126,16 +168,29 @@ Add `agentmem` to the `mcp` server config and append the native bridge plugin to
 }
 ```
 
-#### 2. Claude Code (`~/.claude/settings.json`)
-Registers stdio MCP tool definitions and workspace lifecycle hooks:
+#### 2. Claude Code
+Claude Code uses two different files:
+
+*   `~/.claude.json` for global stdio MCP servers
+*   `~/.claude/settings.json` for hooks and other session settings
+
+**`~/.claude.json`**
 ```json
 {
   "mcpServers": {
     "agentmem": {
+      "type": "stdio",
       "command": "node",
-      "args": ["path/to/AgentMemory/dist/servers/mcp-server.js"]
+      "args": ["path/to/AgentMemory/dist/servers/mcp-server.js"],
+      "env": {}
     }
-  },
+  }
+}
+```
+
+**`~/.claude/settings.json`**
+```json
+{
   "hooks": {
     "SessionStart": [
       {
@@ -153,16 +208,43 @@ Registers stdio MCP tool definitions and workspace lifecycle hooks:
 }
 ```
 
-#### 3. Codex (`~/.codex/config.toml`)
-Expose tools globally inside the Codex environment config:
+#### 3. Codex (`~/.codex/config.toml` and `~/.codex/hooks.json`)
+Expose the MCP server in `config.toml`, and register lifecycle hooks in `hooks.json`:
+
+**`~/.codex/config.toml`**
 ```toml
+[features]
+hooks = true
+
 [mcp_servers.agentmem]
 command = "node"
 args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
+**`~/.codex/hooks.json`**
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"path/to/AgentMemory/dist/hooks/codex-session-start.js\"" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"path/to/AgentMemory/dist/hooks/codex-post-tool.js\"" }]
+      }
+    ]
+  }
+}
+```
+
 #### 4. Antigravity CLI
-Expose memory tools inside your configured plugin's `mcp_config.json`:
+Expose memory tools inside the active Antigravity CLI MCP registry. On this machine, the validated registration path is the plugin MCP config under the Gemini-compatible config root.
+
+Generic shape:
 ```json
 {
   "mcpServers": {
@@ -174,6 +256,18 @@ Expose memory tools inside your configured plugin's `mcp_config.json`:
   }
 }
 ```
+
+### ✅ Smoke Validation Checklist
+
+Use this when validating a live local installation:
+
+1. Precheck: worker starts, `/admin` loads, and the current observation count is readable
+2. `read on / write on`: previous memory is restored and a new observation can be recorded
+3. `read off / write on`: restored memory disappears, explicit read tools return disabled messages, but new writes still succeed
+4. `read on / write off`: memory can still be read, but new writes no longer increase the observation count
+5. Restore defaults: turn both toggles back on and verify the persisted policy survives a worker restart
+
+If a smoke check fails, fix only issues directly related to `/admin`, runtime policy gating, or the current agent integration path, then re-run `npm run build` and the affected `tests/*.test.cjs`.
 
 ---
 

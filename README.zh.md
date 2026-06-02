@@ -13,6 +13,8 @@ AgentMemory 是一个免编译、轻量化的全局持久化智能体记忆系�
 *   **混合检索检索**：集成 SQLite FTS5 的 BM25 全文关键字匹配与 Cosine Similarity 向量相似度算法，提供高相关的召回效果。
 *   **异步后台摘要**：在后台队列中通过 DeepSeek Flash API 异步提炼繁杂的工具执行日志，最大化节省上下文 Token。
 *   **全局配置隔离**：API Key 等敏感配置保存在全局用户路径 (`~/.agentmem/.env`) 下，确保源码仓库干净、密钥安全不泄漏。
+*   **本地管理控制台**：提供仅 loopback 可访问的 `/admin` 页面，用于查看数据库、筛选 observation，并在运行时切换全局记忆读写开关。
+*   **持久化运行时策略**：`readEnabled` 和 `writeEnabled` 会持久化到 SQLite，worker 重启后继续保持上次的策略状态。
 
 ---
 
@@ -29,7 +31,7 @@ graph TD
 
     subgraph AgentMemory Core [AgentMemory 系统核心]
         CLI[全局 CLI 工具]
-        Worker[后台守护进程 监听端口 38888]
+        Worker[本地 Worker 服务 监听端口 38888]
         MCP[Stdio MCP 服务端]
         DB[(WASM SQLite + FTS5)]
     end
@@ -89,7 +91,7 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. 自动注册集成
-运行内置的安装器，它会自动向 **Claude Code** 和 **OpenCode** 写入相应的 hooks 与 MCP 注册参数：
+运行内置的安装器，它会自动向 **Claude Code**、**OpenCode** 和 **Codex** 写入相应的 hooks 与 MCP 注册参数：
 ```bash
 agentmem install
 ```
@@ -100,10 +102,50 @@ agentmem install
 
 您可以在终端中的任何工作路径直接调用全局快捷命令：
 
-*   **启动后台服务**：`agentmem start`
+*   **启动 Worker 服务**：`agentmem start`（前台运行；使用期间请保持这个终端窗口处于运行状态）
 *   **停止后台服务**：`agentmem stop`
 *   **查询运行状态**：`agentmem status`
-*   **一键注册配置**：`agentmem install`
+*   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode 和 Codex 的设置）
+
+---
+
+### 🧭 `/admin` 管理页
+
+在 worker 运行后，打开：
+
+```text
+http://127.0.0.1:38888/admin
+```
+
+该页面仅允许本机 loopback 访问，不对非本机网络地址开放。
+
+管理页提供：
+
+*   **总览卡片**：显示 observation、session、project、agent 的汇总数量
+*   **全局运行时开关**：`readEnabled` 与 `writeEnabled`
+*   **全库台账视图**：按 project、agent、自由文本筛选 observation
+*   **详情面板**：查看 narrative、facts、concepts、files_read、files_modified
+
+#### 运行时策略语义
+
+*   `readEnabled=false` 时，会阻断记忆恢复和显式读取接口：
+    *   HTTP：`/context`、`/search`
+    *   MCP：`search_memory`、`memory_timeline`、`get_memory_details`
+    *   SessionStart hook 不再向 agent 启动上下文注入历史记忆
+*   `writeEnabled=false` 时，会阻断新记忆写入：
+    *   HTTP：`/tools`、`/sessions`、`/sessions/close`
+    *   MCP：`record_memory`
+    *   PostToolUse hook 不再生成新的 observation
+
+这两个开关都保存在 SQLite `app_settings` 中，因此 worker 重启后会保留上次选中的策略。
+
+#### 基本操作流程
+
+1. 运行 `agentmem start`
+2. 打开 `http://127.0.0.1:38888/admin`
+3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
+4. 观察台账条目和统计卡片，确认当前是否还能读取旧记忆、是否还能写入新 observation
+5. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
 
 ---
 
@@ -126,16 +168,29 @@ agentmem install
 }
 ```
 
-#### 2. Claude Code 客户端 (`~/.claude/settings.json`)
-注册 MCP 工具及进程执行拦截的 hooks 路径：
+#### 2. Claude Code 客户端
+Claude Code 当前使用两份不同配置文件：
+
+*   `~/.claude.json`：注册全局 stdio MCP server
+*   `~/.claude/settings.json`：注册 hooks 和其他会话设置
+
+**`~/.claude.json`**
 ```json
 {
   "mcpServers": {
     "agentmem": {
+      "type": "stdio",
       "command": "node",
-      "args": ["您的开发路径/AgentMemory/dist/servers/mcp-server.js"]
+      "args": ["您的开发路径/AgentMemory/dist/servers/mcp-server.js"],
+      "env": {}
     }
-  },
+  }
+}
+```
+
+**`~/.claude/settings.json`**
+```json
+{
   "hooks": {
     "SessionStart": [
       {
@@ -153,16 +208,43 @@ agentmem install
 }
 ```
 
-#### 3. Codex 客户端 (`~/.codex/config.toml`)
-在 TOML 文件的 `[mcp_servers]` 部分直接添加 `agentmem`：
+#### 3. Codex 客户端（`~/.codex/config.toml` 与 `~/.codex/hooks.json`）
+MCP server 注册在 `config.toml`，生命周期 hooks 注册在 `hooks.json`：
+
+**`~/.codex/config.toml`**
 ```toml
+[features]
+hooks = true
+
 [mcp_servers.agentmem]
 command = "node"
 args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
-#### 4. Antigravity 客户端
-在您对应的插件配置目录 `mcp_config.json` 中配置：
+**`~/.codex/hooks.json`**
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"您的开发路径/AgentMemory/dist/hooks/codex-session-start.js\"" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"您的开发路径/AgentMemory/dist/hooks/codex-post-tool.js\"" }]
+      }
+    ]
+  }
+}
+```
+
+#### 4. Antigravity CLI
+在当前生效的 Antigravity CLI MCP 注册表中暴露 `agentmem`。在这台机器上，实际验证通过的是 Gemini 兼容配置根目录下的插件 `mcp_config.json`。
+
+通用结构如下：
 ```json
 {
   "mcpServers": {
@@ -174,6 +256,18 @@ args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
   }
 }
 ```
+
+### ✅ Smoke 验证清单
+
+对本机 live 安装做联调时，建议按下面的最小矩阵执行：
+
+1. 预检：worker 能启动，`/admin` 可访问，当前 observation 数量可读
+2. `read on / write on`：能恢复旧记忆，并能新增一条 observation
+3. `read off / write on`：旧记忆不再恢复，显式读取工具返回 disabled，但写入仍然成功
+4. `read on / write off`：旧记忆仍可读取，但新写入不再让 observation 计数增长
+5. 恢复默认：把两个开关都重新打开，并确认 worker 重启后策略仍然保持
+
+如果 smoke 验证失败，只修与 `/admin`、runtime policy gate、当前 agent 集成路径直接相关的问题；修复后重新运行 `npm run build` 和受影响的 `tests/*.test.cjs`。
 
 ---
 

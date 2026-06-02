@@ -1,10 +1,16 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
-import fs from 'fs';
 import os from 'os';
-import { DatabaseManager, Observation, Session } from './db';
+import { DatabaseManager, Observation, ObservationListFilters, Session } from './db';
 import { v4 as uuidv4 } from 'uuid';
+import { renderAdminPageHtml } from './admin-ui';
+import {
+  normalizeRuntimePolicy,
+  READ_DISABLED_MESSAGE,
+  WRITE_DISABLED_MESSAGE,
+} from './runtime-policy';
+import { resolveEmbeddingConfig } from './embedding-config';
 
 // Load environment variables
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
@@ -30,6 +36,66 @@ interface QueuedToolLog {
 
 const logQueue: QueuedToolLog[] = [];
 let isProcessingQueue = false;
+const ADMIN_HTML = renderAdminPageHtml(5000);
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const normalized = address.replace('::ffff:', '');
+  return normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function adminOnlyGuard(req: Request, res: Response, next: express.NextFunction) {
+  const remoteAddress = req.socket.remoteAddress || req.ip;
+  if (!isLoopbackAddress(remoteAddress)) {
+    res.status(403).json({
+      error: 'AgentMemory admin routes are only available from loopback addresses.',
+    });
+    return;
+  }
+  next();
+}
+
+async function isReadEnabled(): Promise<boolean> {
+  const policy = await dbManager.getRuntimePolicy();
+  return policy.readEnabled;
+}
+
+async function isWriteEnabled(): Promise<boolean> {
+  const policy = await dbManager.getRuntimePolicy();
+  return policy.writeEnabled;
+}
+
+function sendReadDisabled(res: Response, key: string) {
+  res.json({
+    disabled: true,
+    message: READ_DISABLED_MESSAGE,
+    [key]: [],
+  });
+}
+
+function sendWriteDisabled(res: Response) {
+  res.json({
+    success: false,
+    disabled: true,
+    message: WRITE_DISABLED_MESSAGE,
+  });
+}
+
+function toAdminObservation(observation: Observation) {
+  return {
+    id: observation.id,
+    session_id: observation.session_id,
+    project_path: observation.project_path,
+    agent_id: observation.agent_id,
+    title: observation.title,
+    narrative: observation.narrative,
+    facts: observation.facts,
+    concepts: observation.concepts,
+    files_read: observation.files_read,
+    files_modified: observation.files_modified,
+    created_at: observation.created_at,
+  };
+}
 
 // Initialize database before starting the server
 async function startServer() {
@@ -41,6 +107,83 @@ async function startServer() {
   });
 }
 
+app.get('/admin', adminOnlyGuard, async (_req, res) => {
+  res.type('html').send(ADMIN_HTML);
+});
+
+app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
+  try {
+    const [policy, observations, sessions, projects, agents] = await Promise.all([
+      dbManager.getRuntimePolicy(),
+      dbManager.countObservations(),
+      dbManager.countSessions(),
+      dbManager.listDistinctProjects(),
+      dbManager.listDistinctAgents(),
+    ]);
+
+    res.json({
+      policy,
+      stats: {
+        observations,
+        sessions,
+        projects: projects.length,
+        agents: agents.length,
+      },
+      projects,
+      agents,
+      refreshedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error fetching admin overview:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/records', adminOnlyGuard, async (req, res) => {
+  try {
+    const filters: ObservationListFilters = {
+      page: parseInt((req.query.page as string) || '1', 10),
+      pageSize: parseInt((req.query.pageSize as string) || '25', 10),
+      project: (req.query.project as string) || undefined,
+      agent: (req.query.agent as string) || undefined,
+      query: (req.query.query as string) || undefined,
+    };
+
+    const result = await dbManager.listObservations(filters);
+    res.json({
+      page: filters.page || 1,
+      pageSize: filters.pageSize || 25,
+      total: result.total,
+      records: result.records.map((record) => toAdminObservation(record)),
+    });
+  } catch (err: any) {
+    console.error('Error fetching admin records:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const updates: { readEnabled?: boolean; writeEnabled?: boolean } = {};
+
+    if (Object.prototype.hasOwnProperty.call(body, 'readEnabled')) {
+      updates.readEnabled = !!body.readEnabled;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'writeEnabled')) {
+      updates.writeEnabled = !!body.writeEnabled;
+    }
+
+    const normalized =
+      Object.keys(updates).length === 0 ? normalizeRuntimePolicy({}) : updates;
+    const policy = await dbManager.updateRuntimePolicy(normalized);
+    res.json({ success: true, policy });
+  } catch (err: any) {
+    console.error('Error updating runtime policy:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 1. Get Project Memory Context (For Session Initialization)
 app.get('/context', async (req, res) => {
   const projectPath = req.query.project_path as string;
@@ -51,6 +194,10 @@ app.get('/context', async (req, res) => {
   }
 
   try {
+    if (!(await isReadEnabled())) {
+      return sendReadDisabled(res, 'observations');
+    }
+
     const timeline = await dbManager.getTimeline(projectPath);
     // Return the latest matching observations up to the limit
     res.json(timeline.slice(0, limit));
@@ -68,6 +215,10 @@ app.post('/sessions', async (req, res) => {
   }
 
   try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
     const normalizedPath = path.resolve(project_path).replace(/\\/g, '/');
     const session: Session = {
       id,
@@ -85,11 +236,15 @@ app.post('/sessions', async (req, res) => {
 });
 
 // 3. Ingest Hook Logs (Tool Execution Event)
-app.post('/tools', (req, res) => {
+app.post('/tools', async (req, res) => {
   const { session_id, project_path, agent_id, tool_name, input, output, success } = req.body;
 
   if (!session_id || !project_path || !agent_id || !tool_name) {
     return res.status(400).json({ error: 'Missing required tool payload fields' });
+  }
+
+  if (!(await isWriteEnabled())) {
+    return sendWriteDisabled(res);
   }
 
   const logEntry: QueuedToolLog = {
@@ -117,6 +272,10 @@ app.post('/sessions/close', async (req, res) => {
   if (!id) return res.status(400).json({ error: 'Missing session ID' });
 
   try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
     await dbManager.saveSession({
       id,
       project_path: '',
@@ -138,6 +297,10 @@ app.post('/search', async (req, res) => {
   }
 
   try {
+    if (!(await isReadEnabled())) {
+      return sendReadDisabled(res, 'results');
+    }
+
     const queryVector = await getEmbedding(query);
     const results = await dbManager.searchHybrid(project_path, query, queryVector, limit || 5);
     res.json(results);
@@ -337,12 +500,11 @@ async function saveMockObservation(log: QueuedToolLog, reason: string) {
 
 // Embedding helper with local compilation-free Feature Hashing fallback
 async function getEmbedding(text: string): Promise<number[]> {
-  const apiKey = process.env.AGENTVAULT_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
-  const embeddingUrl = process.env.EMBEDDING_API_URL; // e.g. OpenAI or Gemini embedding endpoints
+  const { apiKey, embeddingUrl, shouldUseExternalEmbedding } = resolveEmbeddingConfig();
 
-  if (apiKey && embeddingUrl) {
+  if (shouldUseExternalEmbedding && apiKey && embeddingUrl) {
     try {
-      const response = await fetch(embeddingUrl.trim(), {
+      const response = await fetch(embeddingUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

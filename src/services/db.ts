@@ -42,6 +42,25 @@ export interface SearchResult {
   created_at: string;
 }
 
+export interface RuntimeMemoryPolicy {
+  readEnabled: boolean;
+  writeEnabled: boolean;
+  updatedAt: string;
+}
+
+export interface ObservationListFilters {
+  agent?: string;
+  page?: number;
+  pageSize?: number;
+  project?: string;
+  query?: string;
+}
+
+export interface ObservationListResult {
+  records: Observation[];
+  total: number;
+}
+
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
@@ -115,6 +134,15 @@ export class DatabaseManager {
         files_modified
       )
     `);
+
+    // 4. App settings table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   }
 
   // Create or update a session
@@ -157,7 +185,7 @@ export class DatabaseManager {
   public async getTimeline(projectPath: string): Promise<Observation[]> {
     if (!this.db) throw new Error('Database not initialized');
     
-    const normalizedPath = path.resolve(projectPath).replace(/\\/g, '/');
+    const normalizedPath = this.normalizeProjectPath(projectPath);
     const rows = this.db.all(
       `SELECT * FROM observations 
        WHERE LOWER(project_path) = LOWER(?)
@@ -165,20 +193,7 @@ export class DatabaseManager {
       [normalizedPath]
     ) as any[];
 
-    return rows.map((row) => ({
-      id: row.id,
-      session_id: row.session_id,
-      project_path: row.project_path,
-      agent_id: row.agent_id,
-      title: row.title,
-      narrative: row.narrative,
-      facts: JSON.parse(row.facts),
-      concepts: JSON.parse(row.concepts),
-      files_read: JSON.parse(row.files_read),
-      files_modified: JSON.parse(row.files_modified),
-      embedding: JSON.parse(row.embedding),
-      created_at: row.created_at,
-    }));
+    return rows.map((row) => this.parseObservation(row));
   }
 
   // Get multiple observations by their IDs
@@ -192,20 +207,131 @@ export class DatabaseManager {
       ids
     ) as any[];
 
-    return rows.map((row) => ({
-      id: row.id,
-      session_id: row.session_id,
-      project_path: row.project_path,
-      agent_id: row.agent_id,
-      title: row.title,
-      narrative: row.narrative,
-      facts: JSON.parse(row.facts),
-      concepts: JSON.parse(row.concepts),
-      files_read: JSON.parse(row.files_read),
-      files_modified: JSON.parse(row.files_modified),
-      embedding: JSON.parse(row.embedding),
-      created_at: row.created_at,
-    }));
+    return rows.map((row) => this.parseObservation(row));
+  }
+
+  public async getRuntimePolicy(): Promise<RuntimeMemoryPolicy> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const row = this.db.get(
+      `SELECT value, updated_at FROM app_settings WHERE key = ?`,
+      ['runtime_memory_policy']
+    ) as any;
+
+    if (!row) {
+      return this.persistRuntimePolicy({
+        readEnabled: true,
+        writeEnabled: true,
+      });
+    }
+
+    const parsed = JSON.parse(row.value);
+    return {
+      readEnabled: parsed.readEnabled !== false,
+      writeEnabled: parsed.writeEnabled !== false,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  public async updateRuntimePolicy(
+    partialPolicy: Partial<Pick<RuntimeMemoryPolicy, 'readEnabled' | 'writeEnabled'>>
+  ): Promise<RuntimeMemoryPolicy> {
+    const current = await this.getRuntimePolicy();
+    return this.persistRuntimePolicy({
+      readEnabled: partialPolicy.readEnabled ?? current.readEnabled,
+      writeEnabled: partialPolicy.writeEnabled ?? current.writeEnabled,
+    });
+  }
+
+  public async listObservations(filters: ObservationListFilters = {}): Promise<ObservationListResult> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const page = Math.max(1, Number(filters.page || 1));
+    const pageSize = Math.max(1, Math.min(100, Number(filters.pageSize || 25)));
+    const offset = (page - 1) * pageSize;
+
+    const whereParts: string[] = [];
+    const params: any[] = [];
+
+    if (filters.project) {
+      whereParts.push(`LOWER(project_path) = LOWER(?)`);
+      params.push(filters.project);
+    }
+
+    if (filters.agent) {
+      whereParts.push(`LOWER(agent_id) = LOWER(?)`);
+      params.push(filters.agent);
+    }
+
+    if (filters.query) {
+      const wildcard = `%${this.escapeLike(filters.query)}%`;
+      whereParts.push(`(
+        title LIKE ? ESCAPE '\\'
+        OR narrative LIKE ? ESCAPE '\\'
+        OR facts LIKE ? ESCAPE '\\'
+        OR concepts LIKE ? ESCAPE '\\'
+        OR files_read LIKE ? ESCAPE '\\'
+        OR files_modified LIKE ? ESCAPE '\\'
+        OR project_path LIKE ? ESCAPE '\\'
+        OR agent_id LIKE ? ESCAPE '\\'
+      )`);
+      for (let i = 0; i < 8; i++) {
+        params.push(wildcard);
+      }
+    }
+
+    const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const totalRow = this.db.get(
+      `SELECT COUNT(*) as total FROM observations ${whereClause}`,
+      params
+    ) as any;
+
+    const rows = this.db.all(
+      `SELECT * FROM observations
+       ${whereClause}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    ) as any[];
+
+    return {
+      total: Number(totalRow?.total || 0),
+      records: rows.map((row) => this.parseObservation(row)),
+    };
+  }
+
+  public async countObservations(): Promise<number> {
+    if (!this.db) throw new Error('Database not initialized');
+    const row = this.db.get(`SELECT COUNT(*) as total FROM observations`) as any;
+    return Number(row?.total || 0);
+  }
+
+  public async countSessions(): Promise<number> {
+    if (!this.db) throw new Error('Database not initialized');
+    const row = this.db.get(`SELECT COUNT(*) as total FROM sessions`) as any;
+    return Number(row?.total || 0);
+  }
+
+  public async listDistinctProjects(): Promise<string[]> {
+    if (!this.db) throw new Error('Database not initialized');
+    const rows = this.db.all(
+      `SELECT DISTINCT project_path
+       FROM observations
+       WHERE project_path != ''
+       ORDER BY project_path COLLATE NOCASE ASC`
+    ) as any[];
+    return rows.map((row) => row.project_path as string);
+  }
+
+  public async listDistinctAgents(): Promise<string[]> {
+    if (!this.db) throw new Error('Database not initialized');
+    const rows = this.db.all(
+      `SELECT DISTINCT agent_id
+       FROM observations
+       WHERE agent_id != ''
+       ORDER BY agent_id COLLATE NOCASE ASC`
+    ) as any[];
+    return rows.map((row) => row.agent_id as string);
   }
 
   // Cosine similarity in pure TS
@@ -232,7 +358,7 @@ export class DatabaseManager {
   ): Promise<SearchResult[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const normalizedPath = path.resolve(projectPath).replace(/\\/g, '/');
+    const normalizedPath = this.normalizeProjectPath(projectPath);
     const cleanQuery = queryText.replace(/[^a-zA-Z0-9\s_\-\.]/g, ' ');
 
     let ftsRows: any[] = [];
@@ -319,5 +445,63 @@ export class DatabaseManager {
       this.db.close();
       this.db = null;
     }
+  }
+
+  private async persistRuntimePolicy(
+    policy: Pick<RuntimeMemoryPolicy, 'readEnabled' | 'writeEnabled'>
+  ): Promise<RuntimeMemoryPolicy> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    this.db.run(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = CURRENT_TIMESTAMP`,
+      [
+        'runtime_memory_policy',
+        JSON.stringify({
+          readEnabled: policy.readEnabled,
+          writeEnabled: policy.writeEnabled,
+        }),
+      ]
+    );
+
+    const row = this.db.get(
+      `SELECT value, updated_at FROM app_settings WHERE key = ?`,
+      ['runtime_memory_policy']
+    ) as any;
+    const parsed = JSON.parse(row.value);
+
+    return {
+      readEnabled: parsed.readEnabled !== false,
+      writeEnabled: parsed.writeEnabled !== false,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private parseObservation(row: any): Observation {
+    return {
+      id: row.id,
+      session_id: row.session_id,
+      project_path: row.project_path,
+      agent_id: row.agent_id,
+      title: row.title,
+      narrative: row.narrative,
+      facts: JSON.parse(row.facts),
+      concepts: JSON.parse(row.concepts),
+      files_read: JSON.parse(row.files_read),
+      files_modified: JSON.parse(row.files_modified),
+      embedding: JSON.parse(row.embedding),
+      created_at: row.created_at,
+    };
+  }
+
+  private normalizeProjectPath(projectPath: string): string {
+    return path.resolve(projectPath).replace(/\\/g, '/');
+  }
+
+  private escapeLike(input: string): string {
+    return input.replace(/[\\%_]/g, '\\$&');
   }
 }

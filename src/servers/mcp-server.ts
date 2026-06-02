@@ -9,6 +9,11 @@ import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
+import {
+  READ_DISABLED_MESSAGE,
+  WRITE_DISABLED_MESSAGE,
+} from '../services/runtime-policy';
+import { resolveEmbeddingConfig } from '../services/embedding-config';
 
 // Load environment variables
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
@@ -142,6 +147,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'search_memory': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.readEnabled) {
+          return {
+            content: [{ type: 'text', text: `${READ_DISABLED_MESSAGE} No search was performed.` }],
+          };
+        }
+
         const query = String(args?.query);
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
         const limit = Number(args?.limit || 5);
@@ -166,6 +178,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'memory_timeline': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.readEnabled) {
+          return {
+            content: [{ type: 'text', text: `${READ_DISABLED_MESSAGE} Timeline access is blocked.` }],
+          };
+        }
+
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
         const timeline = await dbManager.getTimeline(projectPath);
 
@@ -184,6 +203,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_memory_details': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.readEnabled) {
+          return {
+            content: [{ type: 'text', text: `${READ_DISABLED_MESSAGE} Memory details are unavailable.` }],
+          };
+        }
+
         const ids = (args?.observation_ids as string[]) || [];
         const details = await dbManager.getObservationsByIds(ids);
 
@@ -222,6 +248,13 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
       }
 
       case 'record_memory': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.writeEnabled) {
+          return {
+            content: [{ type: 'text', text: `${WRITE_DISABLED_MESSAGE} This memory entry was not recorded.` }],
+          };
+        }
+
         const title = String(args?.title);
         const narrative = String(args?.narrative);
         const facts = (args?.facts as string[]) || [];
@@ -285,12 +318,11 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
 
 // Setup fallback vector generator
 async function getEmbedding(text: string): Promise<number[]> {
-  const apiKey = process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
-  const embeddingUrl = process.env.EMBEDDING_API_URL;
+  const { apiKey, embeddingUrl, shouldUseExternalEmbedding } = resolveEmbeddingConfig();
 
-  if (apiKey && embeddingUrl) {
+  if (shouldUseExternalEmbedding && apiKey && embeddingUrl) {
     try {
-      const response = await fetch(embeddingUrl.trim(), {
+      const response = await fetch(embeddingUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
