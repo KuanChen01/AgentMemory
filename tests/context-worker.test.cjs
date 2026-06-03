@@ -28,6 +28,32 @@ async function seedDatabase(dbPath, projectPath) {
       session_id: randomUUID(),
       project_path: projectPath,
       agent_id: 'codex',
+      title: 'Read README.md file',
+      narrative: 'Low signal read event',
+      facts: ['Read file README.md'],
+      concepts: ['context'],
+      files_read: ['README.md'],
+      files_modified: [],
+      embedding: [0, 1, 0],
+    });
+    await db.saveObservation({
+      id: randomUUID(),
+      session_id: randomUUID(),
+      project_path: projectPath,
+      agent_id: 'codex',
+      title: 'Checked git status',
+      narrative: 'Low signal status event',
+      facts: ['Working tree checked'],
+      concepts: ['context'],
+      files_read: [],
+      files_modified: [],
+      embedding: [0, 1, 0],
+    });
+    await db.saveObservation({
+      id: randomUUID(),
+      session_id: randomUUID(),
+      project_path: projectPath,
+      agent_id: 'codex',
       title: 'Alpha memory',
       narrative: 'First memory for context view testing',
       facts: ['Alpha fact', 'Budget was updated'],
@@ -180,12 +206,17 @@ test('worker context endpoint returns ProjectContextView and hooks render it', a
     assert.ok(payload.current_state.some((entry) => entry.fact_key === 'user_budget' && entry.value === 80000));
     assert.ok(payload.summary_blocks.length > 0);
     assert.equal(payload.recent_observations[0].title, 'Alpha memory');
+    assert.equal(payload.recent_observations[0].embedding, undefined);
+    assert.ok(payload.summary_blocks.every((entry) => entry.title !== 'Read README.md file'));
+    assert.ok(payload.summary_blocks.every((entry) => entry.title !== 'Checked git status'));
 
     for (const scriptName of ['claude-session-start.js', 'codex-session-start.js', 'opencode-session-start.js']) {
       const output = await runHook(scriptName, projectPath, port);
       assert.match(output, /Current structured state/i);
       assert.match(output, /user_budget/);
       assert.match(output, /Alpha memory/);
+      assert.doesNotMatch(output, /Read README\.md file/);
+      assert.doesNotMatch(output, /Checked git status/);
     }
   } finally {
     await stopWorker(child, port);

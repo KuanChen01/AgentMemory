@@ -7,11 +7,18 @@ export interface ProjectContextSummaryBlock {
   lines: string[];
 }
 
+export interface ProjectContextRecentObservation {
+  id: string;
+  title: string;
+  created_at?: string;
+  agent_id: string;
+}
+
 export interface ProjectContextView {
   project_path: string;
   current_state: StateFact[];
   summary_blocks: ProjectContextSummaryBlock[];
-  recent_observations: Observation[];
+  recent_observations: ProjectContextRecentObservation[];
   generated_at: string;
   disabled?: boolean;
   message?: string;
@@ -20,18 +27,26 @@ export interface ProjectContextView {
 export function createProjectContextView(
   projectPath: string,
   stateFacts: StateFact[],
-  recentObservations: Observation[]
+  recentObservations: Observation[],
+  limit: number = recentObservations.length
 ): ProjectContextView {
+  const curatedObservations = selectProjectContextObservations(recentObservations, limit);
+
   return {
     project_path: projectPath,
     current_state: stateFacts,
-    summary_blocks: recentObservations.map((observation) => ({
+    summary_blocks: curatedObservations.map((observation) => ({
       title: observation.title,
       created_at: observation.created_at,
       agent_id: observation.agent_id,
       lines: buildSummaryLines(observation),
     })),
-    recent_observations: recentObservations,
+    recent_observations: curatedObservations.map((observation) => ({
+      id: observation.id,
+      title: observation.title,
+      created_at: observation.created_at,
+      agent_id: observation.agent_id,
+    })),
     generated_at: new Date().toISOString(),
   };
 }
@@ -145,6 +160,66 @@ function buildSummaryLines(observation: Observation): string[] {
   }
 
   return lines;
+}
+
+function selectProjectContextObservations(
+  observations: Observation[],
+  limit: number
+): Observation[] {
+  if (limit < 1 || observations.length === 0) {
+    return [];
+  }
+
+  const curated = collectContextObservations(observations, limit, {
+    allowLowSignal: false,
+  });
+
+  if (curated.length > 0) {
+    return curated;
+  }
+
+  return collectContextObservations(observations, limit, {
+    allowLowSignal: true,
+  });
+}
+
+function collectContextObservations(
+  observations: Observation[],
+  limit: number,
+  options: { allowLowSignal: boolean }
+): Observation[] {
+  const selected: Observation[] = [];
+  const seenTitles = new Set<string>();
+
+  for (const observation of observations) {
+    const titleKey = normalizeTitleKey(observation.title);
+    if (!titleKey || seenTitles.has(titleKey)) {
+      continue;
+    }
+
+    if (!options.allowLowSignal && isLowSignalTitle(observation.title)) {
+      continue;
+    }
+
+    seenTitles.add(titleKey);
+    selected.push(observation);
+
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  return selected;
+}
+
+function normalizeTitleKey(title: string): string {
+  return title.trim().toLowerCase();
+}
+
+function isLowSignalTitle(title: string): boolean {
+  return /^(read|checked|check|list|listed|search|viewed|view|raw execution:|run)\b/i.test(
+    title.trim()
+  );
 }
 
 function trimSummary(text: string, maxLength: number = 180): string {

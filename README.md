@@ -138,13 +138,13 @@ New interfaces in this first cut:
 *   `GET /context?project_path=&limit=` returns a `ProjectContextView` object instead of a raw observation array.
 *   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads current or historical structured state.
 *   `POST /state` explicitly writes a structured state fact.
-*   MCP tools: `get_memory_state`, `set_memory_state`
+*   MCP tools: `get_project_context`, `get_memory_state`, `set_memory_state`
 
 `ProjectContextView` combines:
 
 *   `current_state`
-*   `summary_blocks`
-*   `recent_observations`
+*   `summary_blocks` built from curated recent observations with low-signal titles filtered out and duplicate titles collapsed
+*   `recent_observations` as a slim startup-oriented metadata list (`id`, `title`, `created_at`, `agent_id`) without full narratives or embeddings
 *   `generated_at`
 
 Structured state is **explicit-write only** in this phase. Observations, hook logs, and LLM summaries do not automatically promote themselves into the state layer.
@@ -153,7 +153,7 @@ Structured state is **explicit-write only** in this phase. Observations, hook lo
 
 *   `readEnabled=false` blocks memory restoration and explicit read APIs:
     *   HTTP: `/context`, `/search`, `/state`
-    *   MCP: `search_memory`, `memory_timeline`, `get_memory_details`, `get_memory_state`
+    *   MCP: `get_project_context`, `search_memory`, `memory_timeline`, `get_memory_details`, `get_memory_state`
     *   Session-start hooks stop printing restored memory into the agent session
 *   `writeEnabled=false` blocks new memory creation:
     *   HTTP: `/tools`, `/sessions`, `/sessions/close`, `/state`
@@ -279,6 +279,14 @@ Generic shape:
   }
 }
 ```
+
+Preferred startup call for Antigravity (MCP-only, no session-start hook):
+
+1. Call `get_project_context` with the current `project_path` and an optional `limit` to retrieve the same curated structured startup context that hook-backed agents render from `ProjectContextView`.
+2. If you need more detail after startup, use `memory_timeline` or `search_memory` for drill-down.
+3. If a timeline or search hit looks relevant, follow up with `get_memory_details` for the full narrative and file lists.
+
+This keeps Antigravity aligned with the hook-backed agents while collapsing startup recovery into one MCP call.
 
 ### ✅ Smoke Validation Checklist
 

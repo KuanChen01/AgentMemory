@@ -138,13 +138,13 @@ AgentMemory 现在把记忆拆成两层：
 *   `GET /context?project_path=&limit=`：返回 `ProjectContextView` 对象，不再直接返回 observation 数组
 *   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：读取当前或历史结构化状态
 *   `POST /state`：显式写入结构化状态
-*   MCP 工具：`get_memory_state`、`set_memory_state`
+*   MCP 工具：`get_project_context`、`get_memory_state`、`set_memory_state`
 
 `ProjectContextView` 当前包含：
 
 *   `current_state`
-*   `summary_blocks`
-*   `recent_observations`
+*   `summary_blocks`：基于最近 observation 生成，但会过滤低信号标题并合并重复标题
+*   `recent_observations`：面向 startup 的精简元数据列表，只保留 `id`、`title`、`created_at`、`agent_id`，不再附带完整 narrative 或 embedding
 *   `generated_at`
 
 这一阶段的 structured state 仍然是 **explicit-write only**：observation、hook 日志和 LLM 摘要不会自动晋升为 state。
@@ -153,7 +153,7 @@ AgentMemory 现在把记忆拆成两层：
 
 *   `readEnabled=false` 时，会阻断记忆恢复和显式读取接口：
     *   HTTP：`/context`、`/search`、`/state`
-    *   MCP：`search_memory`、`memory_timeline`、`get_memory_details`、`get_memory_state`
+    *   MCP：`get_project_context`、`search_memory`、`memory_timeline`、`get_memory_details`、`get_memory_state`
     *   SessionStart hook 不再向 agent 启动上下文注入历史记忆
 *   `writeEnabled=false` 时，会阻断新记忆写入：
     *   HTTP：`/tools`、`/sessions`、`/sessions/close`、`/state`
@@ -279,6 +279,14 @@ args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
   }
 }
 ```
+
+推荐的 Antigravity 启动入口（MCP-only，无 session-start hook）：
+
+1. 用当前 `project_path` 调用 `get_project_context`，必要时可附带 `limit`，一次拿到与 hook-backed agent 等价的 `ProjectContextView` 启动文本。
+2. 如果启动后还需要进一步展开细节，再调用 `memory_timeline` 或 `search_memory` 做 drill-down。
+3. 如果 timeline 或 search 结果里有值得展开的条目，再调用 `get_memory_details` 查看完整 narrative 和文件列表。
+
+这样可以把 Antigravity 的启动恢复收敛成一次 MCP 调用，同时继续保留按需展开历史细节的能力。
 
 ### ✅ Smoke 验证清单
 

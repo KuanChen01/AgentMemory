@@ -13,8 +13,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { renderAdminPageHtml } from './admin-ui';
 import {
   createDisabledProjectContextView,
-  createProjectContextView,
 } from './context-view';
+import {
+  loadProjectContextView,
+  parseProjectContextLimit,
+} from './project-context';
 import {
   normalizeRuntimePolicy,
   READ_DISABLED_MESSAGE,
@@ -111,21 +114,8 @@ function normalizeProjectPath(projectPath: string): string {
   return path.resolve(projectPath).replace(/\\/g, '/');
 }
 
-function parseContextLimit(rawLimit: string | undefined): number {
-  const parsed = parseInt(rawLimit || '10', 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return 10;
-  }
-  return Math.min(parsed, 50);
-}
-
 async function buildProjectContext(projectPath: string, limit: number) {
-  const [stateFacts, timeline] = await Promise.all([
-    dbManager.getProjectStateFacts(projectPath),
-    dbManager.getTimeline(projectPath),
-  ]);
-
-  return createProjectContextView(projectPath, stateFacts, timeline.slice(0, limit));
+  return loadProjectContextView(dbManager, projectPath, limit);
 }
 
 function sendContextReadDisabled(res: Response, projectPath: string) {
@@ -235,7 +225,7 @@ app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
 app.get('/context', async (req, res) => {
   const projectPath = req.query.project_path as string;
   const normalizedProjectPath = projectPath ? normalizeProjectPath(projectPath) : '';
-  const limit = parseContextLimit(req.query.limit as string | undefined);
+    const limit = parseProjectContextLimit(req.query.limit as string | undefined);
 
   if (!projectPath) {
     return res.status(400).json({ error: 'Missing project_path parameter' });

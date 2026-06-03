@@ -13,7 +13,15 @@ import {
   READ_DISABLED_MESSAGE,
   WRITE_DISABLED_MESSAGE,
 } from '../services/runtime-policy';
-import { formatStateFactValue } from '../services/context-view';
+import {
+  loadProjectContextView,
+  parseProjectContextLimit,
+} from '../services/project-context';
+import {
+  formatStateFactValue,
+  hasProjectContextData,
+  renderProjectContextView,
+} from '../services/context-view';
 import { resolveEmbeddingConfig } from '../services/embedding-config';
 
 // Load environment variables
@@ -38,6 +46,23 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
+      {
+        name: 'get_project_context',
+        description: 'Returns the curated structured startup context for this project as a single rendered block, equivalent to the hook-backed startup view.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: {
+              type: 'string',
+              description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            limit: {
+              type: 'number',
+              description: 'Optional. Max number of curated summary/recent observation entries to include. Defaults to 10.',
+            },
+          },
+        },
+      },
       {
         name: 'search_memory',
         description: 'Performs a hybrid search (keyword + vector semantic) over the agent memory database for the current workspace.',
@@ -209,6 +234,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case 'get_project_context': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.readEnabled) {
+          const text = renderProjectContextView({
+            project_path: String(args?.project_path || currentPath).replace(/\\/g, '/'),
+            current_state: [],
+            summary_blocks: [],
+            recent_observations: [],
+            generated_at: new Date().toISOString(),
+            disabled: true,
+            message: READ_DISABLED_MESSAGE,
+          });
+          return { content: [{ type: 'text', text }] };
+        }
+
+        const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
+        const limit = parseProjectContextLimit(
+          args?.limit === undefined ? undefined : Number(args.limit)
+        );
+        const view = await loadProjectContextView(dbManager, projectPath, limit);
+
+        if (!hasProjectContextData(view)) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `No structured context recorded yet for ${projectPath}.`,
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [{ type: 'text', text: renderProjectContextView(view) }],
+        };
+      }
+
       case 'search_memory': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {

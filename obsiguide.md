@@ -46,7 +46,7 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 将 AgentMemory 从 observation-only 的共享记忆账本扩展为分层记忆第一阶段：落地 structured state + derived summary，并在 worker、MCP 和 session-start hooks 上验证闭环。
+- 已将 Antigravity 的 MCP-only startup 流程产品化为 `get_project_context`；当前目标是继续用真实 Antigravity / 多 agent 工作流验证“一次 startup call + 按需 drill-down”是否已经足够，并观察是否还需要进一步的 search 排序优化或更薄的使用层包装，同时保持 structured state 的 explicit-only 写入边界。
 
 ## Current State
 - 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
@@ -71,6 +71,17 @@
 - `GET /context` 已切换为返回 `ProjectContextView`，由 `current_state`、`summary_blocks`、`recent_observations` 和 `generated_at` 组成；三种 session-start hook 现在统一渲染该结构化上下文，而不再逐条打印原始 observation 列表。
 - 已新增 HTTP `/state` 与 MCP `get_memory_state` / `set_memory_state`，并复用现有 runtime policy gate：关闭 read 时不再返回 state/context，关闭 write 时 state 写入不会落库。
 - 已补齐 `tests\\db-state.test.cjs`、`tests\\context-worker.test.cjs`、`tests\\mcp-state.test.cjs`，并完成 `npm run build` 与全量 Node `node:test` 回归验证。
+- 已向真实项目 `E:\Kuan\Projects\Codex\AgentMemory` 写入 7 条受控 structured state facts：`state_write_mode`、`rollout_stage`、`service:worker.port`，以及 `claudecode` / `codex` / `opencode` / `antigravity` 的 `startup_context_mode`。
+- 已完成 Claude Code、Codex、OpenCode 的 live startup validation：三份 session-start stdout 都显示同一组 7 条 `current_state`，且 `Current structured state` 区块都排在 `Recent summary blocks` 之前。
+- 已完成 Antigravity 的 MCP-only validation：通过直连 stdio MCP server 的 `get_memory_state`、`memory_timeline` 与 `search_memory`，确认无需 hook 也能取回同一组 current state 和最近记忆，但恢复等价上下文仍需多步显式调用。
+- 已在 `src/services/context-view.ts` 中将 `recent_observations` 收敛为 startup-oriented slim metadata，只保留 `id`、`title`、`created_at`、`agent_id`，并在 `summary_blocks` 生成阶段加入 low-signal filtering 与 duplicate-title dedupe。
+- 已在 `src/services/worker.ts` 中改为先基于完整 timeline 生成 `ProjectContextView`，再由 context-view 层统一做去噪、去重和 limit 应用，避免预切片把高信号 observation 挤掉。
+- 已完成 phase 2 follow-up live validation：`/context?limit=10` 对真实项目当前返回约 `9589` bytes，不再携带 `embedding`，前 10 条 `summary_blocks` 中按“低信号 + 重复标题”口径仅剩 `1/10`，唯一残余低信号标题为 `Raw Execution: Bash`。
+- 已抽出共享 `src/services/project-context.ts`，把 worker `/context` 与 MCP `get_project_context` 统一到同一套 state + summary + recent-observation loader，避免两边各自拼装 startup context。
+- 已在 MCP server 中新增 `get_project_context` 聚合工具：默认使用当前工作目录和 `limit=10`，返回与 hooks 一致的 `ProjectContextView` 文本渲染；read gate 关闭时返回同样的 disabled 语义，空项目时返回明确空态提示。
+- 已完成真实 helper validation：`get_project_context` 在 `E:\Kuan\Projects\Codex\AgentMemory` 上与 worker `/context` 渲染结果逐字一致，`helper_matches_worker_render=true`，并确认 Antigravity 现在可以用“一次 startup call + 按需 `search_memory` / `get_memory_details`”完成恢复。
+- 已将双语 README 的 Antigravity 入口改为 `get_project_context` 优先，`memory_timeline` / `search_memory` / `get_memory_details` 下沉为 drill-down 工具。
+- 已将真实项目的 structured state 进一步推进到 `rollout_stage = phase2-antigravity-startup-helper`，并将 `agent:antigravity.startup_context_mode` 更新为 `mcp+get_project_context`。
 
 ## Verified Commands
 - `npm run build`
@@ -83,18 +94,26 @@
 - `node --test tests\db-admin.test.cjs`
 - `node --test tests\codex-installer.test.cjs`
 - `node --test tests\context-worker.test.cjs`
+- `node --test tests\context-view.test.cjs tests\context-worker.test.cjs`
+- `node --test tests\mcp-context.test.cjs`
 - `node --test tests\db-state.test.cjs`
 - `node --test tests\embedding-config.test.cjs`
 - `node --test tests\mcp-state.test.cjs`
 - `node --test tests\worker-admin.test.cjs`
 - `node --test tests\mcp-policy.test.cjs`
+- `node dist/services/worker.js`
+- `node dist/hooks/claude-session-start.js`
+- `node dist/hooks/codex-session-start.js`
+- `node dist/hooks/opencode-session-start.js`
+- `node dist/servers/mcp-server.js`
 
 ## Known Constraints
 - 不同 agent 的配置文件格式不一致，安装器需要分别处理 OpenCode 与 Claude Code 的差异。
 
 ## Open Questions
-- 需要继续观察不同 agent 在长会话和多仓库切换下的记忆召回质量。
-- 当前只完成了 OpenAI-compatible mock 响应的端到端验证；如果后续要接具体供应商，还需要再做一次供应商真实接口的在线校验。
+- `Raw Execution:*` 这类标题是否也应该纳入更严格的 low-signal 过滤规则，还是保留为少量原始执行证据。
+- `search_memory` 对较宽泛查询仍可能先命中低信号 observation；helper 已解决启动恢复，但后续是否还需要检索排序或 query guidance 的收敛仍待观察。
+- 如果后续要接具体供应商的真实 embedding 端点，仍需要再做一次供应商真实接口的在线校验。
 
 ## Latest Durable Changes
 - 实现了 Codex 自动化钩子配置并集成了全局 `hooks.json` 规则。
@@ -111,11 +130,17 @@
 - 已在不污染正式数据库和仓库的前提下，完成外部 embedding 路径的 mock 端到端验证，并确认 `EMBEDDING_API_URL` 返回的向量会被 MCP 写入和 worker 检索真正消费。
 - Codex installer 现在通过共享 helper 以 upsert 方式维护 `~/.codex/config.toml`，确保 `[features].hooks = true` 与 `[mcp_servers.agentmem]` 都会被正确写入且重复执行保持幂等；同时为该行为补上了 fresh install 和 rewrite 场景的 Node `node:test` 回归测试。
 - AgentMemory 现在具备 observation ledger 之外的第一阶段分层记忆能力：新增 `state_facts`、`/state`、`get_memory_state` / `set_memory_state`，并将 `/context` 与 session-start 注入统一切换到 `ProjectContextView`。
+- 已在真实项目上完成 phase 1 live validation：写入 7 条受控 state facts，并验证了 Claude Code / Codex / OpenCode 的 hook 恢复一致性、Antigravity 的 MCP-only 取回路径，以及多仓切换下的 state 隔离。
+- `ProjectContextView` 现在对 startup path 使用 slim `recent_observations` projection，并在 summary 层完成 low-signal filter + dedupe；真实 follow-up 验证显示 payload 已从约 `50.8 KB` 降到 `9589` bytes，`embedding` 已完全移出 `/context` 返回。
+- 共享 `project-context` loader 现在同时服务 worker `/context` 与 MCP `get_project_context`；Antigravity 可通过一次 MCP 调用拿到与 hooks 一致的 startup context，而 lower-level MCP 工具退回到 drill-down 角色。
+- README / README.zh 已补充新的 `ProjectContextView` 语义，并将 Antigravity 的推荐启动入口升级为 `get_project_context`。
+- 已将 `Experiment - AgentMemory live validation of ProjectContextView and structured state` 更新为带 follow-up 的完整实验记录，并归档两个已被实现与复验关闭的 issue：`ProjectContextView returns oversized context payload with embedded observation vectors` 与 `ProjectContextView summary blocks are dominated by low-signal observation noise`。
+- 新增 decision note：`Decision - MCP-only agents use get_project_context as the canonical ProjectContextView entrypoint`。
 
 ## Next Action
-- 用真实 agent 工作流继续验证 `ProjectContextView` 和 structured state 的使用价值，并据此决定第二阶段是否需要加入 state 的管理页可见性、人工审核候选 state，或更明确的 skill / playbook 层。
+- 继续用真实 Antigravity 工作流观察 `get_project_context` 之后的 drill-down 体验，重点判断 `search_memory` 的宽查询排序是否仍需收敛，并继续观察 `Raw Execution:*` 是否值得进一步过滤；保持 structured state 的 explicit-only 写入模式。
 
 ## Last Sync
 - date: 2026-06-03
-- status: 已完成第一阶段 state + summary 切换：新增 `state_facts` 结构化状态层、HTTP `/state`、MCP `get_memory_state` / `set_memory_state`，并将 `/context` 与三种 session-start hook 切换为 `ProjectContextView`；同时补上 `tests\\db-state.test.cjs`、`tests\\context-worker.test.cjs`、`tests\\mcp-state.test.cjs` 并通过全量 Node `node:test` 回归。
+- status: 已完成 Antigravity startup helper 落地与真实验证：新增共享 `project-context` loader 和 MCP `get_project_context`，真实项目 `E:\Kuan\Projects\Codex\AgentMemory` 上该工具与 worker `/context` 渲染逐字一致，`helper_matches_worker_render=true`；README / README.zh 已将 Antigravity 启动入口切换为 `get_project_context`，并将真实项目 state 推进到 `rollout_stage = phase2-antigravity-startup-helper` 与 `agent:antigravity.startup_context_mode = mcp+get_project_context`。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
