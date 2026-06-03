@@ -46,7 +46,7 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 构建并验证一个可在 OpenCode、Claude Code、Codex 和 Antigravity 之间共享的持久化记忆系统。
+- 将 AgentMemory 从 observation-only 的共享记忆账本扩展为分层记忆第一阶段：落地 structured state + derived summary，并在 worker、MCP 和 session-start hooks 上验证闭环。
 
 ## Current State
 - 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
@@ -67,6 +67,10 @@
 - 已清理本地浏览器检查噪音产物 `.playwright-mcp/` 与 `admin-toggle-feedback.png`，并把 `.playwright-mcp/` 补进 `.gitignore`，避免再次污染工作树。
 - 已用临时端口、临时数据库和本地 mock embedding 服务完成一次端到端验证：MCP `record_memory` 与 worker `/search` 都实际向 `EMBEDDING_API_URL` 发出了带 `Bearer` 认证的请求，数据库中的最新 observation embedding 长度为 `7` 且值与 mock 返回一致，worker `/search` 的 `vector_score` 为 `1`，说明返回向量被真正使用而不是静默回退到本地 1024 维 hashing。
 - 已修复 Codex 安装器的两个配置缺陷：`agentmem install` 现在会为 Codex fresh install 创建 `~/.codex/config.toml` 并注册 `[mcp_servers.agentmem]`，同时以幂等方式把 `[features]` 中的 `hooks` 统一收敛为单个 `hooks = true`，不再留下重复键。
+- 已新增 `state_facts` 结构化状态层：同一 `(project_path, entity_type, entity_key, fact_key)` 现在采用追加新版本并通过 `superseded_at` 标记失效区间，不再依赖 observation 模糊召回来承载“当前真相”。
+- `GET /context` 已切换为返回 `ProjectContextView`，由 `current_state`、`summary_blocks`、`recent_observations` 和 `generated_at` 组成；三种 session-start hook 现在统一渲染该结构化上下文，而不再逐条打印原始 observation 列表。
+- 已新增 HTTP `/state` 与 MCP `get_memory_state` / `set_memory_state`，并复用现有 runtime policy gate：关闭 read 时不再返回 state/context，关闭 write 时 state 写入不会落库。
+- 已补齐 `tests\\db-state.test.cjs`、`tests\\context-worker.test.cjs`、`tests\\mcp-state.test.cjs`，并完成 `npm run build` 与全量 Node `node:test` 回归验证。
 
 ## Verified Commands
 - `npm run build`
@@ -78,7 +82,10 @@
 - `npx ts-node scratch/test-search.ts`
 - `node --test tests\db-admin.test.cjs`
 - `node --test tests\codex-installer.test.cjs`
+- `node --test tests\context-worker.test.cjs`
+- `node --test tests\db-state.test.cjs`
 - `node --test tests\embedding-config.test.cjs`
+- `node --test tests\mcp-state.test.cjs`
 - `node --test tests\worker-admin.test.cjs`
 - `node --test tests\mcp-policy.test.cjs`
 
@@ -103,11 +110,12 @@
 - 已按 Antigravity CLI 当前真实 MCP 注册表重新完成只读 `memory_timeline` 验证，并清理掉 `.playwright-mcp/` 与 `admin-toggle-feedback.png` 这类本地检查噪音。
 - 已在不污染正式数据库和仓库的前提下，完成外部 embedding 路径的 mock 端到端验证，并确认 `EMBEDDING_API_URL` 返回的向量会被 MCP 写入和 worker 检索真正消费。
 - Codex installer 现在通过共享 helper 以 upsert 方式维护 `~/.codex/config.toml`，确保 `[features].hooks = true` 与 `[mcp_servers.agentmem]` 都会被正确写入且重复执行保持幂等；同时为该行为补上了 fresh install 和 rewrite 场景的 Node `node:test` 回归测试。
+- AgentMemory 现在具备 observation ledger 之外的第一阶段分层记忆能力：新增 `state_facts`、`/state`、`get_memory_state` / `set_memory_state`，并将 `/context` 与 session-start 注入统一切换到 `ProjectContextView`。
 
 ## Next Action
-- 继续观察不同 agent 在长会话和多仓库切换下的记忆召回质量，并根据真实使用情况决定是否需要继续扩展 `/admin` 的产品化能力。
+- 用真实 agent 工作流继续验证 `ProjectContextView` 和 structured state 的使用价值，并据此决定第二阶段是否需要加入 state 的管理页可见性、人工审核候选 state，或更明确的 skill / playbook 层。
 
 ## Last Sync
 - date: 2026-06-03
-- status: 已修复 Codex installer 的 MCP 注册缺失和 `hooks = true` 非幂等重写问题：`agentmem install` 现在会为 fresh install 创建 `~/.codex/config.toml` 与 `hooks.json`，写入 `[mcp_servers.agentmem]`，并将 `[features]` 中的 hooks 配置收敛为单个 `hooks = true`；同时补上并通过 `tests\\codex-installer.test.cjs` 等回归测试。
+- status: 已完成第一阶段 state + summary 切换：新增 `state_facts` 结构化状态层、HTTP `/state`、MCP `get_memory_state` / `set_memory_state`，并将 `/context` 与三种 session-start hook 切换为 `ProjectContextView`；同时补上 `tests\\db-state.test.cjs`、`tests\\context-worker.test.cjs`、`tests\\mcp-state.test.cjs` 并通过全量 Node `node:test` 回归。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

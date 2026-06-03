@@ -126,15 +126,38 @@ http://127.0.0.1:38888/admin
 *   **全库台账视图**：按 project、agent、自由文本筛选 observation
 *   **详情面板**：查看 narrative、facts、concepts、files_read、files_modified
 
+#### Structured state 与 context view
+
+AgentMemory 现在把记忆拆成两层：
+
+*   **Observations** 继续作为 append-only 的历史账本，用于 hybrid search 和细节回溯。
+*   **State facts** 用来存储显式的当前/历史真相，并带有 `effective_at`、`recorded_at` 和 `superseded_at` 时间语义。
+
+这一阶段新增的接口：
+
+*   `GET /context?project_path=&limit=`：返回 `ProjectContextView` 对象，不再直接返回 observation 数组
+*   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：读取当前或历史结构化状态
+*   `POST /state`：显式写入结构化状态
+*   MCP 工具：`get_memory_state`、`set_memory_state`
+
+`ProjectContextView` 当前包含：
+
+*   `current_state`
+*   `summary_blocks`
+*   `recent_observations`
+*   `generated_at`
+
+这一阶段的 structured state 仍然是 **explicit-write only**：observation、hook 日志和 LLM 摘要不会自动晋升为 state。
+
 #### 运行时策略语义
 
 *   `readEnabled=false` 时，会阻断记忆恢复和显式读取接口：
-    *   HTTP：`/context`、`/search`
-    *   MCP：`search_memory`、`memory_timeline`、`get_memory_details`
+    *   HTTP：`/context`、`/search`、`/state`
+    *   MCP：`search_memory`、`memory_timeline`、`get_memory_details`、`get_memory_state`
     *   SessionStart hook 不再向 agent 启动上下文注入历史记忆
 *   `writeEnabled=false` 时，会阻断新记忆写入：
-    *   HTTP：`/tools`、`/sessions`、`/sessions/close`
-    *   MCP：`record_memory`
+    *   HTTP：`/tools`、`/sessions`、`/sessions/close`、`/state`
+    *   MCP：`record_memory`、`set_memory_state`
     *   PostToolUse hook 不再生成新的 observation
 
 这两个开关都保存在 SQLite `app_settings` 中，因此 worker 重启后会保留上次选中的策略。

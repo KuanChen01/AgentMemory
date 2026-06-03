@@ -1,6 +1,10 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
+import {
+  hasProjectContextData,
+  renderProjectContextView,
+} from '../services/context-view';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -17,22 +21,11 @@ async function main() {
     }
 
     const data: any = await response.json();
-    if (Array.isArray(data) && data.length > 0) {
-      console.log('\n=== AgentMemory: Memory Restored from Previous Sessions ===');
-      console.log('You are continuing work in this workspace. Here is a summary of past activities and decisions:');
-      
-      data.forEach((obs: any, idx: number) => {
-        console.log(`\nObservation #${idx + 1}: ${obs.title} (${new Date(obs.created_at).toLocaleDateString()})`);
-        console.log(`Narrative: ${obs.narrative}`);
-        if (obs.facts && obs.facts.length > 0) {
-          console.log('Key Facts established:');
-          obs.facts.forEach((f: string) => console.log(`  - ${f}`));
-        }
-        if (obs.files_modified && obs.files_modified.length > 0) {
-          console.log(`Files modified: ${obs.files_modified.join(', ')}`);
-        }
-      });
-      console.log('=========================================================\n');
+    if (data?.disabled || hasProjectContextData(data)) {
+      const output = renderProjectContextView(data);
+      if (output) {
+        console.log(output);
+      }
     }
   } catch (err) {
     // Suppress error so agent startup is never blocked if worker is down

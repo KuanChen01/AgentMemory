@@ -13,6 +13,7 @@ import {
   READ_DISABLED_MESSAGE,
   WRITE_DISABLED_MESSAGE,
 } from '../services/runtime-policy';
+import { formatStateFactValue } from '../services/context-view';
 import { resolveEmbeddingConfig } from '../services/embedding-config';
 
 // Load environment variables
@@ -133,6 +134,68 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['title', 'narrative'],
+        },
+      },
+      {
+        name: 'get_memory_state',
+        description: 'Reads the current or historical structured state facts for this project.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: {
+              type: 'string',
+              description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            entity_type: {
+              type: 'string',
+              description: 'Optional. Entity type to filter by. Defaults to all entity types in the project state snapshot.',
+            },
+            entity_key: {
+              type: 'string',
+              description: 'Optional. Entity key to filter by.',
+            },
+            fact_key: {
+              type: 'string',
+              description: 'Optional. Fact key to filter by.',
+            },
+            as_of: {
+              type: 'string',
+              description: 'Optional. ISO timestamp for historical reads by effective time.',
+            },
+          },
+        },
+      },
+      {
+        name: 'set_memory_state',
+        description: 'Writes a structured state fact for the current project without changing historical observations.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: {
+              type: 'string',
+              description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            entity_type: {
+              type: 'string',
+              description: 'Optional. Entity type. Defaults to project.',
+            },
+            entity_key: {
+              type: 'string',
+              description: 'Optional. Entity key. Defaults to the normalized project path.',
+            },
+            fact_key: {
+              type: 'string',
+              description: 'Fact name to write.',
+            },
+            value: {
+              description: 'Any JSON-serializable fact value.',
+            },
+            effective_at: {
+              type: 'string',
+              description: 'Optional. ISO timestamp for when the fact becomes effective.',
+            },
+          },
+          required: ['fact_key', 'value'],
         },
       },
     ],
@@ -299,6 +362,82 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
             {
               type: 'text',
               text: `Memory successfully recorded in AgentMemory! ID: ${obs.id}. Other agents working on ${projectPath} can now access this entry.`,
+            },
+          ],
+        };
+      }
+
+      case 'get_memory_state': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.readEnabled) {
+          return {
+            content: [{ type: 'text', text: `${READ_DISABLED_MESSAGE} Structured state is unavailable.` }],
+          };
+        }
+
+        const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
+        const asOf = args?.as_of ? String(args.as_of) : undefined;
+        const facts = await dbManager.getStateFacts({
+          projectPath,
+          entityType: args?.entity_type ? String(args.entity_type) : undefined,
+          entityKey: args?.entity_key ? String(args.entity_key) : undefined,
+          factKey: args?.fact_key ? String(args.fact_key) : undefined,
+          asOf,
+        });
+
+        if (facts.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: asOf
+                  ? `No structured state facts were active for ${projectPath} at ${asOf}.`
+                  : `No structured state facts are currently recorded for ${projectPath}.`,
+              },
+            ],
+          };
+        }
+
+        const header = asOf
+          ? `Structured state at ${asOf} (${facts.length} facts):`
+          : `Current structured state (${facts.length} facts):`;
+        const lines = facts.map(
+          (fact) =>
+            `- [${fact.entity_type}:${fact.entity_key}] ${fact.fact_key} = ${formatStateFactValue(
+              fact.value
+            )} (effective ${fact.effective_at})`
+        );
+
+        return {
+          content: [{ type: 'text', text: `${header}\n\n${lines.join('\n')}` }],
+        };
+      }
+
+      case 'set_memory_state': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.writeEnabled) {
+          return {
+            content: [{ type: 'text', text: `${WRITE_DISABLED_MESSAGE} This state fact was not recorded.` }],
+          };
+        }
+
+        const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
+        const fact = await dbManager.saveStateFact({
+          project_path: projectPath,
+          entity_type: args?.entity_type ? String(args.entity_type) : undefined,
+          entity_key: args?.entity_key ? String(args.entity_key) : undefined,
+          fact_key: String(args?.fact_key),
+          value: args?.value,
+          effective_at: args?.effective_at ? String(args.effective_at) : undefined,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Structured state recorded: ${fact.fact_key} = ${formatStateFactValue(
+                fact.value
+              )} for ${fact.entity_type}:${fact.entity_key}.`,
             },
           ],
         };

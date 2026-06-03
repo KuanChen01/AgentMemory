@@ -2,9 +2,19 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
-import { DatabaseManager, Observation, ObservationListFilters, Session } from './db';
+import {
+  DatabaseManager,
+  Observation,
+  ObservationListFilters,
+  Session,
+  StateFactInput,
+} from './db';
 import { v4 as uuidv4 } from 'uuid';
 import { renderAdminPageHtml } from './admin-ui';
+import {
+  createDisabledProjectContextView,
+  createProjectContextView,
+} from './context-view';
 import {
   normalizeRuntimePolicy,
   READ_DISABLED_MESSAGE,
@@ -97,6 +107,41 @@ function toAdminObservation(observation: Observation) {
   };
 }
 
+function normalizeProjectPath(projectPath: string): string {
+  return path.resolve(projectPath).replace(/\\/g, '/');
+}
+
+function parseContextLimit(rawLimit: string | undefined): number {
+  const parsed = parseInt(rawLimit || '10', 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 10;
+  }
+  return Math.min(parsed, 50);
+}
+
+async function buildProjectContext(projectPath: string, limit: number) {
+  const [stateFacts, timeline] = await Promise.all([
+    dbManager.getProjectStateFacts(projectPath),
+    dbManager.getTimeline(projectPath),
+  ]);
+
+  return createProjectContextView(projectPath, stateFacts, timeline.slice(0, limit));
+}
+
+function sendContextReadDisabled(res: Response, projectPath: string) {
+  res.json(createDisabledProjectContextView(projectPath, READ_DISABLED_MESSAGE));
+}
+
+function sendStateReadDisabled(res: Response, projectPath: string, asOf?: string) {
+  res.json({
+    disabled: true,
+    message: READ_DISABLED_MESSAGE,
+    project_path: projectPath,
+    as_of: asOf || null,
+    facts: [],
+  });
+}
+
 // Initialize database before starting the server
 async function startServer() {
   await dbManager.initialize();
@@ -113,12 +158,13 @@ app.get('/admin', adminOnlyGuard, async (_req, res) => {
 
 app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
   try {
-    const [policy, observations, sessions, projects, agents] = await Promise.all([
+    const [policy, observations, sessions, projects, agents, currentStateFacts] = await Promise.all([
       dbManager.getRuntimePolicy(),
       dbManager.countObservations(),
       dbManager.countSessions(),
       dbManager.listDistinctProjects(),
       dbManager.listDistinctAgents(),
+      dbManager.countCurrentStateFacts(),
     ]);
 
     res.json({
@@ -128,6 +174,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
         sessions,
         projects: projects.length,
         agents: agents.length,
+        currentStateFacts,
       },
       projects,
       agents,
@@ -187,7 +234,8 @@ app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
 // 1. Get Project Memory Context (For Session Initialization)
 app.get('/context', async (req, res) => {
   const projectPath = req.query.project_path as string;
-  const limit = parseInt(req.query.limit as string || '10');
+  const normalizedProjectPath = projectPath ? normalizeProjectPath(projectPath) : '';
+  const limit = parseContextLimit(req.query.limit as string | undefined);
 
   if (!projectPath) {
     return res.status(400).json({ error: 'Missing project_path parameter' });
@@ -195,14 +243,83 @@ app.get('/context', async (req, res) => {
 
   try {
     if (!(await isReadEnabled())) {
-      return sendReadDisabled(res, 'observations');
+      return sendContextReadDisabled(res, normalizedProjectPath);
     }
 
-    const timeline = await dbManager.getTimeline(projectPath);
-    // Return the latest matching observations up to the limit
-    res.json(timeline.slice(0, limit));
+    res.json(await buildProjectContext(normalizedProjectPath, limit));
   } catch (err: any) {
     console.error('Error fetching context:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/state', async (req, res) => {
+  const projectPath = req.query.project_path as string;
+  const entityType = (req.query.entity_type as string) || undefined;
+  const rawEntityKey = (req.query.entity_key as string) || undefined;
+  const factKey = (req.query.fact_key as string) || undefined;
+  const asOf = (req.query.as_of as string) || undefined;
+
+  if (!projectPath) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  const normalizedProjectPath = normalizeProjectPath(projectPath);
+  const entityKey =
+    entityType === 'project' && rawEntityKey ? normalizeProjectPath(rawEntityKey) : rawEntityKey;
+
+  try {
+    if (!(await isReadEnabled())) {
+      return sendStateReadDisabled(res, normalizedProjectPath, asOf);
+    }
+
+    const facts = await dbManager.getStateFacts({
+      projectPath: normalizedProjectPath,
+      entityType,
+      entityKey,
+      factKey,
+      asOf,
+    });
+
+    res.json({
+      project_path: normalizedProjectPath,
+      as_of: asOf || null,
+      facts,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error fetching state:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/state', async (req, res) => {
+  const body = req.body || {};
+
+  if (!body.project_path || !body.fact_key || !Object.prototype.hasOwnProperty.call(body, 'value')) {
+    return res.status(400).json({
+      error: 'Missing required state parameters: project_path, fact_key, and value',
+    });
+  }
+
+  try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
+    const stateFact: StateFactInput = {
+      project_path: normalizeProjectPath(String(body.project_path)),
+      entity_type: body.entity_type ? String(body.entity_type) : undefined,
+      entity_key: body.entity_key ? String(body.entity_key) : undefined,
+      fact_key: String(body.fact_key),
+      value: body.value,
+      effective_at: body.effective_at ? String(body.effective_at) : undefined,
+    };
+
+    const fact = await dbManager.saveStateFact(stateFact);
+    res.json({ success: true, fact });
+  } catch (err: any) {
+    console.error('Error writing state:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -219,7 +336,7 @@ app.post('/sessions', async (req, res) => {
       return sendWriteDisabled(res);
     }
 
-    const normalizedPath = path.resolve(project_path).replace(/\\/g, '/');
+    const normalizedPath = normalizeProjectPath(project_path);
     const session: Session = {
       id,
       project_path: normalizedPath,
@@ -250,7 +367,7 @@ app.post('/tools', async (req, res) => {
   const logEntry: QueuedToolLog = {
     id: uuidv4(),
     session_id,
-    project_path: path.resolve(project_path).replace(/\\/g, '/'),
+    project_path: normalizeProjectPath(project_path),
     agent_id,
     tool_name,
     input: typeof input === 'string' ? input : JSON.stringify(input),

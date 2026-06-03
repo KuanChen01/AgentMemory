@@ -1,5 +1,6 @@
 // @ts-ignore
 import { Database } from 'node-sqlite3-wasm';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -59,6 +60,36 @@ export interface ObservationListFilters {
 export interface ObservationListResult {
   records: Observation[];
   total: number;
+}
+
+export interface StateFact {
+  id: string;
+  project_path: string;
+  entity_type: string;
+  entity_key: string;
+  fact_key: string;
+  value: unknown;
+  value_json: string;
+  effective_at: string;
+  recorded_at: string;
+  superseded_at: string | null;
+}
+
+export interface StateFactInput {
+  project_path: string;
+  entity_type?: string;
+  entity_key?: string;
+  fact_key: string;
+  value: unknown;
+  effective_at?: string;
+}
+
+export interface StateFactQuery {
+  projectPath: string;
+  entityType?: string;
+  entityKey?: string;
+  factKey?: string;
+  asOf?: string;
 }
 
 export class DatabaseManager {
@@ -142,6 +173,31 @@ export class DatabaseManager {
         value TEXT NOT NULL,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+
+    // 5. State facts table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS state_facts (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_key TEXT NOT NULL,
+        fact_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        effective_at TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        superseded_at TEXT
+      )
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_state_facts_lookup
+      ON state_facts (project_path, entity_type, entity_key, fact_key, effective_at)
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_state_facts_current
+      ON state_facts (project_path, superseded_at)
     `);
   }
 
@@ -309,6 +365,145 @@ export class DatabaseManager {
   public async countSessions(): Promise<number> {
     if (!this.db) throw new Error('Database not initialized');
     const row = this.db.get(`SELECT COUNT(*) as total FROM sessions`) as any;
+    return Number(row?.total || 0);
+  }
+
+  public async saveStateFact(input: StateFactInput): Promise<StateFact> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+    const entityType = input.entity_type || 'project';
+    const entityKey = input.entity_key || normalizedProjectPath;
+    const factKey = input.fact_key;
+    const effectiveAt = input.effective_at || new Date().toISOString();
+    const recordedAt = new Date().toISOString();
+    const valueJson = JSON.stringify(input.value);
+
+    const previousActive = this.db.get(
+      `SELECT id
+       FROM state_facts
+       WHERE LOWER(project_path) = LOWER(?)
+         AND LOWER(entity_type) = LOWER(?)
+         AND LOWER(entity_key) = LOWER(?)
+         AND LOWER(fact_key) = LOWER(?)
+         AND effective_at <= ?
+         AND (superseded_at IS NULL OR superseded_at > ?)
+       ORDER BY effective_at DESC, recorded_at DESC
+       LIMIT 1`,
+      [normalizedProjectPath, entityType, entityKey, factKey, effectiveAt, effectiveAt]
+    ) as any;
+
+    const nextActive = this.db.get(
+      `SELECT effective_at
+       FROM state_facts
+       WHERE LOWER(project_path) = LOWER(?)
+         AND LOWER(entity_type) = LOWER(?)
+         AND LOWER(entity_key) = LOWER(?)
+         AND LOWER(fact_key) = LOWER(?)
+         AND effective_at > ?
+       ORDER BY effective_at ASC, recorded_at ASC
+       LIMIT 1`,
+      [normalizedProjectPath, entityType, entityKey, factKey, effectiveAt]
+    ) as any;
+
+    const id = randomUUID();
+    this.db.run(
+      `INSERT INTO state_facts (
+        id,
+        project_path,
+        entity_type,
+        entity_key,
+        fact_key,
+        value_json,
+        effective_at,
+        recorded_at,
+        superseded_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        normalizedProjectPath,
+        entityType,
+        entityKey,
+        factKey,
+        valueJson,
+        effectiveAt,
+        recordedAt,
+        nextActive?.effective_at || null,
+      ]
+    );
+
+    if (previousActive?.id) {
+      this.db.run(
+        `UPDATE state_facts
+         SET superseded_at = ?
+         WHERE id = ?`,
+        [effectiveAt, previousActive.id]
+      );
+    }
+
+    const row = this.db.get(`SELECT * FROM state_facts WHERE id = ?`, [id]) as any;
+    return this.parseStateFact(row);
+  }
+
+  public async getStateFacts(query: StateFactQuery): Promise<StateFact[]> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const normalizedProjectPath = this.normalizeProjectPath(query.projectPath);
+    const whereParts = [`LOWER(project_path) = LOWER(?)`];
+    const params: any[] = [normalizedProjectPath];
+
+    if (query.entityType) {
+      whereParts.push(`LOWER(entity_type) = LOWER(?)`);
+      params.push(query.entityType);
+    }
+
+    if (query.entityKey) {
+      whereParts.push(`LOWER(entity_key) = LOWER(?)`);
+      params.push(query.entityKey);
+    }
+
+    if (query.factKey) {
+      whereParts.push(`LOWER(fact_key) = LOWER(?)`);
+      params.push(query.factKey);
+    }
+
+    if (query.asOf) {
+      whereParts.push(`effective_at <= ?`);
+      whereParts.push(`(superseded_at IS NULL OR superseded_at > ?)`);
+      params.push(query.asOf, query.asOf);
+    } else {
+      whereParts.push(`superseded_at IS NULL`);
+    }
+
+    const rows = this.db.all(
+      `SELECT *
+       FROM state_facts
+       WHERE ${whereParts.join(' AND ')}
+       ORDER BY entity_type COLLATE NOCASE ASC,
+                entity_key COLLATE NOCASE ASC,
+                fact_key COLLATE NOCASE ASC,
+                effective_at DESC,
+                recorded_at DESC`,
+      params
+    ) as any[];
+
+    return rows.map((row) => this.parseStateFact(row));
+  }
+
+  public async getProjectStateFacts(projectPath: string, asOf?: string): Promise<StateFact[]> {
+    return this.getStateFacts({
+      projectPath,
+      asOf,
+    });
+  }
+
+  public async countCurrentStateFacts(): Promise<number> {
+    if (!this.db) throw new Error('Database not initialized');
+    const row = this.db.get(
+      `SELECT COUNT(*) as total
+       FROM state_facts
+       WHERE superseded_at IS NULL`
+    ) as any;
     return Number(row?.total || 0);
   }
 
@@ -494,6 +689,21 @@ export class DatabaseManager {
       files_modified: JSON.parse(row.files_modified),
       embedding: JSON.parse(row.embedding),
       created_at: row.created_at,
+    };
+  }
+
+  private parseStateFact(row: any): StateFact {
+    return {
+      id: row.id,
+      project_path: row.project_path,
+      entity_type: row.entity_type,
+      entity_key: row.entity_key,
+      fact_key: row.fact_key,
+      value: JSON.parse(row.value_json),
+      value_json: row.value_json,
+      effective_at: row.effective_at,
+      recorded_at: row.recorded_at,
+      superseded_at: row.superseded_at,
     };
   }
 

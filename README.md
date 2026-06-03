@@ -126,15 +126,38 @@ The page provides:
 *   **Filterable ledger view** across the whole database by project, agent, and free-text query
 *   **Observation detail panel** showing narrative, facts, concepts, files read, and files modified
 
+#### Structured state and context view
+
+AgentMemory now separates two memory layers:
+
+*   **Observations** remain the append-only historical ledger used for hybrid search and detailed recall.
+*   **State facts** store explicit current or historical truth with `effective_at`, `recorded_at`, and `superseded_at`.
+
+New interfaces in this first cut:
+
+*   `GET /context?project_path=&limit=` returns a `ProjectContextView` object instead of a raw observation array.
+*   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads current or historical structured state.
+*   `POST /state` explicitly writes a structured state fact.
+*   MCP tools: `get_memory_state`, `set_memory_state`
+
+`ProjectContextView` combines:
+
+*   `current_state`
+*   `summary_blocks`
+*   `recent_observations`
+*   `generated_at`
+
+Structured state is **explicit-write only** in this phase. Observations, hook logs, and LLM summaries do not automatically promote themselves into the state layer.
+
 #### Runtime policy semantics
 
 *   `readEnabled=false` blocks memory restoration and explicit read APIs:
-    *   HTTP: `/context`, `/search`
-    *   MCP: `search_memory`, `memory_timeline`, `get_memory_details`
+    *   HTTP: `/context`, `/search`, `/state`
+    *   MCP: `search_memory`, `memory_timeline`, `get_memory_details`, `get_memory_state`
     *   Session-start hooks stop printing restored memory into the agent session
 *   `writeEnabled=false` blocks new memory creation:
-    *   HTTP: `/tools`, `/sessions`, `/sessions/close`
-    *   MCP: `record_memory`
+    *   HTTP: `/tools`, `/sessions`, `/sessions/close`, `/state`
+    *   MCP: `record_memory`, `set_memory_state`
     *   Post-tool hooks stop producing new observations
 
 Both flags are stored in SQLite `app_settings`, so the selected policy survives worker restarts.
