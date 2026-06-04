@@ -119,12 +119,20 @@ http://127.0.0.1:38888/admin
 
 该页面仅允许本机 loopback 访问，不对非本机网络地址开放。
 
+Windows 下一键启动可直接使用：
+
+*   `npm run workbench`
+*   `start-workbench.cmd`
+
+这两个入口都会先构建仓库，再探测 `http://127.0.0.1:38888/admin/api/overview`；如果已有 worker 可复用就直接复用，否则后台拉起 `node dist/services/worker.js`，等待就绪后再打开 `/admin`。
+
 管理页提供：
 
-*   **总览卡片**：显示 observation、session、project、agent 的汇总数量
-*   **全局运行时开关**：`readEnabled` 与 `writeEnabled`
-*   **全库台账视图**：按 project、agent、自由文本筛选 observation
-*   **详情面板**：查看 narrative、facts、concepts、files_read、files_modified
+*   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，并展示 project / agent 覆盖面
+*   **Project Context**：查看当前 `ProjectContextView`、渲染后的 startup 文本，以及 payload / summary 健康度指标
+*   **State Lab**：显式读取和写入 structured state
+*   **Search Diagnostics**：直接查看 hybrid search 的 `hybrid_score`、`fts_score`、`vector_score` 和低信号标题标记
+*   **Observation Ledger**：保留全库台账浏览和 observation 细节 drill-down
 
 #### Structured state 与 context view
 
@@ -149,6 +157,18 @@ AgentMemory 现在把记忆拆成两层：
 
 这一阶段的 structured state 仍然是 **explicit-write only**：observation、hook 日志和 LLM 摘要不会自动晋升为 state。
 
+#### Workbench 专用诊断 API
+
+workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
+
+*   `GET /admin/api/context?project_path=&limit=`：返回
+    *   `view`：原始 `ProjectContextView`
+    *   `rendered`：与 `renderProjectContextView(view)` 一致的启动文本
+    *   `metrics`：`payloadBytes`、`summaryCount`、`lowSignalCount`、`duplicateTitleCount`
+*   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：供 workbench 读取 structured state
+*   `POST /admin/api/state`：供 workbench 显式写入 structured state fact
+*   `POST /admin/api/search`：返回当前 project 的 hybrid search 原始诊断分数，但不在这一步修改排序算法
+
 #### 运行时策略语义
 
 *   `readEnabled=false` 时，会阻断记忆恢复和显式读取接口：
@@ -164,11 +184,12 @@ AgentMemory 现在把记忆拆成两层：
 
 #### 基本操作流程
 
-1. 运行 `agentmem start`
+1. 使用 `npm run workbench`、`start-workbench.cmd` 一键启动，或者手动运行 `agentmem start`
 2. 打开 `http://127.0.0.1:38888/admin`
 3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
-4. 观察台账条目和统计卡片，确认当前是否还能读取旧记忆、是否还能写入新 observation
-5. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
+4. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
+5. 如需深挖原始 observation，再切到 `Observation Ledger`
+6. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
 
 ---
 

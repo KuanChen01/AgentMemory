@@ -12,6 +12,10 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { renderAdminPageHtml } from './admin-ui';
 import {
+  buildAdminProjectContextPayload,
+  toAdminSearchResult,
+} from './admin-workbench';
+import {
   createDisabledProjectContextView,
 } from './context-view';
 import {
@@ -132,6 +136,26 @@ function sendStateReadDisabled(res: Response, projectPath: string, asOf?: string
   });
 }
 
+function normalizeStateInput(body: any): StateFactInput {
+  return {
+    project_path: normalizeProjectPath(String(body.project_path)),
+    entity_type: body.entity_type ? String(body.entity_type) : undefined,
+    entity_key: body.entity_key ? String(body.entity_key) : undefined,
+    fact_key: String(body.fact_key),
+    value: body.value,
+    effective_at: body.effective_at ? String(body.effective_at) : undefined,
+  };
+}
+
+function parseSearchLimit(rawLimit: unknown, fallback: number = 10): number {
+  const value = Number(rawLimit);
+  if (!Number.isFinite(value) || value < 1) {
+    return fallback;
+  }
+
+  return Math.min(Math.trunc(value), 50);
+}
+
 // Initialize database before starting the server
 async function startServer() {
   await dbManager.initialize();
@@ -221,6 +245,119 @@ app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
   }
 });
 
+app.get('/admin/api/context', adminOnlyGuard, async (req, res) => {
+  const projectPath = req.query.project_path as string;
+  if (!projectPath) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  const normalizedProjectPath = normalizeProjectPath(projectPath);
+  const limit = parseProjectContextLimit(req.query.limit as string | undefined);
+
+  try {
+    const view = !(await isReadEnabled())
+      ? createDisabledProjectContextView(normalizedProjectPath, READ_DISABLED_MESSAGE)
+      : await buildProjectContext(normalizedProjectPath, limit);
+    res.json(buildAdminProjectContextPayload(view));
+  } catch (err: any) {
+    console.error('Error fetching admin context:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/state', adminOnlyGuard, async (req, res) => {
+  const projectPath = req.query.project_path as string;
+  const entityType = (req.query.entity_type as string) || undefined;
+  const rawEntityKey = (req.query.entity_key as string) || undefined;
+  const factKey = (req.query.fact_key as string) || undefined;
+  const asOf = (req.query.as_of as string) || undefined;
+
+  if (!projectPath) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  const normalizedProjectPath = normalizeProjectPath(projectPath);
+  const entityKey =
+    entityType === 'project' && rawEntityKey ? normalizeProjectPath(rawEntityKey) : rawEntityKey;
+
+  try {
+    if (!(await isReadEnabled())) {
+      return sendStateReadDisabled(res, normalizedProjectPath, asOf);
+    }
+
+    const facts = await dbManager.getStateFacts({
+      projectPath: normalizedProjectPath,
+      entityType,
+      entityKey,
+      factKey,
+      asOf,
+    });
+
+    res.json({
+      project_path: normalizedProjectPath,
+      as_of: asOf || null,
+      facts,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error fetching admin state:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/state', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+  if (!body.project_path || !body.fact_key || !Object.prototype.hasOwnProperty.call(body, 'value')) {
+    return res.status(400).json({
+      error: 'Missing required state parameters: project_path, fact_key, and value',
+    });
+  }
+
+  try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
+    const fact = await dbManager.saveStateFact(normalizeStateInput(body));
+    res.json({ success: true, fact });
+  } catch (err: any) {
+    console.error('Error writing admin state:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/search', adminOnlyGuard, async (req, res) => {
+  const { project_path, query, limit } = req.body || {};
+  if (!project_path || !query) {
+    return res.status(400).json({ error: 'Missing project_path or query' });
+  }
+
+  try {
+    if (!(await isReadEnabled())) {
+      return sendReadDisabled(res, 'results');
+    }
+
+    const normalizedProjectPath = normalizeProjectPath(String(project_path));
+    const queryVector = await getEmbedding(String(query));
+    const results = await dbManager.searchHybrid(
+      normalizedProjectPath,
+      String(query),
+      queryVector,
+      parseSearchLimit(limit, 10)
+    );
+
+    res.json({
+      project_path: normalizedProjectPath,
+      query: String(query),
+      results: results.map((result) => toAdminSearchResult(result)),
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error running admin search diagnostics:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 1. Get Project Memory Context (For Session Initialization)
 app.get('/context', async (req, res) => {
   const projectPath = req.query.project_path as string;
@@ -297,16 +434,7 @@ app.post('/state', async (req, res) => {
       return sendWriteDisabled(res);
     }
 
-    const stateFact: StateFactInput = {
-      project_path: normalizeProjectPath(String(body.project_path)),
-      entity_type: body.entity_type ? String(body.entity_type) : undefined,
-      entity_key: body.entity_key ? String(body.entity_key) : undefined,
-      fact_key: String(body.fact_key),
-      value: body.value,
-      effective_at: body.effective_at ? String(body.effective_at) : undefined,
-    };
-
-    const fact = await dbManager.saveStateFact(stateFact);
+    const fact = await dbManager.saveStateFact(normalizeStateInput(body));
     res.json({ success: true, fact });
   } catch (err: any) {
     console.error('Error writing state:', err);

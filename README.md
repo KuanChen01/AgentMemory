@@ -119,12 +119,20 @@ http://127.0.0.1:38888/admin
 
 The admin console is intentionally restricted to loopback clients. It is not exposed to non-local network addresses.
 
+For a one-click local launch on Windows, use either:
+
+*   `npm run workbench`
+*   `start-workbench.cmd`
+
+Both paths build the repo, probe `http://127.0.0.1:38888/admin/api/overview`, reuse an already-running worker when possible, otherwise start `node dist/services/worker.js`, wait for readiness, and open `/admin`.
+
 The page provides:
 
-*   **Overview cards** for total observations, sessions, projects, and agents
-*   **Global runtime toggles** for `readEnabled` and `writeEnabled`
-*   **Filterable ledger view** across the whole database by project, agent, and free-text query
-*   **Observation detail panel** showing narrative, facts, concepts, files read, and files modified
+*   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, and workbench posture
+*   **Project Context** for the current `ProjectContextView`, rendered startup text, and payload / summary health metrics
+*   **State Lab** for explicit structured state reads and writes
+*   **Search Diagnostics** for raw hybrid search scores (`hybrid_score`, `fts_score`, `vector_score`) and low-signal title visibility
+*   **Observation Ledger** for filterable observation browsing and detailed drill-down
 
 #### Structured state and context view
 
@@ -149,6 +157,18 @@ New interfaces in this first cut:
 
 Structured state is **explicit-write only** in this phase. Observations, hook logs, and LLM summaries do not automatically promote themselves into the state layer.
 
+#### Admin-only diagnostics APIs
+
+The workbench also exposes loopback-only admin APIs for the UI:
+
+*   `GET /admin/api/context?project_path=&limit=` returns:
+    *   `view`: raw `ProjectContextView`
+    *   `rendered`: the same text block produced by `renderProjectContextView(view)`
+    *   `metrics`: `payloadBytes`, `summaryCount`, `lowSignalCount`, `duplicateTitleCount`
+*   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads structured state for the workbench
+*   `POST /admin/api/state` explicitly writes a structured state fact from the workbench
+*   `POST /admin/api/search` returns raw hybrid search diagnostics for the current project without changing the ranking algorithm
+
 #### Runtime policy semantics
 
 *   `readEnabled=false` blocks memory restoration and explicit read APIs:
@@ -164,11 +184,12 @@ Both flags are stored in SQLite `app_settings`, so the selected policy survives 
 
 #### Operating workflow
 
-1. Start the worker with `agentmem start`
+1. Start the workbench with `npm run workbench`, `start-workbench.cmd`, or start the worker manually with `agentmem start`
 2. Open `http://127.0.0.1:38888/admin`
 3. Use the `Read Memory` and `Write Memory` switches to change runtime policy
-4. Watch the observation counters and ledger entries to confirm whether new memory is still being read or recorded
-5. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
+4. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
+5. Use `Observation Ledger` to drill into the raw observation history when needed
+6. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
 
 ---
 

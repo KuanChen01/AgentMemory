@@ -46,7 +46,7 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 已将 Antigravity 的 MCP-only startup 流程产品化为 `get_project_context`；当前目标是继续用真实 Antigravity / 多 agent 工作流验证“一次 startup call + 按需 drill-down”是否已经足够，并观察是否还需要进一步的 search 排序优化或更薄的使用层包装，同时保持 structured state 的 explicit-only 写入边界。
+- 已将网页 `/admin` 升级为完整的 Admin Workbench，并补齐 Windows 一键启动入口；当前目标是用新的 `Project Context` / `Search Diagnostics` / `State Lab` 工作台继续验证宽查询排序是否仍需收敛，以及 `Raw Execution:*` 是否还值得进一步过滤，同时保持 structured state 的 explicit-only 写入边界。
 
 ## Current State
 - 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
@@ -82,6 +82,9 @@
 - 已完成真实 helper validation：`get_project_context` 在 `E:\Kuan\Projects\Codex\AgentMemory` 上与 worker `/context` 渲染结果逐字一致，`helper_matches_worker_render=true`，并确认 Antigravity 现在可以用“一次 startup call + 按需 `search_memory` / `get_memory_details`”完成恢复。
 - 已将双语 README 的 Antigravity 入口改为 `get_project_context` 优先，`memory_timeline` / `search_memory` / `get_memory_details` 下沉为 drill-down 工具。
 - 已将真实项目的 structured state 进一步推进到 `rollout_stage = phase2-antigravity-startup-helper`，并将 `agent:antigravity.startup_context_mode` 更新为 `mcp+get_project_context`。
+- 已将 `/admin` 重构为零前端构建链的 Admin Workbench：新增 `Runtime`、`Project Context`、`State Lab`、`Search Diagnostics` 和 `Observation Ledger` 五个工作区，并采用偏 iOS 风格的 glass-heavy 控制台视觉。
+- 已新增 loopback-only 的 admin API：`GET /admin/api/context`、`GET /admin/api/state`、`POST /admin/api/state`、`POST /admin/api/search`；其中 context 现在同时返回原始 `view`、渲染文本和 payload / summary 健康度指标，search diagnostics 返回 raw hybrid scores 与 low-signal title 标记。
+- 已新增 `src/services/workbench-launcher.ts`、`src/bin/workbench.ts`、`scripts/start-workbench.ps1` 和 `start-workbench.cmd`，支持 `npm run workbench` / 双击脚本一键构建、探测、复用或拉起 worker，并自动打开 `/admin`。
 
 ## Verified Commands
 - `npm run build`
@@ -136,11 +139,13 @@
 - README / README.zh 已补充新的 `ProjectContextView` 语义，并将 Antigravity 的推荐启动入口升级为 `get_project_context`。
 - 已将 `Experiment - AgentMemory live validation of ProjectContextView and structured state` 更新为带 follow-up 的完整实验记录，并归档两个已被实现与复验关闭的 issue：`ProjectContextView returns oversized context payload with embedded observation vectors` 与 `ProjectContextView summary blocks are dominated by low-signal observation noise`。
 - 新增 decision note：`Decision - MCP-only agents use get_project_context as the canonical ProjectContextView entrypoint`。
+- `/admin` 现已升级为 Admin Workbench，并通过新增的 admin-only diagnostics API 把 `ProjectContextView`、structured state 和 raw hybrid search scores 同步进网页 UI。
+- 已新增 Windows 一键启动入口：`npm run workbench`、`scripts/start-workbench.ps1` 和 `start-workbench.cmd`，用于构建、探测 / 复用 worker、等待 `/admin` 就绪并打开浏览器。
 
 ## Next Action
-- 继续用真实 Antigravity 工作流观察 `get_project_context` 之后的 drill-down 体验，重点判断 `search_memory` 的宽查询排序是否仍需收敛，并继续观察 `Raw Execution:*` 是否值得进一步过滤；保持 structured state 的 explicit-only 写入模式。
+- 用新的 `Search Diagnostics` 和 `Project Context` 面板在真实项目上继续跑宽查询与 startup context 观测，重点判断 `search_memory` 的宽查询排序是否仍需收敛，并继续观察 `Raw Execution:*` 是否还值得进一步过滤；保持 structured state 的 explicit-only 写入模式。
 
 ## Last Sync
 - date: 2026-06-03
-- status: 已完成 Antigravity startup helper 落地与真实验证：新增共享 `project-context` loader 和 MCP `get_project_context`，真实项目 `E:\Kuan\Projects\Codex\AgentMemory` 上该工具与 worker `/context` 渲染逐字一致，`helper_matches_worker_render=true`；README / README.zh 已将 Antigravity 启动入口切换为 `get_project_context`，并将真实项目 state 推进到 `rollout_stage = phase2-antigravity-startup-helper` 与 `agent:antigravity.startup_context_mode = mcp+get_project_context`。
+- status: 已完成 Admin Workbench 落地与真实 smoke：`/admin` 现在包含 `Runtime`、`Project Context`、`State Lab`、`Search Diagnostics` 和 `Observation Ledger` 五个工作区；新增 admin-only diagnostics API 与 Windows 一键启动入口 `npm run workbench` / `start-workbench.cmd`，浏览器本地 smoke 已验证页面可打开且无新的前端控制台错误。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

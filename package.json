@@ -12,6 +12,7 @@
     "worker": "ts-node src/services/worker.ts",
     "mcp": "ts-node src/servers/mcp-server.ts",
     "cli": "ts-node src/bin/cli.ts",
+    "workbench": "powershell -ExecutionPolicy Bypass -File .\\scripts\\start-workbench.ps1",
     "test": "echo \"Error: no test specified\" && exit 0"
   },
   "keywords": [

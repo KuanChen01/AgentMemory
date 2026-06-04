@@ -212,11 +212,11 @@ function collectContextObservations(
   return selected;
 }
 
-function normalizeTitleKey(title: string): string {
+export function normalizeTitleKey(title: string): string {
   return title.trim().toLowerCase();
 }
 
-function isLowSignalTitle(title: string): boolean {
+export function isLowSignalTitle(title: string): boolean {
   return /^(read|checked|check|list|listed|search|viewed|view|raw execution:|run)\b/i.test(
     title.trim()
   );

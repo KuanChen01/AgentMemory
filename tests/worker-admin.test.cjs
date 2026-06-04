@@ -23,6 +23,22 @@ async function seedDatabase(dbPath) {
 
   try {
     await db.initialize();
+    await db.saveStateFact({
+      project_path: 'E:/Repo/A',
+      entity_type: 'project',
+      entity_key: 'E:/Repo/A',
+      fact_key: 'rollout_stage',
+      value: 'admin-workbench',
+      effective_at: '2026-06-03T09:00:00.000Z',
+    });
+    await db.saveStateFact({
+      project_path: 'E:/Repo/A',
+      entity_type: 'agent',
+      entity_key: 'codex',
+      fact_key: 'startup_context_mode',
+      value: 'hook+ProjectContextView',
+      effective_at: '2026-06-03T09:00:00.000Z',
+    });
     await db.saveObservation({
       id: randomUUID(),
       session_id: randomUUID(),
@@ -48,6 +64,19 @@ async function seedDatabase(dbPath) {
       files_read: ['src/b.ts'],
       files_modified: ['src/b.ts'],
       embedding: [0, 1, 0],
+    });
+    await db.saveObservation({
+      id: randomUUID(),
+      session_id: randomUUID(),
+      project_path: 'E:/Repo/A',
+      agent_id: 'codex',
+      title: 'Read README.md file',
+      narrative: 'Low-signal observation used for search diagnostics coverage.',
+      facts: ['read docs'],
+      concepts: ['docs'],
+      files_read: ['README.md'],
+      files_modified: [],
+      embedding: [0.2, 0.8, 0],
     });
   } finally {
     db.close();
@@ -137,8 +166,12 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.match(adminHtml, /AgentMemory/);
     assert.match(adminHtml, /id="readPolicyState"/);
     assert.match(adminHtml, /id="writePolicyState"/);
-    assert.match(adminHtml, /Saving\.\.\./);
-    assert.match(adminHtml, /pendingPolicy/);
+    assert.match(adminHtml, /Project Context/);
+    assert.match(adminHtml, /State Lab/);
+    assert.match(adminHtml, /Search Diagnostics/);
+    assert.match(adminHtml, /Observation Ledger/);
+    assert.match(adminHtml, /projectContextPanel/);
+    assert.match(adminHtml, /searchDiagnosticsPanel/);
 
     const overviewResponse = await fetch(`http://127.0.0.1:${port}/admin/api/overview`);
     assert.equal(overviewResponse.status, 200);
@@ -147,12 +180,49 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.equal(overview.policy.writeEnabled, true);
     assert.ok(overview.projects.includes('E:/Repo/A'));
     assert.ok(overview.agents.includes('codex'));
+    assert.equal(overview.stats.currentStateFacts, 2);
 
     const recordsResponse = await fetch(`http://127.0.0.1:${port}/admin/api/records?project=${encodeURIComponent('E:/Repo/A')}&page=1&pageSize=25`);
     assert.equal(recordsResponse.status, 200);
     const recordsPayload = await recordsResponse.json();
-    assert.equal(recordsPayload.total, 1);
-    assert.equal(recordsPayload.records[0].title, 'Alpha memory');
+    assert.equal(recordsPayload.total, 2);
+    assert.ok(recordsPayload.records.some((record) => record.title === 'Alpha memory'));
+    assert.ok(recordsPayload.records.some((record) => record.title === 'Read README.md file'));
+
+    const contextResponse = await fetch(`http://127.0.0.1:${port}/admin/api/context?project_path=${encodeURIComponent('E:/Repo/A')}&limit=5`);
+    assert.equal(contextResponse.status, 200);
+    const contextPayload = await contextResponse.json();
+    assert.equal(contextPayload.view.project_path, 'E:/Repo/A');
+    assert.match(contextPayload.rendered, /Current structured state:/);
+    assert.match(contextPayload.rendered, /Recent summary blocks:/);
+    assert.ok(contextPayload.view.current_state.some((entry) => entry.fact_key === 'rollout_stage'));
+    assert.ok(contextPayload.metrics.payloadBytes > 0);
+    assert.ok(contextPayload.metrics.summaryCount > 0);
+    assert.equal(typeof contextPayload.metrics.lowSignalCount, 'number');
+    assert.equal(typeof contextPayload.metrics.duplicateTitleCount, 'number');
+
+    const stateResponse = await fetch(`http://127.0.0.1:${port}/admin/api/state?project_path=${encodeURIComponent('E:/Repo/A')}`);
+    assert.equal(stateResponse.status, 200);
+    const statePayload = await stateResponse.json();
+    assert.ok(statePayload.facts.some((fact) => fact.fact_key === 'rollout_stage' && fact.value === 'admin-workbench'));
+
+    const searchResponse = await fetch(`http://127.0.0.1:${port}/admin/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_path: 'E:/Repo/A',
+        query: 'readme',
+        limit: 5,
+      }),
+    });
+    assert.equal(searchResponse.status, 200);
+    const searchPayload = await searchResponse.json();
+    assert.ok(Array.isArray(searchPayload.results));
+    assert.ok(searchPayload.results.length > 0);
+    assert.equal(typeof searchPayload.results[0].fts_score, 'number');
+    assert.equal(typeof searchPayload.results[0].vector_score, 'number');
+    assert.equal(typeof searchPayload.results[0].hybrid_score, 'number');
+    assert.equal(typeof searchPayload.results[0].low_signal_title, 'boolean');
   } finally {
     await stopWorker(child, port);
     cleanupDb(dbPath);
@@ -195,6 +265,39 @@ test('worker admin settings toggle read and write gates immediately', async () =
     const toolPayload = await toolResponse.json();
     assert.equal(toolPayload.disabled, true);
     assert.equal(toolPayload.success, false);
+
+    const blockedAdminContext = await fetch(`http://127.0.0.1:${port}/admin/api/context?project_path=${encodeURIComponent('E:/Repo/A')}&limit=5`);
+    const blockedAdminContextPayload = await blockedAdminContext.json();
+    assert.equal(blockedAdminContextPayload.view.disabled, true);
+    assert.match(blockedAdminContextPayload.rendered, /Context Disabled/);
+
+    const blockedAdminStateRead = await fetch(`http://127.0.0.1:${port}/admin/api/state?project_path=${encodeURIComponent('E:/Repo/A')}`);
+    const blockedAdminStateReadPayload = await blockedAdminStateRead.json();
+    assert.equal(blockedAdminStateReadPayload.disabled, true);
+
+    const blockedAdminSearch = await fetch(`http://127.0.0.1:${port}/admin/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_path: 'E:/Repo/A',
+        query: 'status',
+      }),
+    });
+    const blockedAdminSearchPayload = await blockedAdminSearch.json();
+    assert.equal(blockedAdminSearchPayload.disabled, true);
+
+    const blockedAdminStateWrite = await fetch(`http://127.0.0.1:${port}/admin/api/state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_path: 'E:/Repo/A',
+        fact_key: 'status',
+        value: 'amber',
+      }),
+    });
+    const blockedAdminStateWritePayload = await blockedAdminStateWrite.json();
+    assert.equal(blockedAdminStateWritePayload.disabled, true);
+    assert.equal(blockedAdminStateWritePayload.success, false);
   } finally {
     await stopWorker(child, port);
     cleanupDb(dbPath);
