@@ -26,6 +26,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     recordsTotal: 0,
     selectedId: null,
     isSavingPolicy: false,
+    isSavingLlm: false,
+    isTestingLlm: false,
+    llmConfig: null,
+    llmTestResult: null,
     contextPayload: null,
     statePayload: null,
     searchPayload: null,
@@ -46,6 +50,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     runtimeProjectList: document.getElementById("runtimeProjectList"),
     runtimeAgentList: document.getElementById("runtimeAgentList"),
     runtimeStatusLine: document.getElementById("runtimeStatusLine"),
+    llmStatusLine: document.getElementById("llmStatusLine"),
+    llmCurrentModel: document.getElementById("llmCurrentModel"),
+    llmCurrentEndpoint: document.getElementById("llmCurrentEndpoint"),
+    llmKeyStatus: document.getElementById("llmKeyStatus"),
+    llmEnvStatus: document.getElementById("llmEnvStatus"),
+    llmApiUrlInput: document.getElementById("llmApiUrlInput"),
+    llmModelInput: document.getElementById("llmModelInput"),
+    llmApiKeyInput: document.getElementById("llmApiKeyInput"),
+    llmHeadersInput: document.getElementById("llmHeadersInput"),
+    llmDisableJsonModeInput: document.getElementById("llmDisableJsonModeInput"),
+    llmSaveStatus: document.getElementById("llmSaveStatus"),
+    llmReloadButton: document.getElementById("llmReloadButton"),
+    llmSaveButton: document.getElementById("llmSaveButton"),
+    llmTestButton: document.getElementById("llmTestButton"),
+    llmTestResult: document.getElementById("llmTestResult"),
     ledgerStatusLine: document.getElementById("ledgerStatusLine"),
     readPolicyCard: document.getElementById("readPolicyCard"),
     writePolicyCard: document.getElementById("writePolicyCard"),
@@ -181,6 +200,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function rerenderStatusLines() {
     const targets = {
       runtime: els.runtimeStatusLine,
+      llm: els.llmStatusLine,
       ledger: els.listStatus,
       projectContext: els.projectContextStatus,
       stateLab: els.stateLabStatus,
@@ -227,6 +247,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncLocaleButtons();
     rerenderStatusLines();
     renderOverview();
+    renderLlmConfig();
+    renderLlmTestResult();
     renderProjectContext();
     renderStateFacts();
     renderSearchResults();
@@ -365,6 +387,75 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncSelect(els.stateWriteProjectSelect, projects, t("field.chooseProject"), els.stateWriteProjectSelect.value, true);
     syncSelect(els.searchProjectSelect, projects, t("field.chooseProject"), els.searchProjectSelect.value, true);
     ensureProjectDefaults(projects);
+  }
+
+  function renderLlmConfig() {
+    const config = state.llmConfig;
+    if (!config) {
+      els.llmCurrentModel.textContent = "-";
+      els.llmCurrentEndpoint.textContent = "-";
+      els.llmKeyStatus.textContent = "-";
+      els.llmEnvStatus.textContent = "-";
+      return;
+    }
+
+    els.llmCurrentModel.textContent = config.model || "-";
+    els.llmCurrentEndpoint.textContent = config.apiUrl || "-";
+    els.llmKeyStatus.textContent = config.hasApiKey
+      ? t("llm.keySet", { masked: config.apiKeyMasked || "set" })
+      : t("llm.keyMissing");
+    els.llmEnvStatus.textContent = config.exists
+      ? t("llm.envExists")
+      : t("llm.envMissing");
+
+    if (!state.isSavingLlm && !state.isTestingLlm) {
+      els.llmApiUrlInput.value = config.apiUrl || "";
+      els.llmModelInput.value = config.model || "";
+      els.llmHeadersInput.value = config.headers || "";
+      els.llmDisableJsonModeInput.checked = !!config.disableJsonMode;
+    }
+    els.llmSaveButton.disabled = state.isSavingLlm;
+    els.llmReloadButton.disabled = state.isSavingLlm;
+    els.llmTestButton.disabled = state.isSavingLlm || state.isTestingLlm;
+    if (state.isSavingLlm) {
+      els.llmSaveStatus.textContent = t("common.saving");
+    }
+  }
+
+  function getLlmFormPayload(includeApiKey) {
+    const payload = {
+      apiUrl: els.llmApiUrlInput.value.trim(),
+      disableJsonMode: !!els.llmDisableJsonModeInput.checked,
+      headers: els.llmHeadersInput.value.trim(),
+      model: els.llmModelInput.value.trim(),
+    };
+    const apiKey = els.llmApiKeyInput.value.trim();
+    if (includeApiKey && apiKey) {
+      payload.apiKey = apiKey;
+    }
+    return payload;
+  }
+
+  function renderLlmTestResult() {
+    const result = state.llmTestResult;
+    if (!result) {
+      els.llmTestResult.className = "llmTestResult emptyState";
+      els.llmTestResult.textContent = state.isTestingLlm ? t("llm.testing") : t("llm.noTestYet");
+      return;
+    }
+
+    const statusLine = result.ok
+      ? t("llm.testPassed", { latency: String(result.latencyMs || 0) })
+      : t("llm.testFailed", { latency: String(result.latencyMs || 0) });
+    const details = [
+      '<div class="statusChip ' + (result.ok ? 'success' : 'error') + '">' + escapeHtml(statusLine) + '</div>',
+      '<div class="finePrint" style="margin-top: 10px;">' + escapeHtml(t("llm.testEndpoint", { endpoint: result.requestUrl || "" })) + '</div>',
+      result.status ? '<div class="finePrint">' + escapeHtml(t("llm.testStatus", { status: String(result.status) })) + '</div>' : '',
+      result.contentPreview ? '<div class="finePrint">' + escapeHtml(t("llm.testResponse", { response: result.contentPreview })) + '</div>' : '',
+      result.error ? '<div class="finePrint">' + escapeHtml(t("llm.testError", { error: result.error })) + '</div>' : '',
+    ];
+    els.llmTestResult.className = "llmTestResult " + (result.ok ? "success" : "error");
+    els.llmTestResult.innerHTML = details.join("");
   }
 
   function renderContextCards(view) {
@@ -614,6 +705,77 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderOverview();
   }
 
+  async function loadLlmConfig() {
+    setStoredStatusLine("llm", els.llmStatusLine, "llm.loading", {}, "warning");
+    const payload = await fetchJson("/admin/api/llm-config");
+    state.llmConfig = payload.config || null;
+    renderLlmConfig();
+    setStoredStatusLine("llm", els.llmStatusLine, "llm.ready", {}, "");
+  }
+
+  async function saveLlmSettings() {
+    const payloadToSave = getLlmFormPayload(true);
+    state.isSavingLlm = true;
+    renderLlmConfig();
+    setStoredStatusLine("llm", els.llmStatusLine, "common.saving", {}, "warning");
+    try {
+      const payload = await fetchJson("/admin/api/llm-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payloadToSave),
+      });
+      state.llmConfig = payload.config || null;
+      state.isSavingLlm = false;
+      els.llmApiKeyInput.value = "";
+      els.llmSaveStatus.textContent = t("llm.savedAt", { timestamp: formatDate(payload.savedAt) });
+      renderLlmConfig();
+      setStoredStatusLine("llm", els.llmStatusLine, "llm.ready", {}, "");
+    } catch (error) {
+      state.isSavingLlm = false;
+      renderLlmConfig();
+      setRawStatusLine("llm", els.llmStatusLine, error.message || t("llm.saveFailed"), "error");
+      els.llmSaveStatus.textContent = error.message || t("llm.saveFailed");
+    }
+  }
+
+  async function runLlmConnectionTest() {
+    const payloadToTest = getLlmFormPayload(true);
+    state.isTestingLlm = true;
+    state.llmTestResult = null;
+    renderLlmConfig();
+    renderLlmTestResult();
+    setStoredStatusLine("llm", els.llmStatusLine, "llm.testing", {}, "warning");
+    try {
+      state.llmTestResult = await fetchJson("/admin/api/llm-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payloadToTest),
+      });
+      state.isTestingLlm = false;
+      renderLlmConfig();
+      renderLlmTestResult();
+      setRawStatusLine(
+        "llm",
+        els.llmStatusLine,
+        state.llmTestResult.ok
+          ? t("llm.testPassed", { latency: String(state.llmTestResult.latencyMs || 0) })
+          : t("llm.testFailed", { latency: String(state.llmTestResult.latencyMs || 0) }),
+        state.llmTestResult.ok ? "" : "error"
+      );
+    } catch (error) {
+      state.isTestingLlm = false;
+      state.llmTestResult = {
+        error: error.message || t("llm.testFailed", { latency: "0" }),
+        latencyMs: 0,
+        ok: false,
+        requestUrl: "",
+      };
+      renderLlmConfig();
+      renderLlmTestResult();
+      setRawStatusLine("llm", els.llmStatusLine, error.message || t("llm.testFailed", { latency: "0" }), "error");
+    }
+  }
+
   async function loadRecords(statusKey) {
     if (statusKey) {
       setStoredStatusLine("ledger", els.listStatus, statusKey, {}, "");
@@ -831,6 +993,16 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       });
     });
 
+    els.llmReloadButton.addEventListener("click", async () => {
+      await loadLlmConfig();
+    });
+    els.llmSaveButton.addEventListener("click", async () => {
+      await saveLlmSettings();
+    });
+    els.llmTestButton.addEventListener("click", async () => {
+      await runLlmConnectionTest();
+    });
+
     els.refreshButton.addEventListener("click", async () => {
       syncFiltersFromInputs();
       await loadRecords("ledger.refreshing");
@@ -930,6 +1102,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindEvents();
     try {
       await loadOverview();
+      await loadLlmConfig();
       await loadRecords("ledger.loading");
       if (els.contextProjectSelect.value) {
         await loadProjectContext();

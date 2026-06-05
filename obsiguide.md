@@ -46,7 +46,7 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 已将四 agent installer 与第二台 Windows 电脑 bootstrap 流程正式落地到仓库；当前目标是拿真实第二台电脑和真实 API key 跑一次完整落地 smoke，确认 bootstrap 输出、四端 live 恢复与 `/admin` 入口都符合预期。
+- 当前目标是完成 `/admin` 管理工作台的 LLM model switch / connection test 与 iOS/liquid-glass 风格 UI redesign closeout：源码、分发文件、测试、截图自检、commit/push 与 Obsidian 知识库同步。
 
 ## Current State
 - 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
@@ -92,6 +92,10 @@
 - bootstrap 对缺失配置现在会生成“空 API key + 默认 URL / model”的 `.env` 骨架后立即失败，不再写入会被 worker 误当作真实凭证的 `fill-me` 假 key；同时会把遗留 `DEEPSEEK_*` 键迁移到 `AGENTMEM_LLM_*`。
 - 已新增 `tests/install-bootstrap.test.cjs`，覆盖 OpenCode 插件生成、Antigravity registry upsert、`install --strict` 失败语义、缺失凭证时的 bootstrap scaffold，以及 legacy `DEEPSEEK_*` 到 `AGENTMEM_LLM_*` 的迁移。
 - 已完成真实配置 `node dist/bin/cli.js install --strict` 验证；并在隔离的 temp HOME + dummy key 环境下完成 `node dist/bin/cli.js bootstrap-win --no-open --strict --port 38892 ...` 端到端 smoke，确认 bootstrap 可以启动新 worker 并返回零 `installValidationIssues`。
+- 已新增 `src/services/llm-config.ts` 与 loopback-only `/admin/api/llm-config` / `/admin/api/llm-test`，支持从网页 UI 读取脱敏 LLM 配置、保存 `AGENTMEM_LLM_*` model / endpoint / headers / JSON mode / optional API key，并用当前表单值执行 OpenAI-compatible `chat/completions` 连接测试。
+- `/admin` 已新增 `LLM Settings` 工作区，提供模型切换、endpoint 更新、API key 保留/替换、自定义 headers、JSON mode toggle、reload/save 和 inline connection test result；测试按钮在缺 key 时返回页面内错误态，不使用 `window.alert()`。
+- `/admin` 视觉系统已从旧版偏蓝紫 glass-heavy 控制台收敛为更克制的 iOS/liquid-glass 产品 UI：低半径 glass material、清晰 focus ring、hover/active feedback、panel enter motion、reduced-motion fallback、移动端无横向溢出。
+- 已新增根 `PRODUCT.md`，用于满足 Impeccable 设计流程的 product-register 项目上下文，并把用户、用途、brand personality、anti-reference、design principles 与 accessibility baseline 写入 repo。
 
 ## Verified Commands
 - `npm run build`
@@ -121,14 +125,17 @@
 - `node dist/bin/cli.js bootstrap-win --no-open --strict`
 - `node --test tests/install-bootstrap.test.cjs`
 - `node --test tests/*.test.cjs`
+- bundled Playwright + local Chrome screenshot QA against isolated temp worker: desktop 1440x1000 and mobile 390x844, `LLM Settings` active, no horizontal overflow, inline no-key connection failure rendered
 
 ## Known Constraints
 - 不同 agent 的配置文件格式不一致，安装器需要分别处理 OpenCode 与 Claude Code 的差异。
+- 本机真实 `C:\Users\Admin\.agentmem\agentmemory.db` 可能被多个 `dist/servers/mcp-server.js` 进程持有；在这些进程存活时，直接重启默认 `/admin` worker 可能因 DB open lock 失败。当前 UI / API 验证均使用隔离 temp DB，不会污染真实数据库。
 
 ## Open Questions
 - `Raw Execution:*` 这类标题是否也应该纳入更严格的 low-signal 过滤规则，还是保留为少量原始执行证据。
 - `search_memory` 对较宽泛查询仍可能先命中低信号 observation；helper 已解决启动恢复，但后续是否还需要检索排序或 query guidance 的收敛仍待观察。
 - 如果后续要接具体供应商的真实 embedding 端点，仍需要再做一次供应商真实接口的在线校验。
+- 新增的 `/admin` LLM connection test 已用本地 mock provider 覆盖；真实供应商 endpoint 仍应在用户提供真实 API key 后从网页 UI 再跑一次 live test。
 
 ## Latest Durable Changes
 - 实现了 Codex 自动化钩子配置并集成了全局 `hooks.json` 规则。
@@ -159,11 +166,14 @@
 - 已新增第二台 Windows 电脑的严格 bootstrap 路径：`agentmem bootstrap-win`、`scripts/bootstrap-second-machine.ps1`、`bootstrap-second-machine.cmd` 与中文落地文档 `docs/Second Machine Bootstrap Guide.zh.md`。
 - bootstrap 的 `.env` scaffold 现在采用“空 key + 默认 URL/model”的安全骨架，并会把 legacy `DEEPSEEK_*` 自动迁移到 `AGENTMEM_LLM_*`，避免把占位值误当成真实凭证。
 - 已新增 installer/bootstrap 回归测试并通过全量 `node:test`，同时完成一次 temp HOME + dummy key 的真实 bootstrap smoke。
+- `/admin` 管理工作台现已支持网页内 LLM 模型切换与连接测试：配置保存会写入 `~/.agentmem/.env` 并同步更新当前 worker 进程，读取接口只返回脱敏 key 状态，连接测试用当前表单值发起小型 `chat/completions` 请求。
+- `/admin` 前端已完成 iOS/liquid-glass 产品 UI redesign，并通过桌面与移动截图自检确认 `LLM Settings` 面板、动效落点和响应式布局无横向溢出。
+- `PRODUCT.md` 现在作为 Impeccable 产品设计上下文存在于仓库根目录，记录 AgentMemory admin workbench 的 product register、用户、目的、设计原则和 accessibility baseline。
 
 ## Next Action
-- 拿真实第二台 Windows 电脑与真实 `AGENTMEM_LLM_API_KEY` 跑一次 `bootstrap-second-machine.cmd`，确认四个 agent 的 live startup / write path 都按新的严格 bootstrap 预期工作。
+- 提交并 push 本轮 `/admin` LLM 设置与 UI redesign 变更；随后更新 `E:\Kuan\Vault\02_Projects\AgentMemory.md` 和当天 daily。
 
 ## Last Sync
-- date: 2026-06-05
-- status: 已将今天的 `/admin` 中英文 UI / workbench 相关源码变更重新编译进本地 `dist/` 分发产物，并再次通过 `npm run build` 与 `node --test tests\\worker-admin.test.cjs` 验证当前分发文件与源码一致。
+- date: 2026-06-06
+- status: 已完成 `/admin` LLM model switch / connection test、iOS/liquid-glass UI redesign、双语 README 更新、`PRODUCT.md` 初始化、`npm run build`、全量 `node --test tests/*.test.cjs` 与桌面/移动截图自检；真实默认 worker restore 暂受本机多个 MCP server 进程持有 DB lock 限制。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

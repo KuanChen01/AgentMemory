@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 
@@ -89,12 +90,18 @@ async function seedDatabase(dbPath) {
 }
 
 async function startWorker(dbPath, port) {
+  return startWorkerWithEnv(dbPath, port, {});
+}
+
+async function startWorkerWithEnv(dbPath, port, extraEnv) {
   const child = spawn('node', ['dist/services/worker.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: {
       ...process.env,
       AGENTMEM_DB_PATH: dbPath,
+      AGENTMEM_ENV_PATH: extraEnv.AGENTMEM_ENV_PATH || path.join(os.tmpdir(), `agentmemory-worker-env-${randomUUID()}.env`),
       AGENTMEM_PORT: String(port),
+      ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -123,6 +130,41 @@ async function startWorker(dbPath, port) {
   });
 
   return child;
+}
+
+async function startMockLlmServer() {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      requests.push({
+        body: body ? JSON.parse(body) : {},
+        headers: req.headers,
+        url: req.url,
+      });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'ok',
+            },
+          },
+        ],
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  return {
+    close: () => new Promise((resolve) => server.close(resolve)),
+    requests,
+    url: `http://127.0.0.1:${address.port}/v1`,
+  };
 }
 
 async function stopWorker(child, port) {
@@ -167,9 +209,13 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.match(adminHtml, /id="readPolicyState"/);
     assert.match(adminHtml, /id="writePolicyState"/);
     assert.match(adminHtml, /Project Context/);
+    assert.match(adminHtml, /LLM Settings/);
     assert.match(adminHtml, /State Lab/);
     assert.match(adminHtml, /Search Diagnostics/);
     assert.match(adminHtml, /Observation Ledger/);
+    assert.match(adminHtml, /llmSettingsPanel/);
+    assert.match(adminHtml, /id="llmModelInput"/);
+    assert.match(adminHtml, /id="llmTestButton"/);
     assert.match(adminHtml, /projectContextPanel/);
     assert.match(adminHtml, /searchDiagnosticsPanel/);
     assert.match(adminHtml, /id="localeToggle"/);
@@ -232,6 +278,81 @@ test('worker serves admin UI and admin APIs', async () => {
   } finally {
     await stopWorker(child, port);
     cleanupDb(dbPath);
+  }
+});
+
+test('worker admin LLM settings save model and test local connection', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  const envPath = path.join(os.tmpdir(), `agentmemory-worker-llm-${randomUUID()}.env`);
+  fs.writeFileSync(envPath, [
+    'AGENTMEM_LLM_API_KEY=secret-token-1234',
+    'AGENTMEM_LLM_API_URL=https://api.deepseek.com/v1',
+    'AGENTMEM_LLM_MODEL=deepseek-chat',
+    'AGENTMEM_LLM_DISABLE_JSON_MODE=false',
+    '',
+  ].join('\n'));
+  await seedDatabase(dbPath);
+  const mockLlm = await startMockLlmServer();
+  const child = await startWorkerWithEnv(dbPath, port, {
+    AGENTMEM_ENV_PATH: envPath,
+  });
+
+  try {
+    const configResponse = await fetch(`http://127.0.0.1:${port}/admin/api/llm-config`);
+    assert.equal(configResponse.status, 200);
+    const configPayload = await configResponse.json();
+    assert.equal(configPayload.config.hasApiKey, true);
+    assert.equal(configPayload.config.apiKeyMasked, 'secr...1234');
+    assert.equal(configPayload.config.model, 'deepseek-chat');
+    assert.doesNotMatch(JSON.stringify(configPayload), /secret-token-1234/);
+
+    const saveResponse = await fetch(`http://127.0.0.1:${port}/admin/api/llm-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiUrl: mockLlm.url,
+        disableJsonMode: true,
+        headers: '{"X-Test-Header":"agentmemory"}',
+        model: 'mock-chat-model',
+      }),
+    });
+    assert.equal(saveResponse.status, 200);
+    const savePayload = await saveResponse.json();
+    assert.equal(savePayload.success, true);
+    assert.equal(savePayload.config.apiUrl, mockLlm.url);
+    assert.equal(savePayload.config.model, 'mock-chat-model');
+    assert.equal(savePayload.config.disableJsonMode, true);
+    assert.equal(savePayload.config.hasApiKey, true);
+
+    const envText = fs.readFileSync(envPath, 'utf8');
+    assert.match(envText, /AGENTMEM_LLM_API_KEY=secret-token-1234/);
+    assert.match(envText, new RegExp(`AGENTMEM_LLM_API_URL=${mockLlm.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(envText, /AGENTMEM_LLM_MODEL=mock-chat-model/);
+    assert.match(envText, /AGENTMEM_LLM_DISABLE_JSON_MODE=true/);
+
+    const testResponse = await fetch(`http://127.0.0.1:${port}/admin/api/llm-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiUrl: mockLlm.url,
+        headers: '{"X-Test-Header":"agentmemory"}',
+        model: 'mock-chat-model',
+      }),
+    });
+    assert.equal(testResponse.status, 200);
+    const testPayload = await testResponse.json();
+    assert.equal(testPayload.ok, true);
+    assert.equal(testPayload.model, 'mock-chat-model');
+    assert.equal(testPayload.status, 200);
+    assert.equal(mockLlm.requests.at(-1).url, '/v1/chat/completions');
+    assert.equal(mockLlm.requests.at(-1).body.model, 'mock-chat-model');
+    assert.equal(mockLlm.requests.at(-1).headers['x-test-header'], 'agentmemory');
+  } finally {
+    await stopWorker(child, port);
+    await mockLlm.close();
+    cleanupDb(dbPath);
+    fs.rmSync(envPath, { force: true });
   }
 });
 

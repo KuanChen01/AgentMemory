@@ -157,6 +157,7 @@ Windows 下一键启动可直接使用：
 管理页提供：
 
 *   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，并展示 project / agent 覆盖面
+*   **LLM Settings**：切换 `AGENTMEM_LLM_MODEL`，更新 OpenAI-compatible API base URL，保留或替换 API key，并运行实时连接测试
 *   **Project Context**：查看当前 `ProjectContextView`、渲染后的 startup 文本，以及 payload / summary 健康度指标
 *   **State Lab**：显式读取和写入 structured state
 *   **Search Diagnostics**：直接查看 hybrid search 的 `hybrid_score`、`fts_score`、`vector_score` 和低信号标题标记
@@ -196,6 +197,9 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：供 workbench 读取 structured state
 *   `POST /admin/api/state`：供 workbench 显式写入 structured state fact
 *   `POST /admin/api/search`：返回当前 project 的 hybrid search 原始诊断分数，但不在这一步修改排序算法
+*   `GET /admin/api/llm-config`：返回已脱敏的 LLM 配置快照，不暴露完整 API key
+*   `POST /admin/api/llm-config`：把 model、API URL、JSON mode、headers 和可选 API key 变更持久化到 `~/.agentmem/.env`，并同步更新当前 worker 进程
+*   `POST /admin/api/llm-test`：用当前表单值发送一个很小的 OpenAI-compatible `chat/completions` 请求，并返回连接测试结果
 
 #### 运行时策略语义
 
@@ -215,9 +219,10 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 1. 使用 `npm run workbench`、`start-workbench.cmd` 一键启动，或者手动运行 `agentmem start`
 2. 打开 `http://127.0.0.1:38888/admin`
 3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
-4. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
-5. 如需深挖原始 observation，再切到 `Observation Ledger`
-6. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
+4. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
+5. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
+6. 如需深挖原始 observation，再切到 `Observation Ledger`
+7. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
 
 ---
 

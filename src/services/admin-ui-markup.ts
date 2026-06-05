@@ -95,6 +95,7 @@ export function renderAdminWorkbenchMarkup(): string {
     <section class="dock">
       <div class="segmented" id="viewTabs">
         <button class="segmentButton is-active" type="button" data-panel-target="runtimePanel" data-i18n="tabs.runtime">Runtime</button>
+        <button class="segmentButton" type="button" data-panel-target="llmSettingsPanel" data-i18n="tabs.llmSettings">LLM Settings</button>
         <button class="segmentButton" type="button" data-panel-target="projectContextPanel" data-i18n="tabs.projectContext">Project Context</button>
         <button class="segmentButton" type="button" data-panel-target="stateLabPanel" data-i18n="tabs.stateLab">State Lab</button>
         <button class="segmentButton" type="button" data-panel-target="searchDiagnosticsPanel" data-i18n="tabs.searchDiagnostics">Search Diagnostics</button>
@@ -128,6 +129,86 @@ export function renderAdminWorkbenchMarkup(): string {
             <div class="metaLabel" data-i18n="runtime.knownAgents">Known Agents</div>
             <div id="runtimeAgentList" class="runtimeAgentList"></div>
           </div>
+        </div>
+      </section>
+
+      <section id="llmSettingsPanel" class="viewPanel glassPanel">
+        <div class="panelHeader">
+          <div>
+            <div class="sectionEyebrow" data-i18n="llm.section">LLM Settings</div>
+            <h2 class="panelTitle" data-i18n="llm.title">Model routing and live connection test</h2>
+            <p class="panelLead" data-i18n="llm.lead">
+              Switch the summarization model used by the worker, update the OpenAI-compatible endpoint,
+              and run a small chat-completions test before trusting new settings.
+            </p>
+          </div>
+          <div id="llmStatusLine" class="statusLine">
+            <span class="statusDot"></span>
+            <span data-i18n="llm.loading">Loading LLM settings</span>
+          </div>
+        </div>
+
+        <div class="llmLayout">
+          <section class="card llmControlCard">
+            <div class="metaLabel" data-i18n="llm.currentConfig">Current Config</div>
+            <div class="llmStatusGrid" style="margin-top: 14px;">
+              <div class="metricBadge"><strong data-i18n="llm.model">Model</strong> <span id="llmCurrentModel">-</span></div>
+              <div class="metricBadge"><strong data-i18n="llm.endpoint">Endpoint</strong> <span id="llmCurrentEndpoint">-</span></div>
+              <div class="metricBadge"><strong data-i18n="llm.apiKey">API Key</strong> <span id="llmKeyStatus">-</span></div>
+              <div class="metricBadge"><strong data-i18n="llm.envFile">Env File</strong> <span id="llmEnvStatus">-</span></div>
+            </div>
+
+            <div class="stack" style="margin-top: 18px;">
+              <label>
+                <span class="fieldLabel" data-i18n="llm.apiUrl">API Base URL</span>
+                <input id="llmApiUrlInput" class="textInput" type="url" data-i18n-placeholder="llm.placeholderApiUrl" placeholder="https://api.deepseek.com/v1" />
+              </label>
+              <label>
+                <span class="fieldLabel" data-i18n="llm.modelName">Model</span>
+                <input id="llmModelInput" class="textInput" type="text" list="llmModelOptions" data-i18n-placeholder="llm.placeholderModel" placeholder="deepseek-chat" />
+                <datalist id="llmModelOptions">
+                  <option value="deepseek-chat"></option>
+                  <option value="deepseek-reasoner"></option>
+                  <option value="gpt-4.1"></option>
+                  <option value="gpt-5"></option>
+                  <option value="mimo-v2.5-pro"></option>
+                  <option value="llama3.1"></option>
+                </datalist>
+              </label>
+              <label>
+                <span class="fieldLabel" data-i18n="llm.apiKeyInput">API Key</span>
+                <input id="llmApiKeyInput" class="textInput" type="password" autocomplete="new-password" data-i18n-placeholder="llm.placeholderApiKey" placeholder="Leave blank to keep existing key" />
+              </label>
+              <label>
+                <span class="fieldLabel" data-i18n="llm.customHeaders">Custom Headers JSON</span>
+                <textarea id="llmHeadersInput" class="textArea" data-i18n-placeholder="llm.placeholderHeaders" placeholder='{"X-Custom-Auth":"value"}'></textarea>
+              </label>
+              <label class="checkRow">
+                <input id="llmDisableJsonModeInput" type="checkbox" />
+                <span data-i18n="llm.disableJsonMode">Disable JSON mode for providers that reject response_format</span>
+              </label>
+            </div>
+
+            <div class="toolbarFooter">
+              <div id="llmSaveStatus" class="finePrint" data-i18n="llm.saveHint">Save changes to update the running worker and the env file.</div>
+              <div class="actionCluster">
+                <button id="llmReloadButton" class="button secondary" type="button" data-i18n="llm.reload">Reload</button>
+                <button id="llmSaveButton" class="button primary" type="button" data-i18n="llm.save">Save LLM Settings</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="card llmTestCard">
+            <div class="metaLabel" data-i18n="llm.connectionTest">Connection Test</div>
+            <h3 class="policyTitle" style="margin-top: 10px;" data-i18n="llm.testTitle">Verify this model before the next summary job</h3>
+            <p class="panelLead" style="margin-top: 8px;" data-i18n="llm.testLead">
+              Sends a tiny chat-completions request using the form values currently shown here. The test does not write observations.
+            </p>
+            <button id="llmTestButton" class="button primary" type="button" style="margin-top: 18px;" data-i18n="llm.runTest">Test Connection</button>
+            <div id="llmTestResult" class="llmTestResult emptyState" style="margin-top: 16px;" data-i18n="llm.noTestYet">
+              No connection test has been run yet.
+            </div>
+          </aside>
         </div>
       </section>
 

@@ -1,7 +1,6 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
-import os from 'os';
 import {
   DatabaseManager,
   Observation,
@@ -28,9 +27,15 @@ import {
   WRITE_DISABLED_MESSAGE,
 } from './runtime-policy';
 import { resolveEmbeddingConfig } from './embedding-config';
+import {
+  getAgentMemoryEnvPath,
+  readLlmConfig,
+  saveLlmConfig,
+  testLlmConnection,
+} from './llm-config';
 
 // Load environment variables
-dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
+dotenv.config({ path: getAgentMemoryEnvPath() });
 
 const app = express();
 app.use(express.json({ limit: '10mb' })); // Support large logs
@@ -354,6 +359,55 @@ app.post('/admin/api/search', adminOnlyGuard, async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error running admin search diagnostics:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/llm-config', adminOnlyGuard, async (_req, res) => {
+  try {
+    res.json({
+      config: readLlmConfig(),
+      refreshedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error fetching LLM config:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/llm-config', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+  try {
+    const config = saveLlmConfig({
+      apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+      apiUrl: typeof body.apiUrl === 'string' ? body.apiUrl : undefined,
+      disableJsonMode: !!body.disableJsonMode,
+      headers: typeof body.headers === 'string' ? body.headers : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+    });
+    res.json({
+      success: true,
+      config,
+      savedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error saving LLM config:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/llm-test', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+  try {
+    const result = await testLlmConnection({
+      apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+      apiUrl: typeof body.apiUrl === 'string' ? body.apiUrl : undefined,
+      headers: typeof body.headers === 'string' ? body.headers : undefined,
+      model: typeof body.model === 'string' ? body.model : undefined,
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error('Error testing LLM connection:', err);
     res.status(500).json({ error: err.message });
   }
 });
