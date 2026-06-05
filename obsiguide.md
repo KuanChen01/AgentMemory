@@ -171,9 +171,9 @@
 - `PRODUCT.md` 现在作为 Impeccable 产品设计上下文存在于仓库根目录，记录 AgentMemory admin workbench 的 product register、用户、目的、设计原则和 accessibility baseline。
 
 ## Next Action
-- 提交并 push 本轮 `/admin` LLM 设置与 UI redesign 变更；随后更新 `E:\Kuan\Vault\02_Projects\AgentMemory.md` 和当天 daily。
+- 使用真实 `AGENTMEM_LLM_API_KEY` 在 `/admin` 的 `LLM Settings` 跑一次 live provider connection test；如需恢复默认 `/admin` worker，先确认并释放当前多个 `dist\servers\mcp-server.js` 对真实 DB 的占用，再重新运行 `npm run workbench -- --no-open`。
 
 ## Last Sync
 - date: 2026-06-06
-- status: 已完成 `/admin` LLM model switch / connection test、iOS/liquid-glass UI redesign、双语 README 更新、`PRODUCT.md` 初始化、`npm run build`、全量 `node --test tests/*.test.cjs` 与桌面/移动截图自检；真实默认 worker restore 暂受本机多个 MCP server 进程持有 DB lock 限制。
+- status: 已完成 `/admin` LLM model switch / connection test、iOS/liquid-glass UI redesign、双语 README 更新、`PRODUCT.md` 初始化、`npm run build`、全量 `node --test tests/*.test.cjs`、桌面/移动截图自检、commit/push 与 Vault project/daily/issue sync；真实默认 worker restore 暂受本机多个 MCP server 进程持有 DB lock 限制。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
