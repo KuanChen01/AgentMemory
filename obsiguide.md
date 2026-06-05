@@ -46,7 +46,7 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 已将网页 `/admin` 升级为完整的 Admin Workbench，并补齐 Windows 一键启动入口；当前目标是用新的 `Project Context` / `Search Diagnostics` / `State Lab` 工作台继续验证宽查询排序是否仍需收敛，以及 `Raw Execution:*` 是否还值得进一步过滤，同时保持 structured state 的 explicit-only 写入边界。
+- 已将四 agent installer 与第二台 Windows 电脑 bootstrap 流程正式落地到仓库；当前目标是拿真实第二台电脑和真实 API key 跑一次完整落地 smoke，确认 bootstrap 输出、四端 live 恢复与 `/admin` 入口都符合预期。
 
 ## Current State
 - 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
@@ -83,11 +83,19 @@
 - 已将双语 README 的 Antigravity 入口改为 `get_project_context` 优先，`memory_timeline` / `search_memory` / `get_memory_details` 下沉为 drill-down 工具。
 - 已将真实项目的 structured state 进一步推进到 `rollout_stage = phase2-antigravity-startup-helper`，并将 `agent:antigravity.startup_context_mode` 更新为 `mcp+get_project_context`。
 - 已将 `/admin` 重构为零前端构建链的 Admin Workbench：新增 `Runtime`、`Project Context`、`State Lab`、`Search Diagnostics` 和 `Observation Ledger` 五个工作区，并采用偏 iOS 风格的 glass-heavy 控制台视觉。
+- 已为 `/admin` 管理工作台补上中英文界面切换：默认跟随浏览器语言，手动切换后持久化到 `localStorage`，且只翻译 UI 外壳文案，不改写 AgentMemory 数据内容；真实页面 smoke 也补齐了旧 `runtimeStatusText` 空引用回归。
 - 已新增 loopback-only 的 admin API：`GET /admin/api/context`、`GET /admin/api/state`、`POST /admin/api/state`、`POST /admin/api/search`；其中 context 现在同时返回原始 `view`、渲染文本和 payload / summary 健康度指标，search diagnostics 返回 raw hybrid scores 与 low-signal title 标记。
 - 已新增 `src/services/workbench-launcher.ts`、`src/bin/workbench.ts`、`scripts/start-workbench.ps1` 和 `start-workbench.cmd`，支持 `npm run workbench` / 双击脚本一键构建、探测、复用或拉起 worker，并自动打开 `/admin`。
+- `agentmem install` 现在已扩展为四端配置入口：除 Claude Code、Codex、OpenCode 外，也会自动更新 Antigravity 的 MCP registry，并支持 `--strict` 与 `--antigravity-config <path>`。
+- 已新增 `src/services/agent-installer.ts`，把 OpenCode 桥接插件生成、Antigravity registry upsert、四端配置校验统一收敛到共享 helper，不再把所有副作用堆在 `src/bin/cli.ts`。
+- 已新增 `src/services/bootstrap.ts`、`agentmem bootstrap-win`、`scripts/bootstrap-second-machine.ps1` 与 `bootstrap-second-machine.cmd`，用于在第二台 Windows 电脑上执行严格 bootstrap：校验或生成 `~/.agentmem/.env`、执行 `npm link`、配置四端、探测或拉起 worker，并输出结构化安装结果。
+- bootstrap 对缺失配置现在会生成“空 API key + 默认 URL / model”的 `.env` 骨架后立即失败，不再写入会被 worker 误当作真实凭证的 `fill-me` 假 key；同时会把遗留 `DEEPSEEK_*` 键迁移到 `AGENTMEM_LLM_*`。
+- 已新增 `tests/install-bootstrap.test.cjs`，覆盖 OpenCode 插件生成、Antigravity registry upsert、`install --strict` 失败语义、缺失凭证时的 bootstrap scaffold，以及 legacy `DEEPSEEK_*` 到 `AGENTMEM_LLM_*` 的迁移。
+- 已完成真实配置 `node dist/bin/cli.js install --strict` 验证；并在隔离的 temp HOME + dummy key 环境下完成 `node dist/bin/cli.js bootstrap-win --no-open --strict --port 38892 ...` 端到端 smoke，确认 bootstrap 可以启动新 worker 并返回零 `installValidationIssues`。
 
 ## Verified Commands
 - `npm run build`
+- `npm run workbench -- --no-open`
 - `node dist/bin/cli.js install`
 - `node dist/bin/cli.js start`
 - `node dist/bin/cli.js status`
@@ -109,6 +117,10 @@
 - `node dist/hooks/codex-session-start.js`
 - `node dist/hooks/opencode-session-start.js`
 - `node dist/servers/mcp-server.js`
+- `node dist/bin/cli.js install --strict`
+- `node dist/bin/cli.js bootstrap-win --no-open --strict`
+- `node --test tests/install-bootstrap.test.cjs`
+- `node --test tests/*.test.cjs`
 
 ## Known Constraints
 - 不同 agent 的配置文件格式不一致，安装器需要分别处理 OpenCode 与 Claude Code 的差异。
@@ -140,12 +152,18 @@
 - 已将 `Experiment - AgentMemory live validation of ProjectContextView and structured state` 更新为带 follow-up 的完整实验记录，并归档两个已被实现与复验关闭的 issue：`ProjectContextView returns oversized context payload with embedded observation vectors` 与 `ProjectContextView summary blocks are dominated by low-signal observation noise`。
 - 新增 decision note：`Decision - MCP-only agents use get_project_context as the canonical ProjectContextView entrypoint`。
 - `/admin` 现已升级为 Admin Workbench，并通过新增的 admin-only diagnostics API 把 `ProjectContextView`、structured state 和 raw hybrid search scores 同步进网页 UI。
+- `/admin` 管理工作台现已支持中英文 UI 切换：默认跟随浏览器语言，手动切换结果保存在 `localStorage`，并通过 `tests/worker-admin.test.cjs` 与真实浏览器 smoke 验证了外壳翻译和旧状态线空引用回归。
+- 已对今天的 `/admin` 中英文 UI 与 workbench 相关源码变更重新执行 `npm run build`，同步刷新本地 `dist/` 分发产物，并再次通过 `node --test tests/worker-admin.test.cjs` 确认分发文件与源码状态一致。
 - 已新增 Windows 一键启动入口：`npm run workbench`、`scripts/start-workbench.ps1` 和 `start-workbench.cmd`，用于构建、探测 / 复用 worker、等待 `/admin` 就绪并打开浏览器。
+- 已将安装器扩展到四个 agent：`agentmem install` 现在会生成 OpenCode 桥接插件、自动 upsert Antigravity MCP registry，并支持 `--strict` / `--antigravity-config`。
+- 已新增第二台 Windows 电脑的严格 bootstrap 路径：`agentmem bootstrap-win`、`scripts/bootstrap-second-machine.ps1`、`bootstrap-second-machine.cmd` 与中文落地文档 `docs/Second Machine Bootstrap Guide.zh.md`。
+- bootstrap 的 `.env` scaffold 现在采用“空 key + 默认 URL/model”的安全骨架，并会把 legacy `DEEPSEEK_*` 自动迁移到 `AGENTMEM_LLM_*`，避免把占位值误当成真实凭证。
+- 已新增 installer/bootstrap 回归测试并通过全量 `node:test`，同时完成一次 temp HOME + dummy key 的真实 bootstrap smoke。
 
 ## Next Action
-- 用新的 `Search Diagnostics` 和 `Project Context` 面板在真实项目上继续跑宽查询与 startup context 观测，重点判断 `search_memory` 的宽查询排序是否仍需收敛，并继续观察 `Raw Execution:*` 是否还值得进一步过滤；保持 structured state 的 explicit-only 写入模式。
+- 拿真实第二台 Windows 电脑与真实 `AGENTMEM_LLM_API_KEY` 跑一次 `bootstrap-second-machine.cmd`，确认四个 agent 的 live startup / write path 都按新的严格 bootstrap 预期工作。
 
 ## Last Sync
-- date: 2026-06-03
-- status: 已完成 Admin Workbench 落地与真实 smoke：`/admin` 现在包含 `Runtime`、`Project Context`、`State Lab`、`Search Diagnostics` 和 `Observation Ledger` 五个工作区；新增 admin-only diagnostics API 与 Windows 一键启动入口 `npm run workbench` / `start-workbench.cmd`，浏览器本地 smoke 已验证页面可打开且无新的前端控制台错误。
+- date: 2026-06-05
+- status: 已将今天的 `/admin` 中英文 UI / workbench 相关源码变更重新编译进本地 `dist/` 分发产物，并再次通过 `npm run build` 与 `node --test tests\\worker-admin.test.cjs` 验证当前分发文件与源码一致。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

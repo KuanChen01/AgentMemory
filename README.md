@@ -91,10 +91,22 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. Automatic Agent Registration
-Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, and **Codex**:
+Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, **Codex**, and **Antigravity**:
 ```bash
 agentmem install
 ```
+
+If you want the command to fail whenever any one of the four agents cannot be configured, use:
+```bash
+agentmem install --strict
+```
+
+For a second Windows machine, use the dedicated bootstrap entry instead of repeating the setup manually:
+```powershell
+.\bootstrap-second-machine.cmd
+```
+
+Detailed Chinese walkthrough: [docs/Second Machine Bootstrap Guide.zh.md](./docs/Second%20Machine%20Bootstrap%20Guide.zh.md)
 
 ---
 
@@ -105,7 +117,23 @@ Run these commands globally from any directory:
 *   **Start Worker**: `agentmem start` (launches the memory worker service; keep the terminal open while it is running)
 *   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
 *   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
-*   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, and Codex settings configurations)
+*   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, and Antigravity settings)
+*   **Strict Setup**: `agentmem install --strict` (fails if any one of the four agents cannot be configured)
+*   **Second-Machine Bootstrap**: `agentmem bootstrap-win --strict` or `bootstrap-second-machine.cmd`
+
+### 🪟 Windows Bootstrap
+
+For a same-shape second Windows machine, the recommended path is:
+
+```powershell
+git clone https://github.com/KuanChen01/AgentMemory.git
+cd AgentMemory
+.\bootstrap-second-machine.cmd
+```
+
+The bootstrap script runs `npm install`, `npm run build`, creates or validates `%USERPROFILE%\.agentmem\.env`, runs `npm link`, configures all four agents, probes or starts the worker, and opens `/admin`.
+
+If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a placeholder scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
 
 ---
 
@@ -196,7 +224,7 @@ Both flags are stored in SQLite `app_settings`, so the selected policy survives 
 ### 🔌 Agent Integration Specifications
 
 #### 1. OpenCode (`~/.config/opencode/opencode.jsonc`)
-Add `agentmem` to the `mcp` server config and append the native bridge plugin to the `plugin` array:
+`agentmem install` now writes both the `mcp.agentmem` block and the generated bridge plugin `%USERPROFILE%/.config/opencode/plugins/agentmem-plugin.mjs`. The resulting config shape is:
 ```jsonc
 {
   "mcp": {
@@ -286,7 +314,11 @@ args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
 #### 4. Antigravity CLI
-Expose memory tools inside the active Antigravity CLI MCP registry. On this machine, the validated registration path is the plugin MCP config under the Gemini-compatible config root.
+`agentmem install` now also updates the active Antigravity MCP registry. On this machine, the validated registration path is the plugin MCP config under the Gemini-compatible config root. If your second machine keeps that registry somewhere else, pass:
+
+```bash
+agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
+```
 
 Generic shape:
 ```json

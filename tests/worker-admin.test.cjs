@@ -172,6 +172,12 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.match(adminHtml, /Observation Ledger/);
     assert.match(adminHtml, /projectContextPanel/);
     assert.match(adminHtml, /searchDiagnosticsPanel/);
+    assert.match(adminHtml, /id="localeToggle"/);
+    assert.match(adminHtml, /data-locale-choice="en"/);
+    assert.match(adminHtml, /data-locale-choice="zh-CN"/);
+    assert.match(adminHtml, /agentmemory\.admin\.uiLocale/);
+    assert.match(adminHtml, /navigator\.language/);
+    assert.doesNotMatch(adminHtml, /runtimeStatusText/);
 
     const overviewResponse = await fetch(`http://127.0.0.1:${port}/admin/api/overview`);
     assert.equal(overviewResponse.status, 200);

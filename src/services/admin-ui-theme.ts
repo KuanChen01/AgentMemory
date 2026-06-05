@@ -144,6 +144,64 @@ export const ADMIN_UI_THEME = `
     font-weight: 700;
   }
 
+  .heroTopRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .localeToggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px 8px 14px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.82);
+    box-shadow: 0 10px 24px rgba(43, 71, 110, 0.08);
+  }
+
+  .localeToggleLabel {
+    color: var(--muted-soft);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .localeToggleButtons {
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  .localeButton {
+    border: 0;
+    min-width: 52px;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    transition: 180ms ease;
+  }
+
+  .localeButton:hover {
+    background: rgba(47, 124, 247, 0.08);
+    color: var(--ink);
+  }
+
+  .localeButton.is-active {
+    background: rgba(47, 124, 247, 0.16);
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px rgba(47, 124, 247, 0.14);
+  }
+
   h1,
   h2,
   h3,
@@ -711,6 +769,15 @@ export const ADMIN_UI_THEME = `
   }
 
   @media (max-width: 1180px) {
+    .heroTopRow {
+      align-items: flex-start;
+    }
+
+    .localeToggle {
+      width: 100%;
+      justify-content: space-between;
+    }
+
     .heroLayout,
     .sectionGrid,
     .ledgerLayout,

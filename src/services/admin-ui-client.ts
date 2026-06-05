@@ -1,8 +1,18 @@
+import {
+  ADMIN_UI_DEFAULT_LOCALE,
+  ADMIN_UI_LOCALE_STORAGE_KEY,
+  ADMIN_UI_TRANSLATIONS,
+} from './admin-ui-copy';
+
 export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string {
   return `
   const POLL_INTERVAL_MS = ${JSON.stringify(pollIntervalMs)};
+  const UI_LOCALE_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_LOCALE_STORAGE_KEY)};
+  const UI_DEFAULT_LOCALE = ${JSON.stringify(ADMIN_UI_DEFAULT_LOCALE)};
+  const UI_DICTIONARY = ${JSON.stringify(ADMIN_UI_TRANSLATIONS)};
   const state = {
     activePanel: "runtimePanel",
+    locale: UI_DEFAULT_LOCALE,
     filters: {
       page: 1,
       pageSize: 25,
@@ -13,15 +23,19 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     overview: null,
     pendingPolicy: null,
     records: [],
+    recordsTotal: 0,
     selectedId: null,
     isSavingPolicy: false,
     contextPayload: null,
     statePayload: null,
     searchPayload: null,
     pollHandle: null,
+    statusLineState: {},
   };
 
   const els = {
+    localeToggle: document.getElementById("localeToggle"),
+    localeButtons: Array.from(document.querySelectorAll("[data-locale-choice]")),
     observationsCount: document.getElementById("observationsCount"),
     sessionsCount: document.getElementById("sessionsCount"),
     projectsCount: document.getElementById("projectsCount"),
@@ -31,7 +45,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     policyUpdatedAt: document.getElementById("policyUpdatedAt"),
     runtimeProjectList: document.getElementById("runtimeProjectList"),
     runtimeAgentList: document.getElementById("runtimeAgentList"),
-    runtimeStatusText: document.getElementById("runtimeStatusText"),
+    runtimeStatusLine: document.getElementById("runtimeStatusLine"),
+    ledgerStatusLine: document.getElementById("ledgerStatusLine"),
     readPolicyCard: document.getElementById("readPolicyCard"),
     writePolicyCard: document.getElementById("writePolicyCard"),
     readPolicyState: document.getElementById("readPolicyState"),
@@ -89,11 +104,47 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     searchDiagnosticsStatus: document.getElementById("searchDiagnosticsStatus"),
   };
 
+  function normalizeLocale(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized.startsWith("zh")) return "zh-CN";
+    return "en";
+  }
+
+  function detectInitialLocale() {
+    try {
+      const stored = window.localStorage.getItem(UI_LOCALE_STORAGE_KEY);
+      if (stored) {
+        return normalizeLocale(stored);
+      }
+    } catch (_error) {
+      // Ignore storage access errors and fall back to browser locale.
+    }
+    return normalizeLocale(navigator.language || (Array.isArray(navigator.languages) ? navigator.languages[0] : "") || UI_DEFAULT_LOCALE);
+  }
+
+  function getMessages() {
+    return UI_DICTIONARY[state.locale] || UI_DICTIONARY[UI_DEFAULT_LOCALE] || {};
+  }
+
+  function interpolate(template, vars) {
+    return String(template || "").replace(/\\{(\\w+)\\}/g, (_match, key) => {
+      const value = vars && Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : "{" + key + "}";
+      return String(value);
+    });
+  }
+
+  function t(key, vars) {
+    const messages = getMessages();
+    const fallbackMessages = UI_DICTIONARY[UI_DEFAULT_LOCALE] || {};
+    const template = messages[key] || fallbackMessages[key] || key;
+    return interpolate(template, vars);
+  }
+
   function formatDate(value) {
-    if (!value) return "Unknown timestamp";
+    if (!value) return t("common.unknownTimestamp");
     const parsed = new Date(String(value).replace(" ", "T") + (String(value).includes("T") ? "" : "Z"));
     if (Number.isNaN(parsed.getTime())) return String(value);
-    return parsed.toLocaleString();
+    return parsed.toLocaleString(state.locale);
   }
 
   function escapeHtml(value) {
@@ -107,13 +158,90 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function summarize(text, max = 160) {
     const normalized = String(text || "").trim();
-    if (!normalized) return "No narrative available.";
+    if (!normalized) return t("common.noNarrativeAvailable");
     return normalized.length > max ? normalized.slice(0, max - 1) + "..." : normalized;
   }
 
   function setStatusLine(element, message, variant) {
+    if (!element) return;
     element.className = "statusLine" + (variant ? " " + variant : "");
     element.innerHTML = '<span class="statusDot"></span><span>' + escapeHtml(message) + '</span>';
+  }
+
+  function setStoredStatusLine(name, element, key, vars, variant) {
+    state.statusLineState[name] = { key, vars: vars || {}, variant: variant || "" };
+    setStatusLine(element, t(key, vars), variant);
+  }
+
+  function setRawStatusLine(name, element, message, variant) {
+    state.statusLineState[name] = { raw: message, variant: variant || "" };
+    setStatusLine(element, message, variant);
+  }
+
+  function rerenderStatusLines() {
+    const targets = {
+      runtime: els.runtimeStatusLine,
+      ledger: els.listStatus,
+      projectContext: els.projectContextStatus,
+      stateLab: els.stateLabStatus,
+      searchDiagnostics: els.searchDiagnosticsStatus,
+    };
+    Object.keys(targets).forEach((name) => {
+      const snapshot = state.statusLineState[name];
+      if (!snapshot) return;
+      if (snapshot.key) {
+        setStatusLine(targets[name], t(snapshot.key, snapshot.vars), snapshot.variant);
+        return;
+      }
+      setStatusLine(targets[name], snapshot.raw, snapshot.variant);
+    });
+  }
+
+  function applyStaticTranslations() {
+    document.querySelectorAll("[data-i18n]").forEach((node) => {
+      const key = node.getAttribute("data-i18n");
+      if (!key) return;
+      node.textContent = t(key);
+    });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+      const key = node.getAttribute("data-i18n-placeholder");
+      if (!key) return;
+      node.setAttribute("placeholder", t(key));
+    });
+  }
+
+  function syncLocaleButtons() {
+    els.localeButtons.forEach((button) => {
+      const locale = button.getAttribute("data-locale-choice");
+      const isActive = locale === state.locale;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+  }
+
+  function applyLocale(skipPersist) {
+    document.documentElement.lang = state.locale;
+    document.documentElement.setAttribute("data-ui-locale", state.locale);
+    document.title = t("meta.documentTitle");
+    applyStaticTranslations();
+    syncLocaleButtons();
+    rerenderStatusLines();
+    renderOverview();
+    renderProjectContext();
+    renderStateFacts();
+    renderSearchResults();
+    if (state.records.length > 0 || state.recordsTotal > 0 || state.selectedId) {
+      renderRecords(state.recordsTotal);
+    } else {
+      renderDetail(null);
+    }
+    if (!skipPersist) {
+      try {
+        window.localStorage.setItem(UI_LOCALE_STORAGE_KEY, state.locale);
+      } catch (_error) {
+        // Ignore storage write errors.
+      }
+    }
   }
 
   function comparePolicyFreshness(left, right) {
@@ -132,21 +260,24 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function getPolicySummary(policy) {
-    return "Read: " + (policy.readEnabled ? "Enabled" : "Disabled") + " / Write: " + (policy.writeEnabled ? "Enabled" : "Disabled");
+    return t("status.policySummary", {
+      readState: policy.readEnabled ? t("common.enabled") : t("common.disabled"),
+      writeState: policy.writeEnabled ? t("common.enabled") : t("common.disabled"),
+    });
   }
 
   function getPolicyMeta(kind, enabled) {
     if (state.isSavingPolicy) {
-      return "Saving target policy and waiting for worker confirmation.";
+      return t("status.savingTargetPolicy");
     }
     if (kind === "read") {
       return enabled
-        ? "Agents can restore state, context, search results, and explicit read tools."
-        : "Agents cannot restore past context, state, or search results.";
+        ? t("status.readMetaEnabled")
+        : t("status.readMetaDisabled");
     }
     return enabled
-      ? "Agents can write observations, sessions, and explicit state facts."
-      : "Agents cannot record new observations, sessions, or structured state.";
+      ? t("status.writeMetaEnabled")
+      : t("status.writeMetaDisabled");
   }
 
   function renderPolicyCard(kind, enabled) {
@@ -161,7 +292,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       (state.isSavingPolicy ? " is-saving" : "");
     toggle.checked = !!enabled;
     toggle.disabled = state.isSavingPolicy;
-    badge.textContent = state.isSavingPolicy ? "Saving" : enabled ? "Enabled" : "Disabled";
+    badge.textContent = state.isSavingPolicy ? t("common.saving") : enabled ? t("common.enabled") : t("common.disabled");
     badge.className = "policyBadge " + (state.isSavingPolicy ? "saving" : enabled ? "enabled" : "disabled");
     meta.textContent = getPolicyMeta(kind, enabled);
   }
@@ -197,7 +328,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderRuntimeLists(items, target) {
     if (!items || items.length === 0) {
-      target.innerHTML = '<span class="pill subtle">No data yet</span>';
+      target.innerHTML = '<span class="pill subtle">' + escapeHtml(t("runtime.noDataYet")) + '</span>';
       return;
     }
     target.innerHTML = items.map((item) => '<span class="tag">' + escapeHtml(item) + '</span>').join("");
@@ -214,32 +345,33 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.currentStateFactsCount.textContent = String(stats.currentStateFacts || 0);
     renderPolicyCard("read", !!policy.readEnabled);
     renderPolicyCard("write", !!policy.writeEnabled);
-    els.statusText.textContent = (state.isSavingPolicy ? "Saving policy. " : "") + getPolicySummary(policy);
+    els.statusText.textContent = state.isSavingPolicy
+      ? t("status.policySaving", { summary: getPolicySummary(policy) })
+      : getPolicySummary(policy);
     els.statusText.className = "statusValue" + (state.isSavingPolicy ? " is-saving" : "");
     els.policyUpdatedAt.textContent = state.isSavingPolicy
-      ? "Pending target state is shown until the worker confirms it."
-      : "Policy updated: " + formatDate(policy.updatedAt || state.overview.refreshedAt);
-    els.runtimeStatusText.textContent = getPolicySummary(policy);
+      ? t("status.pendingPolicy")
+      : t("status.policyUpdated", { timestamp: formatDate(policy.updatedAt || state.overview.refreshedAt) });
 
     const projects = state.overview.projects || [];
     const agents = state.overview.agents || [];
     renderRuntimeLists(projects, els.runtimeProjectList);
     renderRuntimeLists(agents, els.runtimeAgentList);
 
-    syncSelect(els.projectSelect, projects, "All projects", state.filters.project, true);
-    syncSelect(els.agentSelect, agents, "All agents", state.filters.agent, true);
-    syncSelect(els.contextProjectSelect, projects, "Choose a project", els.contextProjectSelect.value, true);
-    syncSelect(els.stateProjectSelect, projects, "Choose a project", els.stateProjectSelect.value, true);
-    syncSelect(els.stateWriteProjectSelect, projects, "Choose a project", els.stateWriteProjectSelect.value, true);
-    syncSelect(els.searchProjectSelect, projects, "Choose a project", els.searchProjectSelect.value, true);
+    syncSelect(els.projectSelect, projects, t("field.allProjects"), state.filters.project, true);
+    syncSelect(els.agentSelect, agents, t("field.allAgents"), state.filters.agent, true);
+    syncSelect(els.contextProjectSelect, projects, t("field.chooseProject"), els.contextProjectSelect.value, true);
+    syncSelect(els.stateProjectSelect, projects, t("field.chooseProject"), els.stateProjectSelect.value, true);
+    syncSelect(els.stateWriteProjectSelect, projects, t("field.chooseProject"), els.stateWriteProjectSelect.value, true);
+    syncSelect(els.searchProjectSelect, projects, t("field.chooseProject"), els.searchProjectSelect.value, true);
     ensureProjectDefaults(projects);
   }
 
   function renderContextCards(view) {
     if (!view || view.disabled) {
-      els.currentStateList.innerHTML = '<div class="emptyState">Context read is currently disabled.</div>';
-      els.summaryBlocksList.innerHTML = '<div class="emptyState">Summary blocks unavailable.</div>';
-      els.recentObservationsList.innerHTML = '<div class="emptyState">Recent observations unavailable.</div>';
+      els.currentStateList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.contextReadDisabled")) + '</div>';
+      els.summaryBlocksList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.summaryUnavailable")) + '</div>';
+      els.recentObservationsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.recentUnavailable")) + '</div>';
       return;
     }
 
@@ -249,10 +381,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="metaLabel">' + escapeHtml(fact.entity_type + ":" + fact.entity_key) + '</div>' +
             '<div style="margin-top: 8px; font-weight: 700;">' + escapeHtml(fact.fact_key) + '</div>' +
             '<div class="factValue subtle" style="margin-top: 6px;">' + escapeHtml(typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value)) + '</div>' +
-            '<div class="finePrint" style="margin-top: 8px;">Effective ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
           '</div>'
         )).join("")
-      : '<div class="emptyState">No current structured state recorded for this project.</div>';
+      : '<div class="emptyState">' + escapeHtml(t("projectContext.noCurrentStructuredState")) + '</div>';
 
     els.summaryBlocksList.innerHTML = Array.isArray(view.summary_blocks) && view.summary_blocks.length > 0
       ? view.summary_blocks.map((block) => (
@@ -267,7 +399,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '</div>' +
           '</div>'
         )).join("")
-      : '<div class="emptyState">No summary blocks available.</div>';
+      : '<div class="emptyState">' + escapeHtml(t("projectContext.noSummaryBlocks")) + '</div>';
 
     els.recentObservationsList.innerHTML = Array.isArray(view.recent_observations) && view.recent_observations.length > 0
       ? view.recent_observations.map((entry) => (
@@ -280,46 +412,46 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="mono subtle" style="margin-top: 8px;">' + escapeHtml(entry.id) + '</div>' +
           '</div>'
         )).join("")
-      : '<div class="emptyState">No recent observations available.</div>';
+      : '<div class="emptyState">' + escapeHtml(t("projectContext.noRecentObservations")) + '</div>';
   }
 
   function renderProjectContext() {
     const payload = state.contextPayload;
     if (!payload) {
-      els.contextStatusText.textContent = "Choose a project to inspect its current startup context.";
+      els.contextStatusText.textContent = t("projectContext.chooseProjectPrompt");
       els.contextMetrics.innerHTML = "";
-      els.contextRenderedText.textContent = "Choose a project to inspect its current startup context.";
-      els.currentStateList.innerHTML = '<div class="emptyState">No project selected.</div>';
-      els.summaryBlocksList.innerHTML = '<div class="emptyState">No summary blocks to display.</div>';
-      els.recentObservationsList.innerHTML = '<div class="emptyState">No recent observations to display.</div>';
+      els.contextRenderedText.textContent = t("projectContext.chooseProjectPrompt");
+      els.currentStateList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.noProjectPanel")) + '</div>';
+      els.summaryBlocksList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.noSummaryDisplay")) + '</div>';
+      els.recentObservationsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.noRecentDisplay")) + '</div>';
       return;
     }
 
     const metrics = payload.metrics || {};
     const view = payload.view || {};
     els.contextMetrics.innerHTML = [
-      '<span class="metricBadge"><strong>Payload</strong> ' + escapeHtml(String(metrics.payloadBytes || 0)) + ' bytes</span>',
-      '<span class="metricBadge"><strong>Summary</strong> ' + escapeHtml(String(metrics.summaryCount || 0)) + '</span>',
-      '<span class="metricBadge"><strong>Low-signal</strong> ' + escapeHtml(String(metrics.lowSignalCount || 0)) + '</span>',
-      '<span class="metricBadge"><strong>Duplicate titles</strong> ' + escapeHtml(String(metrics.duplicateTitleCount || 0)) + '</span>'
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.payload")) + '</strong> ' + escapeHtml(String(metrics.payloadBytes || 0)) + ' ' + escapeHtml(t("common.bytes")) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.summary")) + '</strong> ' + escapeHtml(String(metrics.summaryCount || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.lowSignal")) + '</strong> ' + escapeHtml(String(metrics.lowSignalCount || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.duplicateTitles")) + '</strong> ' + escapeHtml(String(metrics.duplicateTitleCount || 0)) + '</span>'
     ].join("");
-    els.contextRenderedText.textContent = payload.rendered || "No structured context recorded yet.";
+    els.contextRenderedText.textContent = payload.rendered || t("projectContext.noStructuredContext");
     els.contextStatusText.textContent = view.disabled
-      ? String(view.message || "Context is disabled.")
-      : "Generated at " + formatDate(view.generated_at);
-    setStatusLine(els.projectContextStatus, view.disabled ? "Context disabled" : "Context loaded", view.disabled ? "warning" : "");
+      ? String(view.message || t("projectContext.contextDisabled"))
+      : t("projectContext.generatedAt", { timestamp: formatDate(view.generated_at) });
+    setStoredStatusLine("projectContext", els.projectContextStatus, view.disabled ? "projectContext.contextDisabled" : "projectContext.contextLoaded", {}, view.disabled ? "warning" : "");
     renderContextCards(view);
   }
 
   function renderStateFacts() {
     const payload = state.statePayload;
     if (!payload) {
-      els.stateFactsList.innerHTML = '<div class="emptyState">Choose a project and load state facts.</div>';
+      els.stateFactsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("stateLab.chooseProjectAndLoad")) + '</div>';
       return;
     }
 
     if (payload.disabled) {
-      els.stateFactsList.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || "State read is disabled.") + '</div>';
+      els.stateFactsList.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || t("stateLab.readDisabled")) + '</div>';
       return;
     }
 
@@ -329,21 +461,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="metaLabel">' + escapeHtml(fact.entity_type + ":" + fact.entity_key) + '</div>' +
             '<div style="margin-top: 8px; font-weight: 700;">' + escapeHtml(fact.fact_key) + '</div>' +
             '<div class="factValue subtle" style="margin-top: 6px;">' + escapeHtml(typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value)) + '</div>' +
-            '<div class="finePrint" style="margin-top: 8px;">Effective ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
           '</div>'
         )).join("")
-      : '<div class="emptyState">No matching state facts for the current query.</div>';
+      : '<div class="emptyState">' + escapeHtml(t("stateLab.noMatchingFacts")) + '</div>';
   }
 
   function renderSearchResults() {
     const payload = state.searchPayload;
     if (!payload) {
-      els.searchResults.innerHTML = '<div class="emptyState">Run a query to inspect hybrid search ranking.</div>';
+      els.searchResults.innerHTML = '<div class="emptyState">' + escapeHtml(t("search.resultsPrompt")) + '</div>';
       return;
     }
 
     if (payload.disabled) {
-      els.searchResults.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || "Search is disabled.") + '</div>';
+      els.searchResults.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || t("search.failedToRun")) + '</div>';
       return;
     }
 
@@ -354,23 +486,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="policyTitleRow">' +
               '<div style="font-weight: 700;">' + escapeHtml(result.title) + '</div>' +
               '<span class="tag">' + escapeHtml(result.agent_id) + '</span>' +
-              (result.low_signal_title ? '<span class="statusChip warning">Low Signal</span>' : '') +
+              (result.low_signal_title ? '<span class="statusChip warning">' + escapeHtml(t("search.lowSignal")) + '</span>' : '') +
             '</div>' +
             '<div class="metaRow">' +
-              '<span class="scoreBadge"><strong>Hybrid</strong> ' + escapeHtml(Number(result.hybrid_score || 0).toFixed(3)) + '</span>' +
-              '<span class="scoreBadge"><strong>FTS</strong> ' + escapeHtml(Number(result.fts_score || 0).toFixed(3)) + '</span>' +
-              '<span class="scoreBadge"><strong>Vector</strong> ' + escapeHtml(Number(result.vector_score || 0).toFixed(3)) + '</span>' +
-              '<span class="scoreBadge"><strong>Date</strong> ' + escapeHtml(formatDate(result.created_at)) + '</span>' +
+              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricHybrid")) + '</strong> ' + escapeHtml(Number(result.hybrid_score || 0).toFixed(3)) + '</span>' +
+              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricFts")) + '</strong> ' + escapeHtml(Number(result.fts_score || 0).toFixed(3)) + '</span>' +
+              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricVector")) + '</strong> ' + escapeHtml(Number(result.vector_score || 0).toFixed(3)) + '</span>' +
+              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricDate")) + '</strong> ' + escapeHtml(formatDate(result.created_at)) + '</span>' +
             '</div>' +
             '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(summarize(result.narrative, 220)) + '</p>' +
           '</div>'
         )).join("")
-      : '<div class="emptyState">No results for the current diagnostic query.</div>';
+      : '<div class="emptyState">' + escapeHtml(t("search.noResults")) + '</div>';
   }
 
   function renderRecords(total) {
     if (!state.records.length) {
-      els.recordsList.innerHTML = '<div class="emptyState">No observations matched the current filters.</div>';
+      els.recordsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("ledger.noMatches")) + '</div>';
       if (!state.selectedId) {
         renderDetail(null);
       }
@@ -396,7 +528,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '</button>';
     }).join("");
 
-    els.listMeta.textContent = "Showing " + state.records.length + " of " + total + " records";
+    els.listMeta.textContent = t("ledger.showingCount", {
+      shown: state.records.length,
+      total,
+    });
 
     Array.from(els.recordsList.querySelectorAll("[data-record-id]")).forEach((button) => {
       button.addEventListener("click", () => {
@@ -411,7 +546,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderTagSection(title, items) {
     if (!Array.isArray(items) || items.length === 0) {
-      return '<div class="detailCard"><div class="metaLabel">' + title + '</div><div class="finePrint" style="margin-top: 8px;">None</div></div>';
+      return '<div class="detailCard"><div class="metaLabel">' + title + '</div><div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("detail.none")) + '</div></div>';
     }
     return '<div class="detailCard"><div class="metaLabel">' + title + '</div><div class="chipsRow" style="margin-top: 10px;">' +
       items.map((item) => '<span class="tag">' + escapeHtml(item) + '</span>').join("") +
@@ -420,7 +555,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderListSection(title, items) {
     if (!Array.isArray(items) || items.length === 0) {
-      return '<div class="detailCard"><div class="metaLabel">' + title + '</div><div class="finePrint" style="margin-top: 8px;">None</div></div>';
+      return '<div class="detailCard"><div class="metaLabel">' + title + '</div><div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("detail.none")) + '</div></div>';
     }
     return '<div class="detailCard"><div class="metaLabel">' + title + '</div><ul class="listDetails" style="margin-top: 10px;">' +
       items.map((item) => '<li>' + escapeHtml(item) + '</li>').join("") +
@@ -433,10 +568,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderDetail(record) {
     if (!record) {
-      els.detailTitle.textContent = "Choose a record";
+      els.detailTitle.textContent = t("ledger.chooseRecord");
       els.detailTimestamp.textContent = "";
       els.detailContent.className = "emptyState";
-      els.detailContent.innerHTML = "Select an observation from the ledger to inspect narrative, facts, concepts, and touched files.";
+      els.detailContent.innerHTML = escapeHtml(t("ledger.selectRecordPrompt"));
       return;
     }
 
@@ -450,13 +585,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         '<span class="tag">' + escapeHtml(record.id) + '</span>',
       '</div>',
       '<div class="detailCard" style="margin-top: 16px;">',
-        '<div class="metaLabel">Narrative</div>',
-        '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(record.narrative || "No narrative available.") + '</p>',
+        '<div class="metaLabel">' + escapeHtml(t("detail.narrative")) + '</div>',
+        '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(record.narrative || t("common.noNarrativeAvailable")) + '</p>',
       '</div>',
-      renderTagSection("Facts", record.facts),
-      renderTagSection("Concepts", record.concepts),
-      renderListSection("Files Read", record.files_read),
-      renderListSection("Files Modified", record.files_modified),
+      renderTagSection(t("detail.facts"), record.facts),
+      renderTagSection(t("detail.concepts"), record.concepts),
+      renderListSection(t("detail.filesRead"), record.files_read),
+      renderListSection(t("detail.filesModified"), record.files_modified),
     ].join("");
   }
 
@@ -479,9 +614,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderOverview();
   }
 
-  async function loadRecords(statusMessage) {
-    if (statusMessage) {
-      setStatusLine(els.listStatus, statusMessage, "");
+  async function loadRecords(statusKey) {
+    if (statusKey) {
+      setStoredStatusLine("ledger", els.listStatus, statusKey, {}, "");
     }
     const params = new URLSearchParams({
       page: String(state.filters.page),
@@ -492,8 +627,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (state.filters.query) params.set("query", state.filters.query);
     const payload = await fetchJson("/admin/api/records?" + params.toString());
     state.records = Array.isArray(payload.records) ? payload.records : [];
-    renderRecords(Number(payload.total || 0));
-    setStatusLine(els.listStatus, "Synced " + new Date().toLocaleTimeString(), "");
+    state.recordsTotal = Number(payload.total || 0);
+    renderRecords(state.recordsTotal);
+    setStoredStatusLine("ledger", els.listStatus, "ledger.syncedAt", {
+      time: new Date().toLocaleTimeString(state.locale),
+    }, "");
   }
 
   async function loadProjectContext() {
@@ -504,7 +642,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
 
-    setStatusLine(els.projectContextStatus, "Loading context", "warning");
+    setStoredStatusLine("projectContext", els.projectContextStatus, "projectContext.loadingContext", {}, "warning");
     const params = new URLSearchParams({
       project_path: projectPath,
       limit: String(els.contextLimitInput.value || "10"),
@@ -521,7 +659,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
 
-    setStatusLine(els.stateLabStatus, "Loading state facts", "warning");
+    setStoredStatusLine("stateLab", els.stateLabStatus, "stateLab.loadingFacts", {}, "warning");
     const params = new URLSearchParams({
       project_path: projectPath,
     });
@@ -531,10 +669,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (els.stateAsOfInput.value.trim()) params.set("as_of", els.stateAsOfInput.value.trim());
     state.statePayload = await fetchJson("/admin/api/state?" + params.toString());
     els.stateReadStatus.textContent = state.statePayload.disabled
-      ? String(state.statePayload.message || "State read is disabled.")
-      : "Loaded " + String((state.statePayload.facts || []).length) + " facts.";
+      ? String(state.statePayload.message || t("stateLab.readDisabled"))
+      : t("stateLab.loadedFacts", { count: String((state.statePayload.facts || []).length) });
     renderStateFacts();
-    setStatusLine(els.stateLabStatus, state.statePayload.disabled ? "State read disabled" : "State loaded", state.statePayload.disabled ? "warning" : "");
+    setStoredStatusLine("stateLab", els.stateLabStatus, state.statePayload.disabled ? "stateLab.readDisabled" : "stateLab.stateLoaded", {}, state.statePayload.disabled ? "warning" : "");
   }
 
   function parseStateValue(raw) {
@@ -544,7 +682,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       try {
         return JSON.parse(trimmed);
       } catch (error) {
-        throw new Error("State value looks like JSON but could not be parsed.");
+        throw new Error(t("stateLab.valueParseError"));
       }
     }
     return trimmed;
@@ -553,14 +691,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   async function writeStateFact() {
     const projectPath = els.stateWriteProjectSelect.value;
     if (!projectPath) {
-      throw new Error("Choose a project before writing state.");
+      throw new Error(t("stateLab.chooseProjectBeforeWrite"));
     }
     const factKey = els.stateWriteFactKeyInput.value.trim();
     if (!factKey) {
-      throw new Error("Fact key is required.");
+      throw new Error(t("stateLab.factKeyRequired"));
     }
 
-    setStatusLine(els.stateLabStatus, "Writing state fact", "warning");
+    setStoredStatusLine("stateLab", els.stateLabStatus, "stateLab.writingFact", {}, "warning");
     const payload = await fetchJson("/admin/api/state", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -574,8 +712,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }),
     });
 
-    els.stateWriteStatus.textContent = "Wrote " + payload.fact.fact_key + " at " + formatDate(payload.fact.effective_at);
-    setStatusLine(els.stateLabStatus, "State fact written", "");
+    els.stateWriteStatus.textContent = t("stateLab.wroteFact", {
+      factKey: payload.fact.fact_key,
+      timestamp: formatDate(payload.fact.effective_at),
+    });
+    setStoredStatusLine("stateLab", els.stateLabStatus, "stateLab.factWritten", {}, "");
     await loadStateFacts();
   }
 
@@ -585,15 +726,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!projectPath) {
       state.searchPayload = null;
       renderSearchResults();
-      throw new Error("Choose a project before running diagnostics.");
+      throw new Error(t("search.chooseProjectBeforeRun"));
     }
     if (!query) {
       state.searchPayload = null;
       renderSearchResults();
-      throw new Error("Enter a query before running diagnostics.");
+      throw new Error(t("search.enterQueryBeforeRun"));
     }
 
-    setStatusLine(els.searchDiagnosticsStatus, "Running diagnostics", "warning");
+    setStoredStatusLine("searchDiagnostics", els.searchDiagnosticsStatus, "search.running", {}, "warning");
     state.searchPayload = await fetchJson("/admin/api/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -603,10 +744,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         limit: Number(els.searchLimitInput.value || "10"),
       }),
     });
-    els.searchStatusText.textContent = "Query: " + query;
-    els.searchMetaText.textContent = "Returned " + String((state.searchPayload.results || []).length) + " results";
+    els.searchStatusText.textContent = t("search.queryPrefix", { query });
+    els.searchMetaText.textContent = t("search.returnedResults", { count: String((state.searchPayload.results || []).length) });
     renderSearchResults();
-    setStatusLine(els.searchDiagnosticsStatus, "Diagnostics ready", "");
+    setStoredStatusLine("searchDiagnostics", els.searchDiagnosticsStatus, "search.readyStatus", {}, "");
   }
 
   async function savePolicy() {
@@ -664,7 +805,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     try {
       await loadOverview();
       if (state.activePanel === "observationLedgerPanel") {
-        await loadRecords("Polling ledger");
+        await loadRecords("ledger.polling");
       }
       if (state.activePanel === "projectContextPanel" && els.contextProjectSelect.value) {
         await loadProjectContext();
@@ -675,6 +816,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function bindEvents() {
+    els.localeButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const nextLocale = normalizeLocale(button.getAttribute("data-locale-choice"));
+        if (state.locale === nextLocale) return;
+        state.locale = nextLocale;
+        applyLocale(false);
+      });
+    });
+
     Array.from(els.viewTabs.querySelectorAll("[data-panel-target]")).forEach((button) => {
       button.addEventListener("click", () => {
         activatePanel(button.getAttribute("data-panel-target"));
@@ -683,24 +833,24 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
     els.refreshButton.addEventListener("click", async () => {
       syncFiltersFromInputs();
-      await loadRecords("Refreshing ledger");
+      await loadRecords("ledger.refreshing");
     });
     els.projectSelect.addEventListener("change", async () => {
       syncFiltersFromInputs();
-      await loadRecords("Filtering ledger");
+      await loadRecords("ledger.filtering");
     });
     els.agentSelect.addEventListener("change", async () => {
       syncFiltersFromInputs();
-      await loadRecords("Filtering ledger");
+      await loadRecords("ledger.filtering");
     });
     els.queryInput.addEventListener("change", async () => {
       syncFiltersFromInputs();
-      await loadRecords("Filtering ledger");
+      await loadRecords("ledger.filtering");
     });
     els.queryInput.addEventListener("keydown", async (event) => {
       if (event.key === "Enter") {
         syncFiltersFromInputs();
-        await loadRecords("Filtering ledger");
+        await loadRecords("ledger.filtering");
       }
     });
 
@@ -732,8 +882,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       try {
         await writeStateFact();
       } catch (error) {
-        els.stateWriteStatus.textContent = error.message || "Failed to write state fact.";
-        setStatusLine(els.stateLabStatus, error.message || "Failed to write state fact.", "error");
+        els.stateWriteStatus.textContent = error.message || t("stateLab.failedWrite");
+        setRawStatusLine("stateLab", els.stateLabStatus, error.message || t("stateLab.failedWrite"), "error");
       }
     });
 
@@ -741,9 +891,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       try {
         await runSearchDiagnostics();
       } catch (error) {
-        els.searchStatusText.textContent = error.message || "Failed to run diagnostics.";
+        els.searchStatusText.textContent = error.message || t("search.failedToRun");
         els.searchMetaText.textContent = "";
-        setStatusLine(els.searchDiagnosticsStatus, error.message || "Failed to run diagnostics.", "error");
+        setRawStatusLine("searchDiagnostics", els.searchDiagnosticsStatus, error.message || t("search.failedToRun"), "error");
       }
     });
     els.searchQueryInput.addEventListener("keydown", async (event) => {
@@ -751,9 +901,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         try {
           await runSearchDiagnostics();
         } catch (error) {
-          els.searchStatusText.textContent = error.message || "Failed to run diagnostics.";
+          els.searchStatusText.textContent = error.message || t("search.failedToRun");
           els.searchMetaText.textContent = "";
-          setStatusLine(els.searchDiagnosticsStatus, error.message || "Failed to run diagnostics.", "error");
+          setRawStatusLine("searchDiagnostics", els.searchDiagnosticsStatus, error.message || t("search.failedToRun"), "error");
         }
       }
     });
@@ -762,23 +912,25 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       try {
         await savePolicy();
       } catch (error) {
-        setStatusLine(els.runtimeStatusLine || document.getElementById("runtimeStatusLine"), error.message || "Failed to save policy.", "error");
+        setRawStatusLine("runtime", els.runtimeStatusLine, error.message || t("status.policySaveFailed"), "error");
       }
     });
     els.writeToggle.addEventListener("change", async () => {
       try {
         await savePolicy();
       } catch (error) {
-        setStatusLine(els.runtimeStatusLine || document.getElementById("runtimeStatusLine"), error.message || "Failed to save policy.", "error");
+        setRawStatusLine("runtime", els.runtimeStatusLine, error.message || t("status.policySaveFailed"), "error");
       }
     });
   }
 
   async function initialize() {
+    state.locale = detectInitialLocale();
+    applyLocale(true);
     bindEvents();
     try {
       await loadOverview();
-      await loadRecords("Loading ledger");
+      await loadRecords("ledger.loading");
       if (els.contextProjectSelect.value) {
         await loadProjectContext();
       } else {
@@ -790,9 +942,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         renderStateFacts();
       }
       renderSearchResults();
-      setStatusLine(document.getElementById("runtimeStatusLine"), "Workbench ready", "");
+      setStoredStatusLine("runtime", els.runtimeStatusLine, "status.workbenchReady", {}, "");
     } catch (error) {
-      setStatusLine(document.getElementById("runtimeStatusLine"), error.message || "Failed to initialize workbench.", "error");
+      setRawStatusLine("runtime", els.runtimeStatusLine, error.message || t("status.initializationFailed"), "error");
     }
 
     state.pollHandle = window.setInterval(() => {

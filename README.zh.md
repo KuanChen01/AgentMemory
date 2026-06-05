@@ -91,10 +91,22 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. 自动注册集成
-运行内置的安装器，它会自动向 **Claude Code**、**OpenCode** 和 **Codex** 写入相应的 hooks 与 MCP 注册参数：
+运行内置的安装器，它会自动向 **Claude Code**、**OpenCode**、**Codex** 和 **Antigravity** 写入相应的 hooks / plugin / MCP 注册参数：
 ```bash
 agentmem install
 ```
+
+如果你希望“四个 agent 任意一个没配好就立刻失败”，请使用：
+```bash
+agentmem install --strict
+```
+
+如果是给第二台 Windows 电脑做一次性落地，不要手工重复所有步骤，直接使用：
+```powershell
+.\bootstrap-second-machine.cmd
+```
+
+中文分步教程见：[docs/Second Machine Bootstrap Guide.zh.md](./docs/Second%20Machine%20Bootstrap%20Guide.zh.md)
 
 ---
 
@@ -105,7 +117,23 @@ agentmem install
 *   **启动 Worker 服务**：`agentmem start`（前台运行；使用期间请保持这个终端窗口处于运行状态）
 *   **停止后台服务**：`agentmem stop`
 *   **查询运行状态**：`agentmem status`
-*   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode 和 Codex 的设置）
+*   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode、Codex 和 Antigravity 的设置）
+*   **严格注册模式**：`agentmem install --strict`（任意一项失败即退出）
+*   **第二台电脑 Bootstrap**：`agentmem bootstrap-win --strict` 或 `bootstrap-second-machine.cmd`
+
+### 🪟 Windows 二机 Bootstrap
+
+如果第二台电脑同样是 Windows，推荐路径是：
+
+```powershell
+git clone https://github.com/KuanChen01/AgentMemory.git
+cd AgentMemory
+.\bootstrap-second-machine.cmd
+```
+
+这个入口会自动执行 `npm install`、`npm run build`、创建或校验 `%USERPROFILE%\.agentmem\.env`、执行 `npm link`、配置四个 agent、探测或拉起 worker，并打开 `/admin`。
+
+如果 `%USERPROFILE%\.agentmem\.env` 不存在，bootstrap 会先写一个占位模板，然后立即停止，不会假装成功。你只需要填好 `AGENTMEM_LLM_*` 后重新运行。
 
 ---
 
@@ -196,7 +224,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 ### 🔌 智能体手动集成配置
 
 #### 1. OpenCode 客户端 (`~/.config/opencode/opencode.jsonc`)
-在 `mcp` 块中加入配置，并在 `plugin` 数组中添加对应的钩子插件文件协议地址：
+`agentmem install` 现在会同时写入 `mcp.agentmem` 和自动生成的桥接插件 `%USERPROFILE%/.config/opencode/plugins/agentmem-plugin.mjs`。落盘后的结构如下：
 ```jsonc
 {
   "mcp": {
@@ -286,7 +314,11 @@ args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
 #### 4. Antigravity CLI
-在当前生效的 Antigravity CLI MCP 注册表中暴露 `agentmem`。在这台机器上，实际验证通过的是 Gemini 兼容配置根目录下的插件 `mcp_config.json`。
+`agentmem install` 现在也会更新当前生效的 Antigravity MCP 注册表。在这台机器上，实际验证通过的是 Gemini 兼容配置根目录下的插件 `mcp_config.json`。如果你的第二台机器把注册表放在别处，可以显式传入：
+
+```bash
+agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
+```
 
 通用结构如下：
 ```json
