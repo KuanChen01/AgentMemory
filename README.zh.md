@@ -101,6 +101,19 @@ agentmem install
 agentmem install --strict
 ```
 
+安装器现在已经改为“先备份，再 merge”：
+
+- 安装状态保存在 `~/.agentmem/install-state.json`
+- 能拿到干净基线时，会把原始配置备份到 `~/.agentmem/backups/`
+- 只 merge / upsert AgentMemory 自己的 hooks 与 MCP 项，不再直接整段覆盖 hooks 数组
+
+如果要把 AgentMemory 从当前机器卸载掉，但不删除仓库 checkout，请使用：
+```bash
+agentmem uninstall --strict
+```
+
+如果连保留的安装状态与备份也要一起清掉，再追加 `--purge-all`。
+
 如果是给第二台 Windows 电脑做一次性落地，不要手工重复所有步骤，直接使用：
 ```powershell
 .\bootstrap-second-machine.cmd
@@ -120,6 +133,8 @@ agentmem install --strict
 *   **查看当前版本**：`agentmem version`
 *   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode、Codex 和 Antigravity 的设置）
 *   **严格注册模式**：`agentmem install --strict`（任意一项失败即退出）
+*   **卸载本机集成**：`agentmem uninstall --strict`（移除当前机器上的 AgentMemory hooks、MCP 注册、插件产物、`.env` 与数据库文件）
+*   **彻底清掉安装状态**：`agentmem uninstall --strict --purge-all`（同时删除保留的备份与 install-state）
 *   **第二台电脑 Bootstrap**：`agentmem bootstrap-win --strict` 或 `bootstrap-second-machine.cmd`
 *   **查看 Release Manifest**：`agentmem release-manifest --json`（输出机器可读的版本与发布策略元数据）
 *   **生成 Release Plan**：`npm run release:plan -- --next patch|minor|major`

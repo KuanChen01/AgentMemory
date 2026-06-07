@@ -67,7 +67,7 @@ cd AgentMemory
 如果 `%USERPROFILE%\.agentmem\.env` 不存在，第一次运行会：
 
 1. 自动生成 `%USERPROFILE%\.agentmem\.env`
-2. 写入占位值 `fill-me`
+2. 写入“空 API key + 默认 URL/model”的安全骨架
 3. 立即停止，不会继续假装安装成功
 
 你需要把它改成真实配置，例如：
@@ -113,6 +113,8 @@ AGENTMEM_PORT=38888
 bootstrap 成功后，关键落点应为：
 
 - `%USERPROFILE%\.agentmem\.env`
+- `%USERPROFILE%\.agentmem\install-state.json`
+- `%USERPROFILE%\.agentmem\backups\`
 - `%USERPROFILE%\.claude.json`
 - `%USERPROFILE%\.claude\settings.json`
 - `%USERPROFILE%\.codex\config.toml`
@@ -120,6 +122,27 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.config\opencode\opencode.jsonc`
 - `%USERPROFILE%\.config\opencode\plugins\agentmem-plugin.mjs`
 - `%USERPROFILE%\.gemini\config\plugins\...\mcp_config.json`
+
+## Cleanup and Reinstall
+
+如果第二台机器后续需要卸载当前集成，不需要删仓库重装，直接执行：
+
+```powershell
+agentmem uninstall --strict
+```
+
+这条命令会：
+
+1. 停掉本地 worker 并清理 `worker.pid`
+2. 移除四个 agent 中由 AgentMemory 管理的 hooks / MCP 注册 / OpenCode 插件
+3. 删除 `%USERPROFILE%\.agentmem\.env` 与 `agentmemory.db`
+4. 在有干净基线备份时恢复原配置；如果该文件是旧安装遗留或你在安装后又手改过，则只做“定向清理 AgentMemory 项”，不会强行覆盖你的后续改动
+
+如果还要连备份与安装状态一起清掉，再执行：
+
+```powershell
+agentmem uninstall --strict --purge-all
+```
 
 ## Manual Acceptance
 

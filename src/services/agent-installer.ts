@@ -1,13 +1,35 @@
+import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { updateCodexConfigToml } from './codex-installer';
+import {
+  removeCodexMcpServer,
+  stripLegacyCodexHookTables,
+  updateCodexConfigToml,
+} from './codex-installer';
+import {
+  InstallStateManifest,
+  ManagedTargetKind,
+  loadInstallState,
+  markManagedTargetApplied,
+  matchesManagedTargetState,
+  prepareManagedTarget,
+  purgeInstallStateArtifacts,
+  saveInstallState,
+} from './install-state';
+
+type ManagedAgent = 'claude' | 'opencode' | 'codex' | 'antigravity' | 'runtime' | 'cli';
 
 export interface InstallOptions {
   antigravityConfigPath?: string;
   homeDir?: string;
   repoRoot: string;
   strict?: boolean;
+}
+
+export interface UninstallOptions extends InstallOptions {
+  purgeAll?: boolean;
+  skipGlobalUnlink?: boolean;
 }
 
 export interface InstallPaths {
@@ -23,10 +45,36 @@ export interface InstallPaths {
 }
 
 export interface InstallResult {
-  agent: 'claude' | 'opencode' | 'codex' | 'antigravity';
+  action?: string;
+  agent: ManagedAgent;
+  message: string;
   ok: boolean;
   targetPath?: string;
-  message: string;
+  warnings?: string[];
+}
+
+export interface UninstallResult extends InstallResult {}
+
+interface InstallContext {
+  homeDir: string;
+  paths: InstallPaths;
+  state: InstallStateManifest;
+}
+
+interface OpenCodePaths {
+  configJsonPath: string;
+  configJsoncPath: string;
+  configTargetPath: string;
+  pluginPath: string;
+  pluginsDir: string;
+}
+
+interface UninstallTextTargetOptions {
+  cleanup: (currentText: string) => string | null;
+  hasManagedContent: (currentText: string) => boolean;
+  kind: ManagedTargetKind;
+  removeWhenEmpty?: boolean;
+  targetPath: string;
 }
 
 export function stripComments(jsonc: string): string {
@@ -214,8 +262,14 @@ export function resolveAntigravityConfigPath(
     return null;
   }
 
-  const preferred = candidates.find((candidate) => candidate.includes(`${path.sep}local-game-mcps${path.sep}`));
+  const preferred = candidates.find((candidate) =>
+    candidate.includes(`${path.sep}local-game-mcps${path.sep}`)
+  );
   return preferred || candidates[0];
+}
+
+function isObject(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function readJsonFile(filePath: string, allowComments: boolean = false): any {
@@ -232,86 +286,501 @@ function ensureDir(targetPath: string) {
   fs.mkdirSync(targetPath, { recursive: true });
 }
 
-function writeJson(filePath: string, payload: unknown) {
-  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+function serializeJson(payload: unknown): string {
+  return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
-function installClaude(paths: InstallPaths): InstallResult {
-  const claudeSettingsPath = path.join(paths.homeDir, '.claude', 'settings.json');
-  const claudeGlobalPath = path.join(paths.homeDir, '.claude.json');
+function writeJson(filePath: string, payload: unknown) {
+  fs.writeFileSync(filePath, serializeJson(payload), 'utf8');
+}
 
-  const claudeDir = path.dirname(claudeSettingsPath);
-  ensureDir(claudeDir);
+function resolveOpenCodePaths(homeDir: string): OpenCodePaths {
+  const configDir = path.join(homeDir, '.config', 'opencode');
+  const configJsonPath = path.join(configDir, 'opencode.json');
+  const configJsoncPath = path.join(configDir, 'opencode.jsonc');
+  const configTargetPath = fs.existsSync(configJsoncPath) || !fs.existsSync(configJsonPath)
+    ? configJsoncPath
+    : configJsonPath;
+  const pluginsDir = path.join(configDir, 'plugins');
+  const pluginPath = path.join(pluginsDir, 'agentmem-plugin.mjs');
+
+  return {
+    configJsonPath,
+    configJsoncPath,
+    configTargetPath,
+    pluginPath,
+    pluginsDir,
+  };
+}
+
+function isManagedHookCommand(command: string, markers: string[]): boolean {
+  return markers.some((marker) => command.includes(marker));
+}
+
+export function removeManagedHookEntries(entries: any, markers: string[]): any[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  const cleanedEntries: any[] = [];
+  for (const entry of entries) {
+    if (!isObject(entry) || !Array.isArray(entry.hooks)) {
+      cleanedEntries.push(entry);
+      continue;
+    }
+
+    const remainingHooks = entry.hooks.filter((hook: any) => {
+      if (!isObject(hook) || typeof hook.command !== 'string') {
+        return true;
+      }
+
+      return !isManagedHookCommand(hook.command, markers);
+    });
+
+    if (remainingHooks.length === 0) {
+      continue;
+    }
+
+    cleanedEntries.push({
+      ...entry,
+      hooks: remainingHooks,
+    });
+  }
+
+  return cleanedEntries;
+}
+
+export function mergeManagedHookEntries(entries: any, marker: string, command: string): any[] {
+  return [
+    ...removeManagedHookEntries(entries, [marker]),
+    {
+      matcher: '.*',
+      hooks: [{ type: 'command', command }],
+    },
+  ];
+}
+
+function pruneEmptyObject(parent: Record<string, any>, key: string) {
+  if (!isObject(parent[key])) {
+    return;
+  }
+
+  if (Object.keys(parent[key]).length === 0) {
+    delete parent[key];
+  }
+}
+
+function pruneEmptyArray(parent: Record<string, any>, key: string) {
+  if (Array.isArray(parent[key]) && parent[key].length === 0) {
+    delete parent[key];
+  }
+}
+
+function hasMarkerInJson(value: unknown, markers: string[]): boolean {
+  return markers.some((marker) => JSON.stringify(value || {}).includes(marker));
+}
+
+function cleanupHookConfig(
+  payload: Record<string, any>,
+  eventName: 'SessionStart' | 'PostToolUse',
+  markers: string[]
+) {
+  if (!isObject(payload.hooks)) {
+    return;
+  }
+
+  payload.hooks[eventName] = removeManagedHookEntries(payload.hooks[eventName], markers);
+  pruneEmptyArray(payload.hooks, eventName);
+  pruneEmptyObject(payload, 'hooks');
+}
+
+function cleanupClaudeSettings(settings: Record<string, any>) {
+  if (isObject(settings.mcpServers)) {
+    delete settings.mcpServers.agentmem;
+    pruneEmptyObject(settings, 'mcpServers');
+  }
+
+  cleanupHookConfig(settings, 'SessionStart', ['claude-session-start.js']);
+  cleanupHookConfig(settings, 'PostToolUse', ['claude-post-tool.js']);
+  return settings;
+}
+
+function cleanupClaudeGlobalConfig(globalConfig: Record<string, any>) {
+  if (isObject(globalConfig.mcpServers)) {
+    delete globalConfig.mcpServers.agentmem;
+    pruneEmptyObject(globalConfig, 'mcpServers');
+  }
+
+  return globalConfig;
+}
+
+function cleanupCodexHooksConfig(hooksConfig: Record<string, any>) {
+  cleanupHookConfig(hooksConfig, 'SessionStart', ['codex-session-start.js']);
+  cleanupHookConfig(hooksConfig, 'PostToolUse', ['codex-post-tool.js']);
+  return hooksConfig;
+}
+
+function cleanupOpenCodeConfig(config: Record<string, any>) {
+  if (!isObject(config.mcp)) {
+    config.mcp = {};
+  }
+
+  delete config.mcp.agentmem;
+  if (isObject(config.mcp.servers)) {
+    delete config.mcp.servers.agentmem;
+    pruneEmptyObject(config.mcp, 'servers');
+  }
+  pruneEmptyObject(config, 'mcp');
+
+  if (Array.isArray(config.plugin)) {
+    config.plugin = config.plugin.filter(
+      (entry: unknown) => typeof entry !== 'string' || !entry.includes('agentmem-plugin.mjs')
+    );
+    pruneEmptyArray(config, 'plugin');
+  }
+
+  return config;
+}
+
+function cleanupAntigravityConfig(config: Record<string, any>) {
+  if (isObject(config.mcpServers)) {
+    delete config.mcpServers.agentmem;
+    pruneEmptyObject(config, 'mcpServers');
+  }
+
+  return config;
+}
+
+function detectClaudeSettingsLegacy(settings: Record<string, any>): boolean {
+  return !!settings?.mcpServers?.agentmem ||
+    hasMarkerInJson(settings?.hooks, ['claude-session-start.js', 'claude-post-tool.js']);
+}
+
+function detectClaudeGlobalLegacy(globalConfig: Record<string, any>): boolean {
+  return !!globalConfig?.mcpServers?.agentmem;
+}
+
+function detectCodexConfigLegacy(toml: string): boolean {
+  return /\[mcp_servers\.agentmem\]/.test(toml) ||
+    toml.includes('codex-session-start.js') ||
+    toml.includes('codex-post-tool.js');
+}
+
+function detectCodexHooksLegacy(hooksConfig: Record<string, any>): boolean {
+  return hasMarkerInJson(hooksConfig?.hooks, ['codex-session-start.js', 'codex-post-tool.js']);
+}
+
+function detectOpenCodeLegacy(config: Record<string, any>): boolean {
+  const pluginList = Array.isArray(config.plugin) ? config.plugin : [];
+  return !!config?.mcp?.agentmem ||
+    !!config?.mcp?.servers?.agentmem ||
+    pluginList.some((entry) => typeof entry === 'string' && entry.includes('agentmem-plugin.mjs'));
+}
+
+function detectAntigravityLegacy(config: Record<string, any>): boolean {
+  return !!config?.mcpServers?.agentmem;
+}
+
+function applyManagedTextWrite(
+  context: InstallContext,
+  kind: ManagedTargetKind,
+  targetPath: string,
+  nextText: string,
+  isLegacyManaged: boolean
+): string[] {
+  const absolutePath = path.resolve(targetPath);
+  const currentText = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : undefined;
+  const { warnings } = prepareManagedTarget(context.state, {
+    currentText,
+    homeDir: context.homeDir,
+    isLegacyManaged,
+    kind,
+    targetPath: absolutePath,
+  });
+
+  ensureDir(path.dirname(absolutePath));
+  if (currentText !== nextText) {
+    fs.writeFileSync(absolutePath, nextText, 'utf8');
+  }
+
+  markManagedTargetApplied(context.state, absolutePath, nextText);
+  saveInstallState(context.homeDir, context.state);
+  return warnings;
+}
+
+function applyManagedDelete(
+  context: InstallContext,
+  kind: ManagedTargetKind,
+  targetPath: string,
+  isLegacyManaged: boolean
+): string[] {
+  const absolutePath = path.resolve(targetPath);
+  const currentText = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : undefined;
+  if (typeof currentText !== 'string' && !context.state.targets[absolutePath]) {
+    return [];
+  }
+
+  const { warnings } = prepareManagedTarget(context.state, {
+    currentText,
+    homeDir: context.homeDir,
+    isLegacyManaged,
+    kind,
+    targetPath: absolutePath,
+  });
+
+  if (typeof currentText === 'string') {
+    fs.unlinkSync(absolutePath);
+  }
+
+  markManagedTargetApplied(context.state, absolutePath, null);
+  saveInstallState(context.homeDir, context.state);
+  return warnings;
+}
+
+function writeOrDeleteUninstallTarget(
+  context: InstallContext,
+  recordPath: string,
+  nextText: string | null
+) {
+  const absolutePath = path.resolve(recordPath);
+  if (nextText === null) {
+    if (fs.existsSync(absolutePath)) {
+      fs.unlinkSync(absolutePath);
+    }
+  } else {
+    ensureDir(path.dirname(absolutePath));
+    fs.writeFileSync(absolutePath, nextText, 'utf8');
+  }
+
+  if (context.state.targets[absolutePath]) {
+    markManagedTargetApplied(context.state, absolutePath, nextText);
+    saveInstallState(context.homeDir, context.state);
+  }
+}
+
+function uninstallManagedTextTarget(
+  context: InstallContext,
+  options: UninstallTextTargetOptions
+): { action: string; warnings: string[] } {
+  const absolutePath = path.resolve(options.targetPath);
+  const currentText = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : undefined;
+  let record = context.state.targets[absolutePath];
+  const warnings: string[] = [];
+
+  const managedWithoutState =
+    typeof currentText === 'string' &&
+    !record &&
+    options.hasManagedContent(currentText);
+  if (managedWithoutState) {
+    const prepared = prepareManagedTarget(context.state, {
+      currentText,
+      homeDir: context.homeDir,
+      isLegacyManaged: true,
+      kind: options.kind,
+      targetPath: absolutePath,
+    });
+    record = prepared.record;
+    warnings.push(...prepared.warnings);
+    saveInstallState(context.homeDir, context.state);
+  }
+
+  if (!record && typeof currentText === 'string' && !managedWithoutState) {
+    return {
+      action: 'no-op',
+      warnings,
+    };
+  }
+
+  if (!record && typeof currentText !== 'string') {
+    return {
+      action: 'no-op',
+      warnings,
+    };
+  }
+
+  if (record?.baselineStatus === 'pristine' && matchesManagedTargetState(record, currentText)) {
+    if (record.existedBeforeInstall && record.baselineBackupPath) {
+      const baselineText = fs.readFileSync(record.baselineBackupPath, 'utf8');
+      writeOrDeleteUninstallTarget(context, absolutePath, baselineText);
+      return {
+        action: 'restored-backup',
+        warnings,
+      };
+    }
+
+    if (!record.existedBeforeInstall) {
+      writeOrDeleteUninstallTarget(context, absolutePath, null);
+      return {
+        action: 'removed-generated-file',
+        warnings,
+      };
+    }
+  }
+
+  if (typeof currentText !== 'string') {
+    return {
+      action: 'no-op',
+      warnings,
+    };
+  }
+
+  warnings.push(
+    `warning: ${absolutePath} was modified after install or has no pristine baseline; applied targeted AgentMemory cleanup instead.`
+  );
+  const cleanedText = options.cleanup(currentText);
+  const normalizedCleanedText =
+    cleanedText !== null && options.removeWhenEmpty && cleanedText.trim() === '' ? null : cleanedText;
+
+  if (normalizedCleanedText === currentText) {
+    if (record) {
+      markManagedTargetApplied(context.state, absolutePath, currentText);
+      saveInstallState(context.homeDir, context.state);
+    }
+
+    return {
+      action: 'kept-existing-file',
+      warnings,
+    };
+  }
+
+  writeOrDeleteUninstallTarget(context, absolutePath, normalizedCleanedText);
+  return {
+    action: normalizedCleanedText === null ? 'removed-managed-file' : 'removed-managed-entries',
+    warnings,
+  };
+}
+
+function uninstallDedicatedArtifact(
+  context: InstallContext,
+  kind: ManagedTargetKind,
+  targetPath: string,
+  isManagedFile: boolean
+): { action: string; warnings: string[] } {
+  const absolutePath = path.resolve(targetPath);
+  const currentText = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : undefined;
+  let record = context.state.targets[absolutePath];
+  const warnings: string[] = [];
+
+  if (!record && typeof currentText === 'string' && isManagedFile) {
+    const prepared = prepareManagedTarget(context.state, {
+      currentText,
+      homeDir: context.homeDir,
+      isLegacyManaged: true,
+      kind,
+      targetPath: absolutePath,
+    });
+    record = prepared.record;
+    warnings.push(...prepared.warnings);
+    saveInstallState(context.homeDir, context.state);
+  }
+
+  if (record?.baselineStatus === 'pristine' && record.existedBeforeInstall && record.baselineBackupPath &&
+    matchesManagedTargetState(record, currentText)) {
+    const baselineText = fs.readFileSync(record.baselineBackupPath, 'utf8');
+    writeOrDeleteUninstallTarget(context, absolutePath, baselineText);
+    return {
+      action: 'restored-backup',
+      warnings,
+    };
+  }
+
+  if (typeof currentText === 'string') {
+    writeOrDeleteUninstallTarget(context, absolutePath, null);
+    return {
+      action: 'deleted-generated-artifact',
+      warnings,
+    };
+  }
+
+  if (record) {
+    markManagedTargetApplied(context.state, absolutePath, null);
+    saveInstallState(context.homeDir, context.state);
+  }
+
+  return {
+    action: 'already-absent',
+    warnings,
+  };
+}
+
+function installClaude(context: InstallContext): InstallResult {
+  const claudeSettingsPath = path.join(context.homeDir, '.claude', 'settings.json');
+  const claudeGlobalPath = path.join(context.homeDir, '.claude.json');
+  ensureDir(path.dirname(claudeSettingsPath));
 
   const settings = readJsonFile(claudeSettingsPath);
-  if (settings.mcpServers) {
-    delete settings.mcpServers;
-  }
-
-  if (!settings.hooks) {
+  cleanupClaudeSettings(settings);
+  if (!isObject(settings.hooks)) {
     settings.hooks = {};
   }
-
-  settings.hooks.SessionStart = [
-    {
-      matcher: '.*',
-      hooks: [{ type: 'command', command: `node "${paths.claudeStartHook}"` }],
-    },
-  ];
-  settings.hooks.PostToolUse = [
-    {
-      matcher: '.*',
-      hooks: [{ type: 'command', command: `node "${paths.claudePostHook}"` }],
-    },
-  ];
-
-  writeJson(claudeSettingsPath, settings);
+  settings.hooks.SessionStart = mergeManagedHookEntries(
+    settings.hooks.SessionStart,
+    'claude-session-start.js',
+    `node "${context.paths.claudeStartHook}"`
+  );
+  settings.hooks.PostToolUse = mergeManagedHookEntries(
+    settings.hooks.PostToolUse,
+    'claude-post-tool.js',
+    `node "${context.paths.claudePostHook}"`
+  );
 
   const globalConfig = readJsonFile(claudeGlobalPath);
-  if (!globalConfig.mcpServers) {
+  cleanupClaudeGlobalConfig(globalConfig);
+  if (!isObject(globalConfig.mcpServers)) {
     globalConfig.mcpServers = {};
   }
   globalConfig.mcpServers.agentmem = {
     type: 'stdio',
     command: 'node',
-    args: [paths.mcpServerPath],
+    args: [context.paths.mcpServerPath],
     env: {},
   };
 
-  writeJson(claudeGlobalPath, globalConfig);
+  const warnings = [
+    ...applyManagedTextWrite(
+      context,
+      'claude-settings',
+      claudeSettingsPath,
+      serializeJson(settings),
+      detectClaudeSettingsLegacy(readJsonFile(claudeSettingsPath))
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'claude-global',
+      claudeGlobalPath,
+      serializeJson(globalConfig),
+      detectClaudeGlobalLegacy(readJsonFile(claudeGlobalPath))
+    ),
+  ];
+
   return {
+    action: 'merged-managed-entries',
     agent: 'claude',
     ok: true,
     targetPath: claudeSettingsPath,
     message: `Registered hooks and MCP server in Claude Code (${claudeSettingsPath}, ${claudeGlobalPath})`,
+    warnings,
   };
 }
 
-function installOpenCode(paths: InstallPaths): InstallResult {
-  const opencodeConfigDir = path.join(paths.homeDir, '.config', 'opencode');
-  const opencodeConfigPath = path.join(opencodeConfigDir, 'opencode.json');
-  const opencodeJsoncPath = path.join(opencodeConfigDir, 'opencode.jsonc');
-  const pluginsDir = path.join(opencodeConfigDir, 'plugins');
-  const pluginPath = path.join(pluginsDir, 'agentmem-plugin.mjs');
-  let targetPath = opencodeJsoncPath;
+function installOpenCode(context: InstallContext): InstallResult {
+  const opencodePaths = resolveOpenCodePaths(context.homeDir);
+  ensureDir(path.dirname(opencodePaths.configTargetPath));
+  ensureDir(opencodePaths.pluginsDir);
 
-  ensureDir(opencodeConfigDir);
-  ensureDir(pluginsDir);
+  const existingConfig = readJsonFile(
+    opencodePaths.configTargetPath,
+    opencodePaths.configTargetPath.endsWith('.jsonc')
+  );
+  const legacyBefore = detectOpenCodeLegacy(existingConfig);
+  const opencodeConfig = cleanupOpenCodeConfig(existingConfig);
 
-  let opencodeConfig: any = {};
-  if (fs.existsSync(opencodeJsoncPath)) {
-    opencodeConfig = readJsonFile(opencodeJsoncPath, true);
-  } else if (fs.existsSync(opencodeConfigPath)) {
-    targetPath = opencodeConfigPath;
-    opencodeConfig = readJsonFile(opencodeConfigPath);
-  }
-
-  if (!opencodeConfig.mcp) {
+  if (!isObject(opencodeConfig.mcp)) {
     opencodeConfig.mcp = {};
   }
   opencodeConfig.mcp.agentmem = {
     type: 'local',
-    command: ['node', paths.mcpServerPath],
+    command: ['node', context.paths.mcpServerPath],
     enabled: true,
   };
 
@@ -319,82 +788,110 @@ function installOpenCode(paths: InstallPaths): InstallResult {
     opencodeConfig.plugin = [];
   }
 
-  const pluginUrl = `file:///${pluginPath.replace(/\\/g, '/')}`;
-  if (!opencodeConfig.plugin.includes(pluginUrl)) {
-    opencodeConfig.plugin.push(pluginUrl);
-  }
-
-  if (opencodeConfig.hooks) {
-    delete opencodeConfig.hooks;
-  }
-  if (opencodeConfig.mcp.servers) {
-    delete opencodeConfig.mcp.servers;
-  }
-
-  writeJson(targetPath, opencodeConfig);
-  fs.writeFileSync(
-    pluginPath,
-    renderOpenCodePlugin({
-      startHookPath: paths.opencodeStartHook,
-      postHookPath: paths.opencodePostHook,
-    }),
-    'utf8'
+  const pluginUrl = `file:///${opencodePaths.pluginPath.replace(/\\/g, '/')}`;
+  opencodeConfig.plugin = opencodeConfig.plugin.filter(
+    (entry: unknown) => typeof entry !== 'string' || !entry.includes('agentmem-plugin.mjs')
   );
+  opencodeConfig.plugin.push(pluginUrl);
 
-  if (targetPath === opencodeJsoncPath && fs.existsSync(opencodeConfigPath)) {
-    fs.unlinkSync(opencodeConfigPath);
+  const warnings = [
+    ...applyManagedTextWrite(
+      context,
+      'opencode-config',
+      opencodePaths.configTargetPath,
+      serializeJson(opencodeConfig),
+      legacyBefore
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'opencode-plugin',
+      opencodePaths.pluginPath,
+      renderOpenCodePlugin({
+        startHookPath: context.paths.opencodeStartHook,
+        postHookPath: context.paths.opencodePostHook,
+      }),
+      fs.existsSync(opencodePaths.pluginPath)
+    ),
+  ];
+
+  if (
+    opencodePaths.configTargetPath === opencodePaths.configJsoncPath &&
+    fs.existsSync(opencodePaths.configJsonPath)
+  ) {
+    warnings.push(
+      ...applyManagedDelete(
+        context,
+        'opencode-displaced-json',
+        opencodePaths.configJsonPath,
+        detectOpenCodeLegacy(readJsonFile(opencodePaths.configJsonPath))
+      )
+    );
   }
 
   return {
+    action: 'merged-managed-entries',
     agent: 'opencode',
     ok: true,
-    targetPath,
-    message: `Registered plugin, generated hook bridge, and MCP server in OpenCode (${targetPath}, ${pluginPath})`,
+    targetPath: opencodePaths.configTargetPath,
+    message: `Registered plugin, generated hook bridge, and MCP server in OpenCode (${opencodePaths.configTargetPath}, ${opencodePaths.pluginPath})`,
+    warnings,
   };
 }
 
-function installCodex(paths: InstallPaths): InstallResult {
-  const codexConfigDir = path.join(paths.homeDir, '.codex');
+function installCodex(context: InstallContext): InstallResult {
+  const codexConfigDir = path.join(context.homeDir, '.codex');
   const codexConfigPath = path.join(codexConfigDir, 'config.toml');
   const codexHooksPath = path.join(codexConfigDir, 'hooks.json');
-
   ensureDir(codexConfigDir);
 
   const existingToml = fs.existsSync(codexConfigPath)
     ? fs.readFileSync(codexConfigPath, 'utf8')
     : '';
-  const updatedToml = updateCodexConfigToml(existingToml, paths.mcpServerPath);
-  fs.writeFileSync(codexConfigPath, updatedToml, 'utf8');
-
-  const hooksConfig = readJsonFile(codexHooksPath);
-  if (!hooksConfig.hooks) {
+  const existingHooks = readJsonFile(codexHooksPath);
+  const hooksConfig = cleanupCodexHooksConfig(existingHooks);
+  if (!isObject(hooksConfig.hooks)) {
     hooksConfig.hooks = {};
   }
+  hooksConfig.hooks.SessionStart = mergeManagedHookEntries(
+    hooksConfig.hooks.SessionStart,
+    'codex-session-start.js',
+    `node "${context.paths.codexStartHook}"`
+  );
+  hooksConfig.hooks.PostToolUse = mergeManagedHookEntries(
+    hooksConfig.hooks.PostToolUse,
+    'codex-post-tool.js',
+    `node "${context.paths.codexPostHook}"`
+  );
 
-  hooksConfig.hooks.SessionStart = [
-    {
-      matcher: '.*',
-      hooks: [{ type: 'command', command: `node "${paths.codexStartHook}"` }],
-    },
-  ];
-  hooksConfig.hooks.PostToolUse = [
-    {
-      matcher: '.*',
-      hooks: [{ type: 'command', command: `node "${paths.codexPostHook}"` }],
-    },
+  const warnings = [
+    ...applyManagedTextWrite(
+      context,
+      'codex-config',
+      codexConfigPath,
+      updateCodexConfigToml(existingToml, context.paths.mcpServerPath),
+      detectCodexConfigLegacy(existingToml)
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'codex-hooks',
+      codexHooksPath,
+      serializeJson(hooksConfig),
+      detectCodexHooksLegacy(existingHooks)
+    ),
   ];
 
-  writeJson(codexHooksPath, hooksConfig);
   return {
+    action: 'merged-managed-entries',
     agent: 'codex',
     ok: true,
     targetPath: codexConfigPath,
     message: `Registered hooks and MCP server in Codex (${codexConfigPath}, ${codexHooksPath})`,
+    warnings,
   };
 }
 
-function installAntigravity(paths: InstallPaths, overridePath?: string): InstallResult {
-  const configPath = resolveAntigravityConfigPath(paths.homeDir, overridePath);
+function installAntigravity(context: InstallContext, overridePath?: string): InstallResult {
+  const configPath = resolveAntigravityConfigPath(context.homeDir, overridePath);
   if (!configPath) {
     throw new Error(
       'Antigravity MCP registry was not found under ~/.gemini/config/plugins/*/mcp_config.json. ' +
@@ -404,26 +901,202 @@ function installAntigravity(paths: InstallPaths, overridePath?: string): Install
 
   ensureDir(path.dirname(configPath));
   const existingJson = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}';
-  const updatedJson = ensureAntigravityMcpServer(existingJson, paths.mcpServerPath);
-  fs.writeFileSync(configPath, updatedJson, 'utf8');
+  const warnings = applyManagedTextWrite(
+    context,
+    'antigravity-config',
+    configPath,
+    ensureAntigravityMcpServer(existingJson, context.paths.mcpServerPath),
+    detectAntigravityLegacy(readJsonFile(configPath, true))
+  );
 
   return {
+    action: 'merged-managed-entries',
     agent: 'antigravity',
     ok: true,
     targetPath: configPath,
     message: `Registered MCP server in Antigravity (${configPath})`,
+    warnings,
   };
+}
+
+function uninstallClaude(context: InstallContext): UninstallResult {
+  const claudeSettingsPath = path.join(context.homeDir, '.claude', 'settings.json');
+  const claudeGlobalPath = path.join(context.homeDir, '.claude.json');
+
+  const settingsCleanup = uninstallManagedTextTarget(context, {
+    cleanup: (currentText) => serializeJson(cleanupClaudeSettings(readJsonFileText(currentText))),
+    hasManagedContent: (currentText) =>
+      detectClaudeSettingsLegacy(readJsonFileText(currentText)),
+    kind: 'claude-settings',
+    targetPath: claudeSettingsPath,
+  });
+  const globalCleanup = uninstallManagedTextTarget(context, {
+    cleanup: (currentText) => serializeJson(cleanupClaudeGlobalConfig(readJsonFileText(currentText))),
+    hasManagedContent: (currentText) =>
+      detectClaudeGlobalLegacy(readJsonFileText(currentText)),
+    kind: 'claude-global',
+    targetPath: claudeGlobalPath,
+  });
+
+  return {
+    action: `${settingsCleanup.action}+${globalCleanup.action}`,
+    agent: 'claude',
+    ok: true,
+    targetPath: claudeSettingsPath,
+    message: `Uninstalled AgentMemory from Claude Code (${claudeSettingsPath}, ${claudeGlobalPath})`,
+    warnings: [...settingsCleanup.warnings, ...globalCleanup.warnings],
+  };
+}
+
+function uninstallOpenCode(context: InstallContext): UninstallResult {
+  const opencodePaths = resolveOpenCodePaths(context.homeDir);
+  const configCleanup = uninstallManagedTextTarget(context, {
+    cleanup: (currentText) => serializeJson(cleanupOpenCodeConfig(readJsonFileText(currentText))),
+    hasManagedContent: (currentText) =>
+      detectOpenCodeLegacy(readJsonFileText(currentText)),
+    kind: 'opencode-config',
+    targetPath: opencodePaths.configTargetPath,
+  });
+  const displacedCleanup =
+    opencodePaths.configTargetPath === opencodePaths.configJsoncPath
+      ? uninstallManagedTextTarget(context, {
+          cleanup: (currentText) => serializeJson(cleanupOpenCodeConfig(readJsonFileText(currentText))),
+          hasManagedContent: (currentText) =>
+            detectOpenCodeLegacy(readJsonFileText(currentText)),
+          kind: 'opencode-displaced-json',
+          targetPath: opencodePaths.configJsonPath,
+        })
+      : { action: 'no-op', warnings: [] };
+  const pluginCleanup = uninstallDedicatedArtifact(
+    context,
+    'opencode-plugin',
+    opencodePaths.pluginPath,
+    fs.existsSync(opencodePaths.pluginPath)
+  );
+
+  return {
+    action: `${configCleanup.action}+${pluginCleanup.action}`,
+    agent: 'opencode',
+    ok: true,
+    targetPath: opencodePaths.configTargetPath,
+    message: `Uninstalled AgentMemory from OpenCode (${opencodePaths.configTargetPath}, ${opencodePaths.pluginPath})`,
+    warnings: [
+      ...configCleanup.warnings,
+      ...displacedCleanup.warnings,
+      ...pluginCleanup.warnings,
+    ],
+  };
+}
+
+function uninstallCodex(context: InstallContext): UninstallResult {
+  const codexConfigPath = path.join(context.homeDir, '.codex', 'config.toml');
+  const codexHooksPath = path.join(context.homeDir, '.codex', 'hooks.json');
+
+  const configCleanup = uninstallManagedTextTarget(context, {
+    cleanup: (currentText) => removeCodexMcpServer(stripLegacyCodexHookTables(currentText)),
+    hasManagedContent: (currentText) => detectCodexConfigLegacy(currentText),
+    kind: 'codex-config',
+    targetPath: codexConfigPath,
+  });
+  const hooksCleanup = uninstallManagedTextTarget(context, {
+    cleanup: (currentText) => serializeJson(cleanupCodexHooksConfig(readJsonFileText(currentText))),
+    hasManagedContent: (currentText) => detectCodexHooksLegacy(readJsonFileText(currentText)),
+    kind: 'codex-hooks',
+    targetPath: codexHooksPath,
+  });
+
+  return {
+    action: `${configCleanup.action}+${hooksCleanup.action}`,
+    agent: 'codex',
+    ok: true,
+    targetPath: codexConfigPath,
+    message: `Uninstalled AgentMemory from Codex (${codexConfigPath}, ${codexHooksPath})`,
+    warnings: [...configCleanup.warnings, ...hooksCleanup.warnings],
+  };
+}
+
+function uninstallAntigravity(context: InstallContext, overridePath?: string): UninstallResult {
+  const configPath = resolveAntigravityConfigPath(context.homeDir, overridePath);
+  if (!configPath) {
+    return {
+      action: 'no-op',
+      agent: 'antigravity',
+      ok: true,
+      message: 'Antigravity MCP registry was not found during uninstall; nothing to remove.',
+      warnings: [],
+    };
+  }
+
+  const cleanup = uninstallManagedTextTarget(context, {
+    cleanup: (currentText) => serializeJson(cleanupAntigravityConfig(readJsonFileText(currentText))),
+    hasManagedContent: (currentText) =>
+      detectAntigravityLegacy(readJsonFileText(currentText)),
+    kind: 'antigravity-config',
+    targetPath: configPath,
+  });
+
+  return {
+    action: cleanup.action,
+    agent: 'antigravity',
+    ok: true,
+    targetPath: configPath,
+    message: `Uninstalled AgentMemory from Antigravity (${configPath})`,
+    warnings: cleanup.warnings,
+  };
+}
+
+function readJsonFileText(text: string): Record<string, any> {
+  return JSON.parse(stripComments(text || '{}') || '{}');
+}
+
+function removeFileIfExists(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+
+  fs.unlinkSync(filePath);
+  return true;
+}
+
+async function attemptGlobalUnlink(repoRoot: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const executable = process.platform === 'win32' ? 'cmd' : 'npm';
+    const args =
+      process.platform === 'win32'
+        ? ['/d', '/s', '/c', 'npm', 'unlink', '--global', 'agentmemory']
+        : ['unlink', '--global', 'agentmemory'];
+
+    const child = spawn(executable, args, {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+    });
+
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `npm unlink exited with code ${code}`));
+    });
+  });
 }
 
 export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPath?: string): string[] {
   const issues: string[] = [];
+  const opencodePaths = resolveOpenCodePaths(paths.homeDir);
 
   const claudeGlobalPath = path.join(paths.homeDir, '.claude.json');
   const claudeSettingsPath = path.join(paths.homeDir, '.claude', 'settings.json');
   const codexConfigPath = path.join(paths.homeDir, '.codex', 'config.toml');
   const codexHooksPath = path.join(paths.homeDir, '.codex', 'hooks.json');
-  const opencodeConfigPath = path.join(paths.homeDir, '.config', 'opencode', 'opencode.jsonc');
-  const opencodePluginPath = path.join(paths.homeDir, '.config', 'opencode', 'plugins', 'agentmem-plugin.mjs');
 
   const claudeGlobal = readJsonFile(claudeGlobalPath);
   if (claudeGlobal?.mcpServers?.agentmem?.args?.[0] !== paths.mcpServerPath) {
@@ -451,16 +1124,19 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
     issues.push(`Codex PostToolUse hook is missing (${codexHooksPath}).`);
   }
 
-  const opencodeConfig = readJsonFile(opencodeConfigPath, true);
+  const opencodeConfig = readJsonFile(
+    opencodePaths.configTargetPath,
+    opencodePaths.configTargetPath.endsWith('.jsonc')
+  );
   if (opencodeConfig?.mcp?.agentmem?.command?.[1] !== paths.mcpServerPath) {
-    issues.push(`OpenCode MCP server is missing or points somewhere else (${opencodeConfigPath}).`);
+    issues.push(`OpenCode MCP server is missing or points somewhere else (${opencodePaths.configTargetPath}).`);
   }
-  if (!fs.existsSync(opencodePluginPath)) {
-    issues.push(`OpenCode bridge plugin is missing (${opencodePluginPath}).`);
+  if (!fs.existsSync(opencodePaths.pluginPath)) {
+    issues.push(`OpenCode bridge plugin is missing (${opencodePaths.pluginPath}).`);
   } else {
-    const pluginText = fs.readFileSync(opencodePluginPath, 'utf8');
+    const pluginText = fs.readFileSync(opencodePaths.pluginPath, 'utf8');
     if (!pluginText.includes(paths.opencodeStartHook) || !pluginText.includes(paths.opencodePostHook)) {
-      issues.push(`OpenCode bridge plugin does not point at the built hook scripts (${opencodePluginPath}).`);
+      issues.push(`OpenCode bridge plugin does not point at the built hook scripts (${opencodePaths.pluginPath}).`);
     }
   }
 
@@ -476,15 +1152,20 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
 
 export function installAgentMemory(options: InstallOptions): InstallResult[] {
   const homeDir = options.homeDir || os.homedir();
-  const paths = resolveInstallPaths(options.repoRoot, homeDir);
+  const context: InstallContext = {
+    homeDir,
+    paths: resolveInstallPaths(options.repoRoot, homeDir),
+    state: loadInstallState(homeDir),
+  };
+
   const results: InstallResult[] = [];
   const failures: string[] = [];
 
   const steps: Array<{ agent: InstallResult['agent']; run: () => InstallResult }> = [
-    { agent: 'claude', run: () => installClaude(paths) },
-    { agent: 'opencode', run: () => installOpenCode(paths) },
-    { agent: 'codex', run: () => installCodex(paths) },
-    { agent: 'antigravity', run: () => installAntigravity(paths, options.antigravityConfigPath) },
+    { agent: 'claude', run: () => installClaude(context) },
+    { agent: 'opencode', run: () => installOpenCode(context) },
+    { agent: 'codex', run: () => installCodex(context) },
+    { agent: 'antigravity', run: () => installAntigravity(context, options.antigravityConfigPath) },
   ];
 
   for (const step of steps) {
@@ -493,6 +1174,7 @@ export function installAgentMemory(options: InstallOptions): InstallResult[] {
     } catch (error: any) {
       const message = error?.message || String(error);
       results.push({
+        action: 'failed',
         agent: step.agent,
         ok: false,
         message,
@@ -501,9 +1183,111 @@ export function installAgentMemory(options: InstallOptions): InstallResult[] {
     }
   }
 
-  const antigravityPath = resolveAntigravityConfigPath(homeDir, options.antigravityConfigPath) || undefined;
-  const validationIssues = validateInstalledFiles(paths, antigravityPath);
+  const antigravityPath =
+    resolveAntigravityConfigPath(homeDir, options.antigravityConfigPath) || undefined;
+  const validationIssues = validateInstalledFiles(context.paths, antigravityPath);
   failures.push(...validationIssues);
+
+  if ((options.strict || false) && failures.length > 0) {
+    throw new Error(failures.join('\n'));
+  }
+
+  return results;
+}
+
+export async function uninstallAgentMemory(options: UninstallOptions): Promise<UninstallResult[]> {
+  const homeDir = options.homeDir || os.homedir();
+  const context: InstallContext = {
+    homeDir,
+    paths: resolveInstallPaths(options.repoRoot, homeDir),
+    state: loadInstallState(homeDir),
+  };
+
+  const results: UninstallResult[] = [];
+  const failures: string[] = [];
+
+  const steps: Array<{ agent: UninstallResult['agent']; run: () => UninstallResult }> = [
+    { agent: 'claude', run: () => uninstallClaude(context) },
+    { agent: 'opencode', run: () => uninstallOpenCode(context) },
+    { agent: 'codex', run: () => uninstallCodex(context) },
+    { agent: 'antigravity', run: () => uninstallAntigravity(context, options.antigravityConfigPath) },
+  ];
+
+  for (const step of steps) {
+    try {
+      results.push(step.run());
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      results.push({
+        action: 'failed',
+        agent: step.agent,
+        ok: false,
+        message,
+      });
+      failures.push(message);
+    }
+  }
+
+  const runtimeDir = path.join(homeDir, '.agentmem');
+  const removedArtifacts: string[] = [];
+  if (removeFileIfExists(path.join(runtimeDir, '.env'))) {
+    removedArtifacts.push(path.join(runtimeDir, '.env'));
+  }
+  if (removeFileIfExists(path.join(runtimeDir, 'agentmemory.db'))) {
+    removedArtifacts.push(path.join(runtimeDir, 'agentmemory.db'));
+  }
+  if (removeFileIfExists(path.join(runtimeDir, 'worker.pid'))) {
+    removedArtifacts.push(path.join(runtimeDir, 'worker.pid'));
+  }
+
+  results.push({
+    action: removedArtifacts.length > 0 ? 'removed-runtime-artifacts' : 'no-op',
+    agent: 'runtime',
+    ok: true,
+    message:
+      removedArtifacts.length > 0
+        ? `Removed AgentMemory runtime artifacts (${removedArtifacts.join(', ')})`
+        : 'No AgentMemory runtime artifacts were present.',
+  });
+
+  if (options.purgeAll) {
+    purgeInstallStateArtifacts(homeDir);
+    results.push({
+      action: 'purged-install-state',
+      agent: 'runtime',
+      ok: true,
+      message: `Removed ${path.join(homeDir, '.agentmem', 'install-state.json')} and backup artifacts.`,
+    });
+  }
+
+  const skipGlobalUnlink = options.skipGlobalUnlink || process.env.AGENTMEM_SKIP_GLOBAL_UNLINK === '1';
+  if (skipGlobalUnlink) {
+    results.push({
+      action: 'skipped-global-unlink',
+      agent: 'cli',
+      ok: true,
+      message: 'Skipped npm unlink --global agentmemory.',
+    });
+  } else {
+    try {
+      await attemptGlobalUnlink(options.repoRoot);
+      results.push({
+        action: 'unlinked-global-cli',
+        agent: 'cli',
+        ok: true,
+        message: 'Removed the global agentmem CLI link.',
+      });
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      results.push({
+        action: 'failed-global-unlink',
+        agent: 'cli',
+        ok: false,
+        message,
+      });
+      failures.push(message);
+    }
+  }
 
   if ((options.strict || false) && failures.length > 0) {
     throw new Error(failures.join('\n'));

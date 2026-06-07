@@ -139,6 +139,24 @@ export function ensureCodexMcpServer(toml: string, mcpServerPath: string): strin
   return formatTomlSections(outputSections);
 }
 
+export function removeCodexMcpServer(toml: string): string {
+  const sections = parseTomlSections(stripLegacyCodexHookTables(toml));
+  const outputSections: TomlSection[] = [{ name: null, lines: sections[0]?.lines || [] }];
+
+  for (const section of sections.slice(1)) {
+    if (section.name === 'mcp_servers.agentmem') {
+      continue;
+    }
+
+    outputSections.push({
+      name: section.name,
+      lines: stripLegacyCodexHookLines(section.lines),
+    });
+  }
+
+  return formatTomlSections(outputSections);
+}
+
 export function updateCodexConfigToml(toml: string, mcpServerPath: string): string {
   const withHooks = ensureCodexHooksEnabled(toml);
   return ensureCodexMcpServer(withHooks, mcpServerPath);

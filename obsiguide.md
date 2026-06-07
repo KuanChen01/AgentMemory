@@ -92,6 +92,8 @@
 - bootstrap 对缺失配置现在会生成“空 API key + 默认 URL / model”的 `.env` 骨架后立即失败，不再写入会被 worker 误当作真实凭证的 `fill-me` 假 key；同时会把遗留 `DEEPSEEK_*` 键迁移到 `AGENTMEM_LLM_*`。
 - 已新增 `tests/install-bootstrap.test.cjs`，覆盖 OpenCode 插件生成、Antigravity registry upsert、`install --strict` 失败语义、缺失凭证时的 bootstrap scaffold，以及 legacy `DEEPSEEK_*` 到 `AGENTMEM_LLM_*` 的迁移。
 - 已完成真实配置 `node dist/bin/cli.js install --strict` 验证；并在隔离的 temp HOME + dummy key 环境下完成 `node dist/bin/cli.js bootstrap-win --no-open --strict --port 38892 ...` 端到端 smoke，确认 bootstrap 可以启动新 worker 并返回零 `installValidationIssues`。
+- 安装器现在已从“直接覆盖配置”切换为 stateful config manager：首次安装会把可用的干净基线记录到 `~/.agentmem/install-state.json` 与 `~/.agentmem/backups/`，后续 install 只 merge / upsert AgentMemory 自己的 hooks、MCP 项和 OpenCode 插件，不再整段重写 hooks 数组。
+- CLI 已新增 `agentmem uninstall [--strict] [--antigravity-config <path>] [--purge-all]`：默认采用 safe rollback，未漂移文件会恢复 pristine 备份，安装后被用户继续编辑或属于 legacy 无基线的文件只做定向 AgentMemory cleanup 并给出 warning；同时会移除 `.env`、`agentmemory.db`、OpenCode `agentmem-plugin.mjs`，并尝试 `npm unlink --global agentmemory`。
 - 已新增 `src/services/llm-config.ts` 与 loopback-only `/admin/api/llm-config` / `/admin/api/llm-test`，支持从网页 UI 读取脱敏 LLM 配置、保存 `AGENTMEM_LLM_*` model / endpoint / headers / JSON mode / optional API key，并用当前表单值执行 OpenAI-compatible `chat/completions` 连接测试。
 - `/admin` 已新增 `LLM Settings` 工作区，提供模型切换、endpoint 更新、API key 保留/替换、自定义 headers、JSON mode toggle、reload/save 和 inline connection test result；测试按钮在缺 key 时返回页面内错误态，不使用 `window.alert()`。
 - `/admin` 视觉系统已从旧版偏蓝紫 glass-heavy 控制台收敛为更克制的 iOS/liquid-glass 产品 UI：低半径 glass material、清晰 focus ring、hover/active feedback、panel enter motion、reduced-motion fallback、移动端无横向溢出。
@@ -128,6 +130,8 @@
 - `node dist/hooks/opencode-session-start.js`
 - `node dist/servers/mcp-server.js`
 - `node dist/bin/cli.js install --strict`
+- `node dist/bin/cli.js uninstall --strict`
+- `node dist/bin/cli.js uninstall --strict --purge-all`
 - `node dist/bin/cli.js bootstrap-win --no-open --strict`
 - `node --test tests/install-bootstrap.test.cjs`
 - `node --test tests/*.test.cjs`
@@ -172,6 +176,7 @@
 - 已新增第二台 Windows 电脑的严格 bootstrap 路径：`agentmem bootstrap-win`、`scripts/bootstrap-second-machine.ps1`、`bootstrap-second-machine.cmd` 与中文落地文档 `docs/Second Machine Bootstrap Guide.zh.md`。
 - bootstrap 的 `.env` scaffold 现在采用“空 key + 默认 URL/model”的安全骨架，并会把 legacy `DEEPSEEK_*` 自动迁移到 `AGENTMEM_LLM_*`，避免把占位值误当成真实凭证。
 - 已新增 installer/bootstrap 回归测试并通过全量 `node:test`，同时完成一次 temp HOME + dummy key 的真实 bootstrap smoke。
+- 安装器现已引入 install-state + backups 机制，并把 Claude/Codex/OpenCode/Antigravity 的配置写入改为 backup-first、merge-first；同时新增 `agentmem uninstall`，支持 safe rollback、legacy fallback cleanup 与可选 `--purge-all`。
 - `/admin` 管理工作台现已支持网页内 LLM 模型切换与连接测试：配置保存会写入 `~/.agentmem/.env` 并同步更新当前 worker 进程，读取接口只返回脱敏 key 状态，连接测试用当前表单值发起小型 `chat/completions` 请求。
 - `/admin` 前端已完成 iOS/liquid-glass 产品 UI redesign，并通过桌面与移动截图自检确认 `LLM Settings` 面板、动效落点和响应式布局无横向溢出。
 - `PRODUCT.md` 现在作为 Impeccable 产品设计上下文存在于仓库根目录，记录 AgentMemory admin workbench 的 product register、用户、目的、设计原则和 accessibility baseline。
@@ -182,9 +187,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 审阅并提交这批 `/admin` release-check 变更；如需进一步对外验收，再基于真实 GitHub Release 页面补一次 live UI smoke，并确认 Runtime 卡片文案与手动升级路径足够清晰。
+- 审阅并提交这批 safer installer / uninstall 变更，并决定是否进一步给 `/admin` 增加“显示本机 install-state / backup 状态”的只读诊断视图。
 
 ## Last Sync
 - date: 2026-06-07
-- status: 已将 GitHub Release 感知的网页更新提示真正落地到 `/admin`：新增 `src/services/release-check.ts`、`GET /admin/api/release-check`、Runtime release/update 卡片、`Check for Updates` / `Open Release` 交互，以及适用于 git checkout / 源码归档的手动升级指引；已通过 `npm run build`、`node --test tests/release-check.test.cjs`、`node --test tests/worker-admin.test.cjs` 验证。
+- status: 已将安装器升级为 backup-first / merge-first 的 stateful config manager：新增 `src/services/install-state.ts`、`agentmem uninstall`、Codex `removeCodexMcpServer` cleanup helper，以及 safe rollback / legacy cleanup 语义；已通过 `npm run build` 与 `node --test tests/*.test.cjs` 全量回归验证。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

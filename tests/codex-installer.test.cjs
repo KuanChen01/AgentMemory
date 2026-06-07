@@ -11,6 +11,7 @@ const cliPath = path.join(projectRoot, 'dist', 'bin', 'cli.js');
 const {
   ensureCodexHooksEnabled,
   ensureCodexMcpServer,
+  removeCodexMcpServer,
   updateCodexConfigToml,
 } = require('../dist/services/codex-installer.js');
 
@@ -101,6 +102,28 @@ command = "python"
   assert.equal(countMatches(updated, /^\[mcp_servers\.agentmem\]$/gm), 1);
   assert.match(updated, /^\[mcp_servers\.agentmem\]\ncommand = "node"\nargs = \[ "E:\/Repo\/AgentMemory\/dist\/servers\/mcp-server\.js" \]$/m);
   assert.match(updated, /^\[mcp_servers\.other\]$/m);
+});
+
+test('removeCodexMcpServer strips only the agentmem MCP section', () => {
+  const original = `[features]
+hooks = true
+model = "gpt-5"
+
+[mcp_servers.agentmem]
+command = "node"
+args = ["E:/Repo/AgentMemory/dist/servers/mcp-server.js"]
+
+[mcp_servers.other]
+command = "python"
+args = ["server.py"]
+`;
+
+  const updated = removeCodexMcpServer(original);
+
+  assert.doesNotMatch(updated, /^\[mcp_servers\.agentmem\]$/m);
+  assert.match(updated, /^\[mcp_servers\.other\]$/m);
+  assert.match(updated, /^\s*hooks\s*=\s*true$/m);
+  assert.match(updated, /^\s*model\s*=\s*"gpt-5"$/m);
 });
 
 test('updateCodexConfigToml is idempotent across repeated runs', () => {

@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import dotenv from 'dotenv';
-import { installAgentMemory } from '../services/agent-installer';
+import { installAgentMemory, uninstallAgentMemory } from '../services/agent-installer';
 import { runWindowsBootstrap } from '../services/bootstrap';
 import {
   buildReleaseManifest,
@@ -39,6 +39,7 @@ interface ParsedOptions {
   next?: ReleaseIncrement;
   noOpen?: boolean;
   port?: number;
+  purgeAll?: boolean;
   setVersion?: string;
   strict?: boolean;
 }
@@ -88,6 +89,9 @@ function parseOptions(tokens: string[]): ParsedOptions {
         }
         index += 1;
         break;
+      case '--purge-all':
+        parsed.purgeAll = true;
+        break;
       case '--set-version':
         parsed.setVersion = nextToken;
         index += 1;
@@ -115,6 +119,9 @@ async function main() {
       break;
     case 'install':
       await runInstaller(options);
+      break;
+    case 'uninstall':
+      await runUninstaller(options);
       break;
     case 'bootstrap-win':
       await bootstrapWin(options);
@@ -145,6 +152,7 @@ Usage:
   agentmem status
   agentmem version
   agentmem install [--strict] [--antigravity-config <path>]
+  agentmem uninstall [--strict] [--antigravity-config <path>] [--purge-all]
   agentmem bootstrap-win [--strict] [--no-open] [--antigravity-config <path>] [--api-key <key>] [--api-url <url>] [--model <name>] [--port <number>]
   agentmem release-manifest [--json]
   agentmem release-plan --next <patch|minor|major>
@@ -233,15 +241,27 @@ async function runInstaller(options: ParsedOptions) {
     strict: options.strict,
   });
 
-  for (const result of results) {
-    const prefix = result.ok ? '[Success]' : '[Warning]';
-    const suffix = result.targetPath ? `: ${result.targetPath}` : '';
-    console.log(`${prefix} ${result.message}${suffix}`);
-  }
+  printManagedResults(results);
 
   console.log(
     '\nAgentMemory installation complete. If this is a fresh checkout, run "npm run build" before starting the worker.'
   );
+}
+
+async function runUninstaller(options: ParsedOptions) {
+  console.log('Removing AgentMemory machine-local integrations...\n');
+  await stopWorker();
+
+  const repoRoot = path.resolve(__dirname, '../..');
+  const results = await uninstallAgentMemory({
+    antigravityConfigPath: options.antigravityConfigPath,
+    purgeAll: options.purgeAll,
+    repoRoot,
+    strict: options.strict,
+  });
+
+  printManagedResults(results);
+  console.log('\nAgentMemory uninstall complete.');
 }
 
 async function bootstrapWin(options: ParsedOptions) {
@@ -312,6 +332,20 @@ function bumpReleaseVersion(options: ParsedOptions) {
       '- node --test tests/*.test.cjs',
     ].join('\n')
   );
+}
+
+function printManagedResults(
+  results: Array<{ ok: boolean; message: string; targetPath?: string; warnings?: string[] }>
+) {
+  for (const result of results) {
+    const prefix = result.ok ? '[Success]' : '[Warning]';
+    const suffix = result.targetPath ? `: ${result.targetPath}` : '';
+    console.log(`${prefix} ${result.message}${suffix}`);
+
+    for (const warning of result.warnings || []) {
+      console.log(`[Warning] ${warning}`);
+    }
+  }
 }
 
 main().catch((err) => {

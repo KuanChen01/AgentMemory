@@ -101,6 +101,19 @@ If you want the command to fail whenever any one of the four agents cannot be co
 agentmem install --strict
 ```
 
+The installer is now backup-first and merge-first:
+
+- It stores install state in `~/.agentmem/install-state.json`
+- It keeps pristine baselines under `~/.agentmem/backups/` when available
+- It merges only AgentMemory-owned hooks / MCP entries instead of replacing whole hook arrays
+
+To remove AgentMemory from the current machine without deleting the repo checkout, use:
+```bash
+agentmem uninstall --strict
+```
+
+Add `--purge-all` if you also want to remove the retained install-state and backup artifacts after cleanup.
+
 For a second Windows machine, use the dedicated bootstrap entry instead of repeating the setup manually:
 ```powershell
 .\bootstrap-second-machine.cmd
@@ -120,6 +133,8 @@ Run these commands globally from any directory:
 *   **Print Version**: `agentmem version`
 *   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, and Antigravity settings)
 *   **Strict Setup**: `agentmem install --strict` (fails if any one of the four agents cannot be configured)
+*   **Uninstall Local Integration**: `agentmem uninstall --strict` (removes AgentMemory-managed hooks, MCP entries, plugin artifacts, `.env`, and database files from the current machine)
+*   **Purge Local Install State**: `agentmem uninstall --strict --purge-all` (also removes retained backup and install-state artifacts)
 *   **Second-Machine Bootstrap**: `agentmem bootstrap-win --strict` or `bootstrap-second-machine.cmd`
 *   **Release Manifest**: `agentmem release-manifest --json` (prints the machine-readable release policy and current version)
 *   **Release Plan**: `npm run release:plan -- --next patch|minor|major` (prints the manual release checklist for the next version)
