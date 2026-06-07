@@ -172,6 +172,7 @@
 - `/admin` 管理工作台现已支持中英文 UI 切换：默认跟随浏览器语言，手动切换结果保存在 `localStorage`，并通过 `tests/worker-admin.test.cjs` 与真实浏览器 smoke 验证了外壳翻译和旧状态线空引用回归。
 - 已对今天的 `/admin` 中英文 UI 与 workbench 相关源码变更重新执行 `npm run build`，同步刷新本地 `dist/` 分发产物，并再次通过 `node --test tests/worker-admin.test.cjs` 确认分发文件与源码状态一致。
 - 已新增 Windows 一键启动入口：`npm run workbench`、`scripts/start-workbench.ps1` 和 `start-workbench.cmd`，用于构建、探测 / 复用 worker、等待 `/admin` 就绪并打开浏览器。
+- `start-workbench.cmd` 现已升级为交互式 workbench 控制入口：无参数时会先探测状态，再显示 `Start / Stop / Restart / Status / Open Admin / Exit` 菜单；参数模式支持 `start|stop|restart|status|open-admin|menu`、`--port` 与 `--no-open`，而 `npm run workbench` 继续保留“一键启动并在复用已有 worker 时打开 `/admin`”的旧语义。
 - 已将安装器扩展到四个 agent：`agentmem install` 现在会生成 OpenCode 桥接插件、自动 upsert Antigravity MCP registry，并支持 `--strict` / `--antigravity-config`。
 - 已新增第二台 Windows 电脑的严格 bootstrap 路径：`agentmem bootstrap-win`、`scripts/bootstrap-second-machine.ps1`、`bootstrap-second-machine.cmd` 与中文落地文档 `docs/Second Machine Bootstrap Guide.zh.md`。
 - bootstrap 的 `.env` scaffold 现在采用“空 key + 默认 URL/model”的安全骨架，并会把 legacy `DEEPSEEK_*` 自动迁移到 `AGENTMEM_LLM_*`，避免把占位值误当成真实凭证。
@@ -187,9 +188,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 审阅并提交这批 safer installer / uninstall 变更，并决定是否进一步给 `/admin` 增加“显示本机 install-state / backup 状态”的只读诊断视图。
+- 观察 `v1.1.0` 发布后的 operator 反馈，并决定是否继续把本机 `install-state / backup` 状态以只读诊断方式暴露到 `/admin`，以及是否需要给 workbench 增加显式 port selector。
 
 ## Last Sync
 - date: 2026-06-07
-- status: 已将安装器升级为 backup-first / merge-first 的 stateful config manager：新增 `src/services/install-state.ts`、`agentmem uninstall`、Codex `removeCodexMcpServer` cleanup helper，以及 safe rollback / legacy cleanup 语义；已通过 `npm run build` 与 `node --test tests/*.test.cjs` 全量回归验证。
+- status: 已完成交互式 workbench 控制入口与 `v1.1.0` release candidate 验证：`start-workbench.cmd` 现已支持状态感知菜单与参数模式，`npm run workbench` 继续保留一键启动语义，并已通过无参数菜单 smoke、`node --test tests/workbench-*.test.cjs`、`npm run build` 与 `node --test tests/*.test.cjs` 全量回归验证。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

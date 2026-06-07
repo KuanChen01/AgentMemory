@@ -7,6 +7,9 @@ const { spawn } = require('node:child_process');
 
 const projectRoot = path.resolve(__dirname, '..');
 const cliPath = path.join(projectRoot, 'dist', 'bin', 'cli.js');
+const currentPackageVersion = JSON.parse(
+  fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')
+).version;
 const {
   buildReleaseManifest,
   bumpSemVer,
@@ -92,8 +95,8 @@ test('updatePackageLockVersionText rewrites both top-level and workspace package
 test('buildReleaseManifest returns the stable release policy for AgentMemory', () => {
   const manifest = buildReleaseManifest();
   assert.equal(manifest.productName, 'AgentMemory');
-  assert.equal(manifest.version, '1.0.0');
-  assert.equal(manifest.tagName, 'v1.0.0');
+  assert.equal(manifest.version, currentPackageVersion);
+  assert.equal(manifest.tagName, `v${currentPackageVersion}`);
   assert.equal(manifest.stableBranch, 'master');
   assert.equal(manifest.versioning, 'semver');
   assert.equal(manifest.distributionChannel, 'github-release-source');
@@ -106,8 +109,8 @@ test('agentmem release-manifest --json prints machine-readable release metadata'
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
 
   const payload = JSON.parse(result.stdout);
-  assert.equal(payload.version, '1.0.0');
-  assert.equal(payload.tagName, 'v1.0.0');
+  assert.equal(payload.version, currentPackageVersion);
+  assert.equal(payload.tagName, `v${currentPackageVersion}`);
   assert.equal(payload.stableBranch, 'master');
   assert.equal(payload.distributionChannel, 'github-release-source');
 });
@@ -115,10 +118,12 @@ test('agentmem release-manifest --json prints machine-readable release metadata'
 test('agentmem release-plan --next minor prints the next tag and release checklist', async () => {
   const result = await runCli(['release-plan', '--next', 'minor']);
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /Current version:\s+1\.0\.0/);
-  assert.match(result.stdout, /Next version:\s+1\.1\.0/);
+  const nextMinorVersion = bumpSemVer(currentPackageVersion, 'minor').replace(/\./g, '\\.');
+  const currentVersionPattern = currentPackageVersion.replace(/\./g, '\\.');
+  assert.match(result.stdout, new RegExp(`Current version:\\s+${currentVersionPattern}`));
+  assert.match(result.stdout, new RegExp(`Next version:\\s+${nextMinorVersion}`));
   assert.match(result.stdout, /Release branch:\s+master/);
-  assert.match(result.stdout, /Release tag:\s+v1\.1\.0/);
+  assert.match(result.stdout, new RegExp(`Release tag:\\s+v${nextMinorVersion}`));
   assert.match(result.stdout, /npm run build/);
   assert.match(result.stdout, /node --test tests\/\*\.test\.cjs/);
   assert.match(result.stdout, /GitHub Release/);
@@ -127,5 +132,6 @@ test('agentmem release-plan --next minor prints the next tag and release checkli
 test('agentmem version prints the current product version', async () => {
   const result = await runCli(['version']);
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /AgentMemory\s+v1\.0\.0/);
+  const currentVersionPattern = currentPackageVersion.replace(/\./g, '\\.');
+  assert.match(result.stdout, new RegExp(`AgentMemory\\s+v${currentVersionPattern}`));
 });

@@ -8,6 +8,11 @@ const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const { DatabaseManager } = require('../dist/services/db.js');
+const { bumpSemVer } = require('../dist/services/release.js');
+const projectRoot = path.resolve(__dirname, '..');
+const currentPackageVersion = JSON.parse(
+  fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')
+).version;
 
 function makeDbPath() {
   return path.join(os.tmpdir(), `agentmemory-worker-test-${randomUUID()}.db`);
@@ -222,10 +227,11 @@ function cleanupDb(dbPath) {
 test('worker serves admin UI and admin APIs', async () => {
   const dbPath = makeDbPath();
   const port = makePort();
+  const latestVersion = bumpSemVer(currentPackageVersion, 'patch');
   await seedDatabase(dbPath);
   const mockRelease = await startMockReleaseServer({
-    tag_name: 'v1.0.1',
-    html_url: 'http://127.0.0.1/release/v1.0.1',
+    tag_name: `v${latestVersion}`,
+    html_url: `http://127.0.0.1/release/v${latestVersion}`,
   });
   const child = await startWorkerWithEnv(dbPath, port, {
     AGENTMEM_LATEST_RELEASE_API_URL: mockRelease.url,
@@ -268,8 +274,8 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.ok(overview.projects.includes('E:/Repo/A'));
     assert.ok(overview.agents.includes('codex'));
     assert.equal(overview.stats.currentStateFacts, 2);
-    assert.equal(overview.release.version, '1.0.0');
-    assert.equal(overview.release.tagName, 'v1.0.0');
+    assert.equal(overview.release.version, currentPackageVersion);
+    assert.equal(overview.release.tagName, `v${currentPackageVersion}`);
     assert.equal(overview.release.stableBranch, 'master');
     assert.equal(overview.release.versioning, 'semver');
 
@@ -277,10 +283,10 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.equal(releaseCheckResponse.status, 200);
     const releaseCheck = await releaseCheckResponse.json();
     assert.equal(releaseCheck.status, 'update_available');
-    assert.equal(releaseCheck.currentVersion, '1.0.0');
-    assert.equal(releaseCheck.latestVersion, '1.0.1');
-    assert.equal(releaseCheck.latestTag, 'v1.0.1');
-    assert.equal(releaseCheck.releaseUrl, 'http://127.0.0.1/release/v1.0.1');
+    assert.equal(releaseCheck.currentVersion, currentPackageVersion);
+    assert.equal(releaseCheck.latestVersion, latestVersion);
+    assert.equal(releaseCheck.latestTag, `v${latestVersion}`);
+    assert.equal(releaseCheck.releaseUrl, `http://127.0.0.1/release/v${latestVersion}`);
     assert.equal(releaseCheck.upgradeGuidance.installMode, 'git_checkout');
     assert.deepEqual(releaseCheck.upgradeGuidance.commands, ['git pull', '.\\bootstrap-second-machine.cmd']);
     assert.ok(mockRelease.requests.some((request) => request.url === '/releases/latest'));
