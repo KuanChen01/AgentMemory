@@ -117,9 +117,13 @@ Run these commands globally from any directory:
 *   **Start Worker**: `agentmem start` (launches the memory worker service; keep the terminal open while it is running)
 *   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
 *   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
+*   **Print Version**: `agentmem version`
 *   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, and Antigravity settings)
 *   **Strict Setup**: `agentmem install --strict` (fails if any one of the four agents cannot be configured)
 *   **Second-Machine Bootstrap**: `agentmem bootstrap-win --strict` or `bootstrap-second-machine.cmd`
+*   **Release Manifest**: `agentmem release-manifest --json` (prints the machine-readable release policy and current version)
+*   **Release Plan**: `npm run release:plan -- --next patch|minor|major` (prints the manual release checklist for the next version)
+*   **Release Bump**: `npm run release:bump -- --next patch|minor|major` (updates the root package version metadata before a release commit)
 
 ### 🪟 Windows Bootstrap
 
@@ -133,7 +137,18 @@ cd AgentMemory
 
 The bootstrap script runs `npm install`, `npm run build`, creates or validates `%USERPROFILE%\.agentmem\.env`, runs `npm link`, configures all four agents, probes or starts the worker, and opens `/admin`.
 
-If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a placeholder scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
+If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a blank scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
+
+### 📦 Release Discipline
+
+AgentMemory now treats product releases as a first-class maintainer workflow:
+
+*   Official releases are published from `master` only.
+*   Versioning is strict `SemVer` with tags shaped like `v1.2.3`.
+*   The current v1 distribution channel is **GitHub Release + default source archives**.
+*   Release metadata is exposed through the CLI (`agentmem release-manifest`) and `/admin/api/overview`, and `/admin/api/release-check` now compares the current checkout against the latest published GitHub Release.
+
+Detailed maintainer workflow: [docs/Release Process.md](./docs/Release%20Process.md)
 
 ---
 
@@ -156,7 +171,7 @@ Both paths build the repo, probe `http://127.0.0.1:38888/admin/api/overview`, re
 
 The page provides:
 
-*   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, and workbench posture
+*   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, workbench posture, and a read-only GitHub Release update check with manual upgrade guidance
 *   **LLM Settings** for switching `AGENTMEM_LLM_MODEL`, updating the OpenAI-compatible API base URL, preserving or replacing the API key, and running a live connection test
 *   **Project Context** for the current `ProjectContextView`, rendered startup text, and payload / summary health metrics
 *   **State Lab** for explicit structured state reads and writes
@@ -197,6 +212,7 @@ The workbench also exposes loopback-only admin APIs for the UI:
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads structured state for the workbench
 *   `POST /admin/api/state` explicitly writes a structured state fact from the workbench
 *   `POST /admin/api/search` returns raw hybrid search diagnostics for the current project without changing the ranking algorithm
+*   `GET /admin/api/release-check` compares the current checkout against the latest published GitHub Release and returns manual upgrade guidance for either git checkouts or source archives
 *   `GET /admin/api/llm-config` returns a sanitized LLM config snapshot without exposing the full API key
 *   `POST /admin/api/llm-config` persists model, API URL, JSON-mode, headers, and optional API key changes to `~/.agentmem/.env` and updates the running worker process
 *   `POST /admin/api/llm-test` sends a small OpenAI-compatible `chat/completions` request with the current form values and returns pass/fail diagnostics
@@ -219,10 +235,11 @@ Both flags are stored in SQLite `app_settings`, so the selected policy survives 
 1. Start the workbench with `npm run workbench`, `start-workbench.cmd`, or start the worker manually with `agentmem start`
 2. Open `http://127.0.0.1:38888/admin`
 3. Use the `Read Memory` and `Write Memory` switches to change runtime policy
-4. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
-5. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
-6. Use `Observation Ledger` to drill into the raw observation history when needed
-7. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
+4. Use the Runtime release card to compare the current checkout with the latest GitHub Release and choose the recommended manual upgrade path
+5. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
+6. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
+7. Use `Observation Ledger` to drill into the raw observation history when needed
+8. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
 
 ---
 

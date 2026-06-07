@@ -12,6 +12,9 @@
     "worker": "ts-node src/services/worker.ts",
     "mcp": "ts-node src/servers/mcp-server.ts",
     "cli": "ts-node src/bin/cli.ts",
+    "release:manifest": "ts-node src/bin/cli.ts release-manifest --json",
+    "release:plan": "ts-node src/bin/cli.ts release-plan",
+    "release:bump": "ts-node src/bin/cli.ts release-bump",
     "workbench": "powershell -ExecutionPolicy Bypass -File .\\scripts\\start-workbench.ps1",
     "bootstrap:win": "powershell -ExecutionPolicy Bypass -File .\\scripts\\bootstrap-second-machine.ps1",
     "test": "echo \"Error: no test specified\" && exit 0"

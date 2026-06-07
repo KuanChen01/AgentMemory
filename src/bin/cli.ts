@@ -6,6 +6,14 @@ import os from 'os';
 import dotenv from 'dotenv';
 import { installAgentMemory } from '../services/agent-installer';
 import { runWindowsBootstrap } from '../services/bootstrap';
+import {
+  buildReleaseManifest,
+  buildReleasePlan,
+  ReleaseIncrement,
+  renderReleaseManifestText,
+  renderReleasePlanText,
+  writeReleaseVersion,
+} from '../services/release';
 
 const homeDir = os.homedir();
 const vaultDir = path.join(homeDir, '.agentmem');
@@ -26,9 +34,12 @@ interface ParsedOptions {
   antigravityConfigPath?: string;
   apiKey?: string;
   apiUrl?: string;
+  json?: boolean;
   model?: string;
+  next?: ReleaseIncrement;
   noOpen?: boolean;
   port?: number;
+  setVersion?: string;
   strict?: boolean;
 }
 
@@ -62,10 +73,23 @@ function parseOptions(tokens: string[]): ParsedOptions {
         parsed.model = nextToken;
         index += 1;
         break;
+      case '--json':
+        parsed.json = true;
+        break;
+      case '--next':
+        if (nextToken === 'patch' || nextToken === 'minor' || nextToken === 'major') {
+          parsed.next = nextToken;
+        }
+        index += 1;
+        break;
       case '--port':
         if (Number.isFinite(Number(nextToken))) {
           parsed.port = Number(nextToken);
         }
+        index += 1;
+        break;
+      case '--set-version':
+        parsed.setVersion = nextToken;
         index += 1;
         break;
       default:
@@ -95,6 +119,18 @@ async function main() {
     case 'bootstrap-win':
       await bootstrapWin(options);
       break;
+    case 'version':
+      printVersion();
+      break;
+    case 'release-manifest':
+      printReleaseManifest(options);
+      break;
+    case 'release-plan':
+      printReleasePlan(options);
+      break;
+    case 'release-bump':
+      bumpReleaseVersion(options);
+      break;
     default:
       printHelp();
   }
@@ -107,8 +143,12 @@ Usage:
   agentmem start
   agentmem stop
   agentmem status
+  agentmem version
   agentmem install [--strict] [--antigravity-config <path>]
   agentmem bootstrap-win [--strict] [--no-open] [--antigravity-config <path>] [--api-key <key>] [--api-url <url>] [--model <name>] [--port <number>]
+  agentmem release-manifest [--json]
+  agentmem release-plan --next <patch|minor|major>
+  agentmem release-bump (--next <patch|minor|major> | --set-version <x.y.z>)
 `);
 }
 
@@ -221,6 +261,57 @@ async function bootstrapWin(options: ParsedOptions) {
   });
 
   console.log(JSON.stringify(result, null, 2));
+}
+
+function printVersion() {
+  const manifest = buildReleaseManifest();
+  console.log(`${manifest.productName} v${manifest.version}`);
+}
+
+function printReleaseManifest(options: ParsedOptions) {
+  const manifest = buildReleaseManifest();
+  if (options.json) {
+    console.log(JSON.stringify(manifest, null, 2));
+    return;
+  }
+
+  console.log(renderReleaseManifestText(manifest));
+}
+
+function printReleasePlan(options: ParsedOptions) {
+  if (!options.next) {
+    throw new Error('release-plan requires --next <patch|minor|major>.');
+  }
+
+  const plan = buildReleasePlan(options.next);
+  if (options.json) {
+    console.log(JSON.stringify(plan, null, 2));
+    return;
+  }
+
+  console.log(renderReleasePlanText(plan));
+}
+
+function bumpReleaseVersion(options: ParsedOptions) {
+  const nextVersion =
+    options.setVersion ||
+    (options.next ? buildReleasePlan(options.next).nextVersion : undefined);
+  if (!nextVersion) {
+    throw new Error('release-bump requires either --next <patch|minor|major> or --set-version <x.y.z>.');
+  }
+
+  const result = writeReleaseVersion(nextVersion);
+  console.log(
+    [
+      `Updated ${buildReleaseManifest().productName} version ${result.previousVersion} -> ${result.nextVersion}`,
+      `package.json: ${result.packageJsonPath}`,
+      `package-lock.json: ${result.packageLockPath}`,
+      `Next tag: v${result.nextVersion}`,
+      'Next verification commands:',
+      '- npm run build',
+      '- node --test tests/*.test.cjs',
+    ].join('\n')
+  );
 }
 
 main().catch((err) => {

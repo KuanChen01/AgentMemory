@@ -46,7 +46,7 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 当前目标是完成 `/admin` 管理工作台的 LLM model switch / connection test 与 iOS/liquid-glass 风格 UI redesign closeout：源码、分发文件、测试、截图自检、commit/push 与 Obsidian 知识库同步。
+- 当前目标是把 AgentMemory 推进到更正式的可分发产品形态：先建立 v1 的发布机制与版本纪律，包括 `master` 稳定线、严格 `SemVer`、`GitHub Release + 源码归档` 分发主线，以及后续网页 update-check 需要依赖的 release metadata。
 
 ## Current State
 - 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
@@ -96,6 +96,12 @@
 - `/admin` 已新增 `LLM Settings` 工作区，提供模型切换、endpoint 更新、API key 保留/替换、自定义 headers、JSON mode toggle、reload/save 和 inline connection test result；测试按钮在缺 key 时返回页面内错误态，不使用 `window.alert()`。
 - `/admin` 视觉系统已从旧版偏蓝紫 glass-heavy 控制台收敛为更克制的 iOS/liquid-glass 产品 UI：低半径 glass material、清晰 focus ring、hover/active feedback、panel enter motion、reduced-motion fallback、移动端无横向溢出。
 - 已新增根 `PRODUCT.md`，用于满足 Impeccable 设计流程的 product-register 项目上下文，并把用户、用途、brand personality、anti-reference、design principles 与 accessibility baseline 写入 repo。
+- 已新增共享 `src/services/release.ts`，将产品版本、稳定分支、GitHub Releases URL、最新 release API、Windows bootstrap/update 命令和验证命令收敛为统一 release manifest；MCP server 的对外版本号不再硬编码在源码里。
+- CLI 已新增 `agentmem version`、`agentmem release-manifest`、`agentmem release-plan` 与 `agentmem release-bump`；同时在 `package.json` 中新增 `npm run release:manifest`、`npm run release:plan`、`npm run release:bump`，用于 repo 内的脚本辅助发布流程。
+- `/admin/api/overview` 现在会返回 release metadata，包含当前版本、`master` 稳定分支、严格 `semver` 策略和 `GitHub Release + 源码归档` 分发通道，作为未来网页“可用更新”检查的基础数据面。
+- 已新增共享 `src/services/release-check.ts` 与 loopback-only `GET /admin/api/release-check`：服务端会读取当前 release manifest、请求 GitHub latest release API、按严格 `SemVer` 比较版本，并把结果归一化为 `up_to_date`、`update_available`、`invalid_latest_tag` 或 `network_error`。
+- `/admin` 的 `Runtime` 面板现已新增 release/update 卡片：初始化时会主动检查一次最新正式 GitHub Release，之后只在用户点击 `Check for Updates` 时再次请求；页面会显示当前版本、最新版本、状态 badge、检查时间、`Open Release` 入口，以及适用于 git checkout 或源码归档的手动升级指引。
+- 已新增 `docs/Release Process.md`，并在双语 README 中补齐正式版本发布纪律、release 命令入口和维护者工作流；同时修正二机 bootstrap 中文指南中与当前实现漂移的 `.env` scaffold 文案。
 
 ## Verified Commands
 - `npm run build`
@@ -169,11 +175,16 @@
 - `/admin` 管理工作台现已支持网页内 LLM 模型切换与连接测试：配置保存会写入 `~/.agentmem/.env` 并同步更新当前 worker 进程，读取接口只返回脱敏 key 状态，连接测试用当前表单值发起小型 `chat/completions` 请求。
 - `/admin` 前端已完成 iOS/liquid-glass 产品 UI redesign，并通过桌面与移动截图自检确认 `LLM Settings` 面板、动效落点和响应式布局无横向溢出。
 - `PRODUCT.md` 现在作为 Impeccable 产品设计上下文存在于仓库根目录，记录 AgentMemory admin workbench 的 product register、用户、目的、设计原则和 accessibility baseline。
+- AgentMemory 现在具备第一阶段正式发布机制：正式版本只从 `master` 发布，版本号采用严格 `SemVer`，v1 分发渠道固定为 `GitHub Release + 默认源码归档`。
+- CLI 与 repo scripts 现已暴露机器可读 release metadata 和人工触发 release workflow：`agentmem release-manifest --json`、`agentmem release-plan --next <patch|minor|major>`、`npm run release:plan`、`npm run release:bump`。
+- `/admin/api/release-check` 现已作为独立数据面落地：GitHub latest release 检查不会并入高频 `/admin/api/overview` 轮询，避免 Runtime 面板因为网络请求而拖慢整页。
+- `/admin` Runtime 面板现在已经具备第一阶段网页更新提示能力：显示 GitHub Release 对比结果、只读状态 badge、`Open Release` 按钮，以及基于当前安装形态生成的手动升级路径。
+- `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 使用真实 `AGENTMEM_LLM_API_KEY` 在 `/admin` 的 `LLM Settings` 跑一次 live provider connection test；如需恢复默认 `/admin` worker，先确认并释放当前多个 `dist\servers\mcp-server.js` 对真实 DB 的占用，再重新运行 `npm run workbench -- --no-open`。
+- 审阅并提交这批 `/admin` release-check 变更；如需进一步对外验收，再基于真实 GitHub Release 页面补一次 live UI smoke，并确认 Runtime 卡片文案与手动升级路径足够清晰。
 
 ## Last Sync
-- date: 2026-06-06
-- status: 已完成 `/admin` LLM model switch / connection test、iOS/liquid-glass UI redesign、双语 README 更新、`PRODUCT.md` 初始化、`npm run build`、全量 `node --test tests/*.test.cjs`、桌面/移动截图自检、commit/push 与 Vault project/daily/issue sync；真实默认 worker restore 暂受本机多个 MCP server 进程持有 DB lock 限制。
+- date: 2026-06-07
+- status: 已将 GitHub Release 感知的网页更新提示真正落地到 `/admin`：新增 `src/services/release-check.ts`、`GET /admin/api/release-check`、Runtime release/update 卡片、`Check for Updates` / `Open Release` 交互，以及适用于 git checkout / 源码归档的手动升级指引；已通过 `npm run build`、`node --test tests/release-check.test.cjs`、`node --test tests/worker-admin.test.cjs` 验证。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

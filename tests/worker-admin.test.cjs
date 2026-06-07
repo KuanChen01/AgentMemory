@@ -167,6 +167,30 @@ async function startMockLlmServer() {
   };
 }
 
+async function startMockReleaseServer(payload, statusCode = 200) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({
+      method: req.method,
+      url: req.url,
+    });
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  return {
+    baseUrl,
+    close: () => new Promise((resolve) => server.close(resolve)),
+    requests,
+    releasesUrl: `${baseUrl}/releases`,
+    url: `${baseUrl}/releases/latest`,
+  };
+}
+
 async function stopWorker(child, port) {
   try {
     await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
@@ -199,7 +223,14 @@ test('worker serves admin UI and admin APIs', async () => {
   const dbPath = makeDbPath();
   const port = makePort();
   await seedDatabase(dbPath);
-  const child = await startWorker(dbPath, port);
+  const mockRelease = await startMockReleaseServer({
+    tag_name: 'v1.0.1',
+    html_url: 'http://127.0.0.1/release/v1.0.1',
+  });
+  const child = await startWorkerWithEnv(dbPath, port, {
+    AGENTMEM_LATEST_RELEASE_API_URL: mockRelease.url,
+    AGENTMEM_RELEASES_URL: mockRelease.releasesUrl,
+  });
 
   try {
     const adminPage = await fetch(`http://127.0.0.1:${port}/admin`);
@@ -224,6 +255,10 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.match(adminHtml, /agentmemory\.admin\.uiLocale/);
     assert.match(adminHtml, /navigator\.language/);
     assert.doesNotMatch(adminHtml, /runtimeStatusText/);
+    assert.match(adminHtml, /id="releaseCheckCard"/);
+    assert.match(adminHtml, /id="releaseCheckButton"/);
+    assert.match(adminHtml, /id="releaseOpenButton"/);
+    assert.match(adminHtml, /id="releaseStatusBadge"/);
 
     const overviewResponse = await fetch(`http://127.0.0.1:${port}/admin/api/overview`);
     assert.equal(overviewResponse.status, 200);
@@ -233,6 +268,22 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.ok(overview.projects.includes('E:/Repo/A'));
     assert.ok(overview.agents.includes('codex'));
     assert.equal(overview.stats.currentStateFacts, 2);
+    assert.equal(overview.release.version, '1.0.0');
+    assert.equal(overview.release.tagName, 'v1.0.0');
+    assert.equal(overview.release.stableBranch, 'master');
+    assert.equal(overview.release.versioning, 'semver');
+
+    const releaseCheckResponse = await fetch(`http://127.0.0.1:${port}/admin/api/release-check`);
+    assert.equal(releaseCheckResponse.status, 200);
+    const releaseCheck = await releaseCheckResponse.json();
+    assert.equal(releaseCheck.status, 'update_available');
+    assert.equal(releaseCheck.currentVersion, '1.0.0');
+    assert.equal(releaseCheck.latestVersion, '1.0.1');
+    assert.equal(releaseCheck.latestTag, 'v1.0.1');
+    assert.equal(releaseCheck.releaseUrl, 'http://127.0.0.1/release/v1.0.1');
+    assert.equal(releaseCheck.upgradeGuidance.installMode, 'git_checkout');
+    assert.deepEqual(releaseCheck.upgradeGuidance.commands, ['git pull', '.\\bootstrap-second-machine.cmd']);
+    assert.ok(mockRelease.requests.some((request) => request.url === '/releases/latest'));
 
     const recordsResponse = await fetch(`http://127.0.0.1:${port}/admin/api/records?project=${encodeURIComponent('E:/Repo/A')}&page=1&pageSize=25`);
     assert.equal(recordsResponse.status, 200);
@@ -275,6 +326,30 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.equal(typeof searchPayload.results[0].vector_score, 'number');
     assert.equal(typeof searchPayload.results[0].hybrid_score, 'number');
     assert.equal(typeof searchPayload.results[0].low_signal_title, 'boolean');
+  } finally {
+    await stopWorker(child, port);
+    await mockRelease.close();
+    cleanupDb(dbPath);
+  }
+});
+
+test('worker normalizes admin release-check network errors without breaking the UI surface', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  await seedDatabase(dbPath);
+  const child = await startWorkerWithEnv(dbPath, port, {
+    AGENTMEM_LATEST_RELEASE_API_URL: 'http://127.0.0.1:9/releases/latest',
+    AGENTMEM_RELEASES_URL: 'http://127.0.0.1:9/releases',
+  });
+
+  try {
+    const releaseCheckResponse = await fetch(`http://127.0.0.1:${port}/admin/api/release-check`);
+    assert.equal(releaseCheckResponse.status, 200);
+    const releaseCheck = await releaseCheckResponse.json();
+    assert.equal(releaseCheck.status, 'network_error');
+    assert.equal(releaseCheck.latestVersion, null);
+    assert.equal(releaseCheck.upgradeGuidance.installMode, 'git_checkout');
+    assert.match(releaseCheck.message, /connect|refused|fetch/i);
   } finally {
     await stopWorker(child, port);
     cleanupDb(dbPath);

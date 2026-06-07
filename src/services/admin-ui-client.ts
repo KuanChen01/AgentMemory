@@ -30,9 +30,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     isTestingLlm: false,
     llmConfig: null,
     llmTestResult: null,
+    releaseCheck: null,
     contextPayload: null,
     statePayload: null,
     searchPayload: null,
+    isCheckingRelease: false,
     pollHandle: null,
     statusLineState: {},
   };
@@ -50,6 +52,17 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     runtimeProjectList: document.getElementById("runtimeProjectList"),
     runtimeAgentList: document.getElementById("runtimeAgentList"),
     runtimeStatusLine: document.getElementById("runtimeStatusLine"),
+    releaseStatusBadge: document.getElementById("releaseStatusBadge"),
+    releaseCurrentVersion: document.getElementById("releaseCurrentVersion"),
+    releaseLatestVersion: document.getElementById("releaseLatestVersion"),
+    releaseVersionMeta: document.getElementById("releaseVersionMeta"),
+    releaseCheckMeta: document.getElementById("releaseCheckMeta"),
+    releaseCheckMessage: document.getElementById("releaseCheckMessage"),
+    releaseGuidanceSummary: document.getElementById("releaseGuidanceSummary"),
+    releaseGuidanceCommands: document.getElementById("releaseGuidanceCommands"),
+    releaseCheckedAt: document.getElementById("releaseCheckedAt"),
+    releaseCheckButton: document.getElementById("releaseCheckButton"),
+    releaseOpenButton: document.getElementById("releaseOpenButton"),
     llmStatusLine: document.getElementById("llmStatusLine"),
     llmCurrentModel: document.getElementById("llmCurrentModel"),
     llmCurrentEndpoint: document.getElementById("llmCurrentEndpoint"),
@@ -387,6 +400,94 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncSelect(els.stateWriteProjectSelect, projects, t("field.chooseProject"), els.stateWriteProjectSelect.value, true);
     syncSelect(els.searchProjectSelect, projects, t("field.chooseProject"), els.searchProjectSelect.value, true);
     ensureProjectDefaults(projects);
+    renderReleaseCheck();
+  }
+
+  function getReleaseStatusPresentation(result) {
+    if (state.isCheckingRelease) {
+      return { label: t("runtime.releaseCheckingButton"), variant: "warning" };
+    }
+    if (!result) {
+      return { label: t("runtime.releaseStatusUnknown"), variant: "warning" };
+    }
+    switch (result.status) {
+      case "update_available":
+        return { label: t("runtime.releaseStatusUpdateAvailable"), variant: "warning" };
+      case "invalid_latest_tag":
+        return { label: t("runtime.releaseStatusInvalidTag"), variant: "error" };
+      case "network_error":
+        return { label: t("runtime.releaseStatusNetworkError"), variant: "error" };
+      case "up_to_date":
+      default:
+        return { label: t("runtime.releaseStatusUpToDate"), variant: "success" };
+    }
+  }
+
+  function getReleasePageUrl() {
+    if (state.releaseCheck && state.releaseCheck.releaseUrl) {
+      return String(state.releaseCheck.releaseUrl);
+    }
+    if (state.overview && state.overview.release && state.overview.release.releasesUrl) {
+      return String(state.overview.release.releasesUrl);
+    }
+    return "";
+  }
+
+  function renderReleaseCheck() {
+    if (!state.overview || !state.overview.release) return;
+    const manifest = state.overview.release;
+    const result = state.releaseCheck;
+    const status = getReleaseStatusPresentation(result);
+    const latestVersion = result && result.latestVersion
+      ? String(result.latestVersion)
+      : t("runtime.releaseUnknown");
+    const versionMeta = [];
+    if (manifest.tagName) {
+      versionMeta.push(t("runtime.releaseCurrentTag", { tag: String(manifest.tagName) }));
+    }
+    if (result && result.latestTag) {
+      versionMeta.push(t("runtime.releaseLatestTag", { tag: String(result.latestTag) }));
+    }
+
+    els.releaseStatusBadge.textContent = status.label;
+    els.releaseStatusBadge.className = "statusChip " + status.variant;
+    els.releaseCurrentVersion.textContent = String(manifest.version || "-");
+    els.releaseLatestVersion.textContent = latestVersion;
+    els.releaseVersionMeta.textContent = versionMeta.join(" · ");
+    els.releaseCheckMeta.textContent = state.isCheckingRelease
+      ? t("runtime.releaseChecking")
+      : result
+        ? t("runtime.releaseCheckedAt", { timestamp: formatDate(result.checkedAt) })
+        : t("runtime.releaseNotChecked");
+    els.releaseCheckMessage.textContent = result
+      ? String(result.message || "")
+      : t("runtime.releaseNotChecked");
+
+    if (result && result.upgradeGuidance) {
+      els.releaseGuidanceSummary.textContent = String(result.upgradeGuidance.summary || "");
+      const commands = Array.isArray(result.upgradeGuidance.commands)
+        ? result.upgradeGuidance.commands
+        : [];
+      els.releaseGuidanceCommands.innerHTML = commands.length > 0
+        ? commands.map((command) => (
+            '<div class="factCard mono subtle">' + escapeHtml(command) + '</div>'
+          )).join("")
+        : '<div class="emptyState">' + escapeHtml(t("runtime.releaseGuidancePending")) + '</div>';
+    } else {
+      els.releaseGuidanceSummary.textContent = t("runtime.releaseGuidancePending");
+      els.releaseGuidanceCommands.innerHTML = '<div class="emptyState">' + escapeHtml(t("runtime.releaseGuidancePending")) + '</div>';
+    }
+
+    const releaseUrl = getReleasePageUrl();
+    els.releaseCheckedAt.textContent = result
+      ? t("runtime.releaseCheckedAt", { timestamp: formatDate(result.checkedAt) })
+      : "";
+    els.releaseCheckButton.disabled = state.isCheckingRelease;
+    els.releaseCheckButton.textContent = state.isCheckingRelease
+      ? t("runtime.releaseCheckingButton")
+      : t("runtime.releaseCheckButton");
+    els.releaseOpenButton.disabled = !releaseUrl;
+    els.releaseOpenButton.dataset.releaseUrl = releaseUrl;
   }
 
   function renderLlmConfig() {
@@ -705,6 +806,36 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderOverview();
   }
 
+  async function loadReleaseCheck() {
+    if (!state.overview || !state.overview.release) return;
+    state.isCheckingRelease = true;
+    renderReleaseCheck();
+    try {
+      state.releaseCheck = await fetchJson("/admin/api/release-check");
+    } catch (error) {
+      state.releaseCheck = {
+        checkedAt: new Date().toISOString(),
+        currentVersion: String(state.overview.release.version || ""),
+        currentTag: String(state.overview.release.tagName || ""),
+        latestVersion: null,
+        latestTag: null,
+        message: error.message || t("runtime.releaseStatusNetworkError"),
+        releaseUrl: getReleasePageUrl(),
+        status: "network_error",
+        upgradeGuidance: {
+          commands: Array.isArray(state.overview.release.windowsUpdateCommands)
+            ? state.overview.release.windowsUpdateCommands
+            : [],
+          installMode: "git_checkout",
+          summary: t("runtime.releaseGuidancePending"),
+        },
+      };
+    } finally {
+      state.isCheckingRelease = false;
+      renderReleaseCheck();
+    }
+  }
+
   async function loadLlmConfig() {
     setStoredStatusLine("llm", els.llmStatusLine, "llm.loading", {}, "warning");
     const payload = await fetchJson("/admin/api/llm-config");
@@ -1002,6 +1133,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.llmTestButton.addEventListener("click", async () => {
       await runLlmConnectionTest();
     });
+    els.releaseCheckButton.addEventListener("click", async () => {
+      await loadReleaseCheck();
+    });
+    els.releaseOpenButton.addEventListener("click", () => {
+      const releaseUrl = getReleasePageUrl();
+      if (!releaseUrl) return;
+      window.open(releaseUrl, "_blank", "noopener,noreferrer");
+    });
 
     els.refreshButton.addEventListener("click", async () => {
       syncFiltersFromInputs();
@@ -1102,6 +1241,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindEvents();
     try {
       await loadOverview();
+      renderReleaseCheck();
+      void loadReleaseCheck();
       await loadLlmConfig();
       await loadRecords("ledger.loading");
       if (els.contextProjectSelect.value) {

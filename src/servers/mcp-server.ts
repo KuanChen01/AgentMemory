@@ -23,6 +23,7 @@ import {
   renderProjectContextView,
 } from '../services/context-view';
 import { resolveEmbeddingConfig } from '../services/embedding-config';
+import { buildReleaseManifest } from '../services/release';
 
 // Load environment variables
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
@@ -33,7 +34,7 @@ const dbManager = new DatabaseManager();
 const server = new Server(
   {
     name: 'agentmem-mcp-server',
-    version: '1.0.0',
+    version: buildReleaseManifest().version,
   },
   {
     capabilities: {

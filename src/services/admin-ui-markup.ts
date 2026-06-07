@@ -14,7 +14,7 @@ export function renderAdminWorkbenchMarkup(): string {
               </div>
             </div>
           </div>
-          <h1 data-i18n="hero.title">Glass Runtime Console for Shared Agent Context</h1>
+          <h1 data-i18n="hero.title">Runtime Console for Shared Agent Context</h1>
           <p class="lead" data-i18n="hero.lead">
             Inspect runtime policy, structured state, startup context health, hybrid search behavior,
             and the raw observation ledger from one local-only control room.
@@ -121,6 +121,47 @@ export function renderAdminWorkbenchMarkup(): string {
         </div>
 
         <div class="runtimeMetaGrid">
+          <div id="releaseCheckCard" class="card" style="grid-column: 1 / -1;">
+            <div class="policyTitleRow">
+              <div>
+                <div class="metaLabel" data-i18n="runtime.releaseSection">Release Update</div>
+                <h3 class="policyTitle" style="margin-top: 8px;" data-i18n="runtime.releaseTitle">GitHub Release status</h3>
+              </div>
+              <span id="releaseStatusBadge" class="statusChip warning" data-i18n="runtime.releaseStatusUnknown">Not checked</span>
+            </div>
+            <p class="panelLead" style="margin-top: 10px;" data-i18n="runtime.releaseLead">
+              Compare this checkout against the latest published GitHub Release. The check is read-only and never runs bootstrap for you.
+            </p>
+
+            <div class="metricsRow" style="margin-top: 14px;">
+              <div class="metricBadge"><strong data-i18n="runtime.releaseCurrentVersion">Current</strong> <span id="releaseCurrentVersion">-</span></div>
+              <div class="metricBadge"><strong data-i18n="runtime.releaseLatestVersion">Latest</strong> <span id="releaseLatestVersion">-</span></div>
+            </div>
+
+            <div id="releaseVersionMeta" class="finePrint" style="margin-top: 12px;"></div>
+            <div id="releaseCheckMeta" class="finePrint" style="margin-top: 8px;" data-i18n="runtime.releaseNotChecked">No release check has been run yet.</div>
+            <div id="releaseCheckMessage" class="panelLead" style="margin-top: 10px;"></div>
+
+            <div class="stack" style="margin-top: 16px;">
+              <div class="metaLabel" data-i18n="runtime.releaseGuidanceTitle">Upgrade Guidance</div>
+              <div id="releaseGuidanceSummary" class="panelLead" data-i18n="runtime.releaseGuidancePending">
+                Run the release check to load the recommended upgrade path for this checkout.
+              </div>
+              <div id="releaseGuidanceCommands" class="listBlock">
+                <div class="emptyState" data-i18n="runtime.releaseGuidancePending">
+                  Run the release check to load the recommended upgrade path for this checkout.
+                </div>
+              </div>
+            </div>
+
+            <div class="toolbarFooter" style="margin-top: 16px;">
+              <div id="releaseCheckedAt" class="finePrint"></div>
+              <div class="actionCluster">
+                <button id="releaseCheckButton" class="button primary" type="button" data-i18n="runtime.releaseCheckButton">Check for Updates</button>
+                <button id="releaseOpenButton" class="button secondary" type="button" data-i18n="runtime.releaseOpenButton">Open Release</button>
+              </div>
+            </div>
+          </div>
           <div class="card">
             <div class="metaLabel" data-i18n="runtime.knownProjects">Known Projects</div>
             <div id="runtimeProjectList" class="runtimeProjectList"></div>

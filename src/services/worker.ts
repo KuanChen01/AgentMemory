@@ -33,6 +33,8 @@ import {
   saveLlmConfig,
   testLlmConnection,
 } from './llm-config';
+import { buildReleaseManifest } from './release';
+import { checkLatestRelease } from './release-check';
 
 // Load environment variables
 dotenv.config({ path: getAgentMemoryEnvPath() });
@@ -195,12 +197,22 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
         agents: agents.length,
         currentStateFacts,
       },
+      release: buildReleaseManifest(),
       projects,
       agents,
       refreshedAt: new Date().toISOString(),
     });
   } catch (err: any) {
     console.error('Error fetching admin overview:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/release-check', adminOnlyGuard, async (_req, res) => {
+  try {
+    res.json(await checkLatestRelease());
+  } catch (err: any) {
+    console.error('Error fetching admin release check:', err);
     res.status(500).json({ error: err.message });
   }
 });

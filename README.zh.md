@@ -117,9 +117,13 @@ agentmem install --strict
 *   **启动 Worker 服务**：`agentmem start`（前台运行；使用期间请保持这个终端窗口处于运行状态）
 *   **停止后台服务**：`agentmem stop`
 *   **查询运行状态**：`agentmem status`
+*   **查看当前版本**：`agentmem version`
 *   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode、Codex 和 Antigravity 的设置）
 *   **严格注册模式**：`agentmem install --strict`（任意一项失败即退出）
 *   **第二台电脑 Bootstrap**：`agentmem bootstrap-win --strict` 或 `bootstrap-second-machine.cmd`
+*   **查看 Release Manifest**：`agentmem release-manifest --json`（输出机器可读的版本与发布策略元数据）
+*   **生成 Release Plan**：`npm run release:plan -- --next patch|minor|major`
+*   **执行版本号 Bump**：`npm run release:bump -- --next patch|minor|major`
 
 ### 🪟 Windows 二机 Bootstrap
 
@@ -133,7 +137,18 @@ cd AgentMemory
 
 这个入口会自动执行 `npm install`、`npm run build`、创建或校验 `%USERPROFILE%\.agentmem\.env`、执行 `npm link`、配置四个 agent、探测或拉起 worker，并打开 `/admin`。
 
-如果 `%USERPROFILE%\.agentmem\.env` 不存在，bootstrap 会先写一个占位模板，然后立即停止，不会假装成功。你只需要填好 `AGENTMEM_LLM_*` 后重新运行。
+如果 `%USERPROFILE%\.agentmem\.env` 不存在，bootstrap 会先写一个“空 API key + 默认 URL/model”的安全模板，然后立即停止，不会假装成功。你只需要填好 `AGENTMEM_LLM_*` 后重新运行。
+
+### 📦 正式版本发布纪律
+
+AgentMemory 现在把正式版本发布视为仓库内的一条固定维护流程：
+
+*   正式版本只从 `master` 发布
+*   版本号采用严格 `SemVer`，tag 固定为 `vX.Y.Z`
+*   v1 阶段的正式分发渠道固定为 **GitHub Release + 默认源码归档**
+*   CLI `agentmem release-manifest` 与 `/admin/api/overview` 会暴露 release metadata，`/admin/api/release-check` 现在会直接对比当前 checkout 与最新正式 GitHub Release
+
+维护者分步流程见：[docs/Release Process.md](./docs/Release%20Process.md)
 
 ---
 
@@ -156,7 +171,7 @@ Windows 下一键启动可直接使用：
 
 管理页提供：
 
-*   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，并展示 project / agent 覆盖面
+*   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，展示 project / agent 覆盖面，并提供只读的 GitHub Release 更新检查与手动升级指引
 *   **LLM Settings**：切换 `AGENTMEM_LLM_MODEL`，更新 OpenAI-compatible API base URL，保留或替换 API key，并运行实时连接测试
 *   **Project Context**：查看当前 `ProjectContextView`、渲染后的 startup 文本，以及 payload / summary 健康度指标
 *   **State Lab**：显式读取和写入 structured state
@@ -197,6 +212,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：供 workbench 读取 structured state
 *   `POST /admin/api/state`：供 workbench 显式写入 structured state fact
 *   `POST /admin/api/search`：返回当前 project 的 hybrid search 原始诊断分数，但不在这一步修改排序算法
+*   `GET /admin/api/release-check`：对比当前 checkout 与最新正式 GitHub Release，并返回适用于 git checkout 或源码归档的手动升级指引
 *   `GET /admin/api/llm-config`：返回已脱敏的 LLM 配置快照，不暴露完整 API key
 *   `POST /admin/api/llm-config`：把 model、API URL、JSON mode、headers 和可选 API key 变更持久化到 `~/.agentmem/.env`，并同步更新当前 worker 进程
 *   `POST /admin/api/llm-test`：用当前表单值发送一个很小的 OpenAI-compatible `chat/completions` 请求，并返回连接测试结果
@@ -219,10 +235,11 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 1. 使用 `npm run workbench`、`start-workbench.cmd` 一键启动，或者手动运行 `agentmem start`
 2. 打开 `http://127.0.0.1:38888/admin`
 3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
-4. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
-5. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
-6. 如需深挖原始 observation，再切到 `Observation Ledger`
-7. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
+4. 在 Runtime 面板的 release 卡片中对比当前 checkout 与最新正式 GitHub Release，并选择推荐的手动升级路径
+5. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
+6. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
+7. 如需深挖原始 observation，再切到 `Observation Ledger`
+8. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
 
 ---
 
