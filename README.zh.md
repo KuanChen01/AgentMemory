@@ -177,12 +177,18 @@ http://127.0.0.1:38888/admin
 
 该页面仅允许本机 loopback 访问，不对非本机网络地址开放。
 
-Windows 下一键启动可直接使用：
+Windows 下现在有两个本机控制入口：
 
 *   `npm run workbench`
 *   `start-workbench.cmd`
 
-这两个入口都会先构建仓库，再探测 `http://127.0.0.1:38888/admin/api/overview`；如果已有 worker 可复用就直接复用，否则后台拉起 `node dist/services/worker.js`，等待就绪后再打开 `/admin`。
+`npm run workbench` 保留原来的一键路径：先构建仓库，再探测 `http://127.0.0.1:38888/admin/api/overview`；如果已有 worker 可复用就直接复用，否则后台拉起 `node dist/services/worker.js`，等待就绪后再打开 `/admin`。
+
+`start-workbench.cmd` 现在是交互式控制入口。无参数执行时，会先探测当前状态，再显示一次性菜单：`Start`、`Stop`、`Restart`、`Status`、`Open Admin`、`Exit`。带参数时支持：
+
+*   `start-workbench.cmd start|stop|restart|status|open-admin|menu`
+*   `start-workbench.cmd start --no-open`
+*   `start-workbench.cmd restart --port 38889 --no-open`
 
 管理页提供：
 
@@ -247,7 +253,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 
 #### 基本操作流程
 
-1. 使用 `npm run workbench`、`start-workbench.cmd` 一键启动，或者手动运行 `agentmem start`
+1. 需要一键启动时使用 `npm run workbench`；需要交互式 `Start / Stop / Restart / Status / Open Admin` 控制时使用 `start-workbench.cmd`
 2. 打开 `http://127.0.0.1:38888/admin`
 3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
 4. 在 Runtime 面板的 release 卡片中对比当前 checkout 与最新正式 GitHub Release，并选择推荐的手动升级路径

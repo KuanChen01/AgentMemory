@@ -177,12 +177,18 @@ http://127.0.0.1:38888/admin
 
 The admin console is intentionally restricted to loopback clients. It is not exposed to non-local network addresses.
 
-For a one-click local launch on Windows, use either:
+Windows local control now has two entrypoints:
 
 *   `npm run workbench`
 *   `start-workbench.cmd`
 
-Both paths build the repo, probe `http://127.0.0.1:38888/admin/api/overview`, reuse an already-running worker when possible, otherwise start `node dist/services/worker.js`, wait for readiness, and open `/admin`.
+`npm run workbench` keeps the direct one-click flow: build the repo, probe `http://127.0.0.1:38888/admin/api/overview`, reuse or start the worker, and open `/admin`.
+
+`start-workbench.cmd` is now the interactive control entrypoint. With no arguments it probes the current status first, then shows a one-shot menu for `Start`, `Stop`, `Restart`, `Status`, `Open Admin`, and `Exit`. With arguments it supports:
+
+*   `start-workbench.cmd start|stop|restart|status|open-admin|menu`
+*   `start-workbench.cmd start --no-open`
+*   `start-workbench.cmd restart --port 38889 --no-open`
 
 The page provides:
 
@@ -247,7 +253,7 @@ Both flags are stored in SQLite `app_settings`, so the selected policy survives 
 
 #### Operating workflow
 
-1. Start the workbench with `npm run workbench`, `start-workbench.cmd`, or start the worker manually with `agentmem start`
+1. Use `npm run workbench` for the old one-click launch, or use `start-workbench.cmd` for interactive `Start / Stop / Restart / Status / Open Admin` control
 2. Open `http://127.0.0.1:38888/admin`
 3. Use the `Read Memory` and `Write Memory` switches to change runtime policy
 4. Use the Runtime release card to compare the current checkout with the latest GitHub Release and choose the recommended manual upgrade path

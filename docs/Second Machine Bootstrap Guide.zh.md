@@ -62,6 +62,11 @@ cd AgentMemory
 7. 打开 `/admin`
 8. 输出严格安装结果
 
+bootstrap 完成后：
+
+- 需要继续沿用旧的一键启动体验时，运行 `npm run workbench`
+- 需要本机交互式控制 `Start / Stop / Restart / Status / Open Admin` 时，运行 `start-workbench.cmd`
+
 ## First Run Behavior
 
 如果 `%USERPROFILE%\.agentmem\.env` 不存在，第一次运行会：

@@ -6,8 +6,10 @@ const {
   buildAdminWorkbenchUrls,
   buildBrowserOpenCommand,
   classifyOverviewProbe,
+  getWorkbenchStatus,
   isReusableOverviewPayload,
   waitForWorkbenchReady,
+  waitForWorkbenchStopped,
 } = require('../dist/services/workbench-launcher.js');
 
 test('workbench launcher recognizes reusable worker overview payloads', () => {
@@ -84,4 +86,78 @@ test('workbench launcher waits for readiness probe and builds stable admin urls'
   } finally {
     server.close();
   }
+});
+
+test('workbench launcher reads ACTIVE and INACTIVE status from overview probes', async () => {
+  const activeServer = http.createServer((req, res) => {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        policy: { readEnabled: true, writeEnabled: true, updatedAt: '2026-06-03 12:00:00' },
+        stats: {
+          observations: 1,
+          sessions: 1,
+          projects: 1,
+          agents: 1,
+          currentStateFacts: 1,
+        },
+        projects: ['E:/Repo/A'],
+        agents: ['codex'],
+      })
+    );
+  });
+
+  await new Promise((resolve) => activeServer.listen(0, '127.0.0.1', resolve));
+  const { port } = activeServer.address();
+
+  try {
+    const activeStatus = await getWorkbenchStatus(port, 200);
+    assert.equal(activeStatus.state, 'ACTIVE');
+    assert.equal(activeStatus.adminUrl, `http://127.0.0.1:${port}/admin`);
+
+    await new Promise((resolve) => activeServer.close(resolve));
+
+    const inactiveStatus = await getWorkbenchStatus(port, 200);
+    assert.equal(inactiveStatus.state, 'INACTIVE');
+  } finally {
+    activeServer.close();
+  }
+});
+
+test('workbench launcher waits for the worker port to become inactive', async () => {
+  const server = http.createServer((req, res) => {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(
+      JSON.stringify({
+        policy: { readEnabled: true, writeEnabled: true, updatedAt: '2026-06-03 12:00:00' },
+        stats: {
+          observations: 1,
+          sessions: 1,
+          projects: 1,
+          agents: 1,
+          currentStateFacts: 1,
+        },
+        projects: ['E:/Repo/A'],
+        agents: ['codex'],
+      })
+    );
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  setTimeout(() => {
+    server.close();
+  }, 80);
+
+  const result = await waitForWorkbenchStopped(port, {
+    attempts: 10,
+    intervalMs: 30,
+    timeoutMs: 200,
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.status.state, 'INACTIVE');
 });

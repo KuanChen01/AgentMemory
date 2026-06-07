@@ -3,6 +3,8 @@ export interface AdminWorkbenchUrls {
   overviewUrl: string;
 }
 
+export type WorkbenchState = 'ACTIVE' | 'INACTIVE';
+
 export interface OverviewProbe {
   ok: boolean;
   status: number;
@@ -14,6 +16,14 @@ export interface WaitForWorkbenchReadyOptions {
   attempts?: number;
   intervalMs?: number;
   timeoutMs?: number;
+}
+
+export interface WorkbenchStatus {
+  adminUrl: string;
+  overviewUrl: string;
+  port: number;
+  probe: OverviewProbe;
+  state: WorkbenchState;
 }
 
 export function buildAdminWorkbenchUrls(port: number | string = 38888): AdminWorkbenchUrls {
@@ -100,6 +110,23 @@ export async function probeWorkbenchOverview(
   }
 }
 
+export async function getWorkbenchStatus(
+  port: number | string = 38888,
+  timeoutMs: number = 1500
+): Promise<WorkbenchStatus> {
+  const normalizedPort = Number(port) || 38888;
+  const urls = buildAdminWorkbenchUrls(normalizedPort);
+  const probe = await probeWorkbenchOverview(urls.overviewUrl, timeoutMs);
+
+  return {
+    adminUrl: urls.adminUrl,
+    overviewUrl: urls.overviewUrl,
+    port: normalizedPort,
+    probe,
+    state: classifyOverviewProbe(probe) === 'reuse-existing' ? 'ACTIVE' : 'INACTIVE',
+  };
+}
+
 export async function waitForWorkbenchReady(
   overviewUrl: string,
   options: WaitForWorkbenchReadyOptions = {}
@@ -134,5 +161,37 @@ export async function waitForWorkbenchReady(
     ready: false,
     attempts,
     probe: lastProbe,
+  };
+}
+
+export async function waitForWorkbenchStopped(
+  port: number | string = 38888,
+  options: WaitForWorkbenchReadyOptions = {}
+): Promise<{ attempts: number; ready: boolean; status: WorkbenchStatus }> {
+  const attempts = options.attempts ?? 40;
+  const intervalMs = options.intervalMs ?? 500;
+  const timeoutMs = options.timeoutMs ?? 1500;
+
+  let lastStatus = await getWorkbenchStatus(port, timeoutMs);
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    lastStatus = await getWorkbenchStatus(port, timeoutMs);
+    if (lastStatus.state === 'INACTIVE') {
+      return {
+        attempts: attempt,
+        ready: true,
+        status: lastStatus,
+      };
+    }
+
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
+  return {
+    attempts,
+    ready: false,
+    status: lastStatus,
   };
 }
