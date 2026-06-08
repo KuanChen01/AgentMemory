@@ -46,11 +46,12 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 当前目标是执行 `v1.2.0` minor release checklist：`codex/daily-memory-digest` 已 fast-forward 合入本地 `master`，`npm run release:bump -- --next minor` 已完成，下一步是提交 release bump、打 tag、push 并创建 GitHub Release。
+- 当前目标是完成 `v1.2.0` minor release 后的状态同步：`master`、tag `v1.2.0` 与 GitHub Release 已发布，下一步回到真实 worker Runtime scheduler 检查和 lazy MCP DB 长会话观察。
 
 ## Current State
-- 本地 `master` 已从 `d792d9e` fast-forward 到 `8ace9d1 Add daily digest workflow and harden MCP setup`，当前领先 `origin/master` 1 个功能提交。
-- `package.json`、`package-lock.json` 和 lockfile root package 版本已从 `1.1.0` bump 到 `1.2.0`；下一步 tag 目标是 `v1.2.0`。
+- 本地 `master` 已从 `d792d9e` fast-forward 到 `8ace9d1 Add daily digest workflow and harden MCP setup`，并已提交 release bump `abd843e chore: release v1.2.0`。
+- `package.json`、`package-lock.json` 和 lockfile root package 版本已从 `1.1.0` bump 到 `1.2.0`；tag `v1.2.0` 已推送到 GitHub。
+- GitHub Release `v1.2.0` 已创建：`https://github.com/KuanChen01/AgentMemory/releases/tag/v1.2.0`。
 - `npm run build` 与 `node --test tests/*.test.cjs` 已在 `1.2.0` 版本文件上通过，全量 79 项测试通过。
 - 已修复本机 Antigravity CLI 配置中的旧 `agentvault` / `AgentVault` 路径：当前 `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json` 注册 `mcpServers.agentmem` 并指向 `E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js`。
 - 安装器的 Antigravity resolver 现在优先检查 direct registries（`antigravity-cli`、`antigravity-ide`、`antigravity`、`config\mcp_config.json`），再回退到 plugin registries；写入时会删除遗留 `agentvault`。
@@ -174,7 +175,7 @@
 - 新增的 `/admin` LLM connection test 已用本地 mock provider 覆盖；真实供应商 endpoint 仍应在用户提供真实 API key 后从网页 UI 再跑一次 live test。
 
 ## Latest Durable Changes
-- `codex/daily-memory-digest` 已合入本地 `master`，并完成 `1.1.0 -> 1.2.0` minor version bump；正式 release checklist 已推进到 commit / tag / push / GitHub Release 阶段。
+- `codex/daily-memory-digest` 已合入 `master`，并完成 `1.1.0 -> 1.2.0` minor release；`v1.2.0` tag、`master` push 和 GitHub Release 均已完成。
 - Antigravity 安装器现在覆盖 direct CLI / IDE registries，修正旧 `AgentVault` 路径并删除遗留 `agentvault` server key；二机 bootstrap 文档同步了新的 registry 探测顺序。
 - MCP server 已改成按 `tools/call` 短生命周期打开真实 SQLite，`tools/list` 不再抢占数据库；本机 stale `agentmemory.db.lock` 已在确认无活跃持有者后清理。
 - AgentMemory 现在具备每日记忆总结层：`daily_memory_digests` 保留可审阅 digest，worker scheduler 自动 catch-up，Workbench 可手动运行，`ProjectContextView` 可读取 recent daily digests。
@@ -221,9 +222,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 提交 `chore: release v1.2.0`，打 `v1.2.0` tag，push `master --follow-tags`，并创建 GitHub Release；发布后再回到真实 worker Runtime scheduler 检查和 lazy MCP DB 长会话观察。
+- 用真实 worker 打开 `/admin` Runtime 面板检查每日总结 scheduler 设置是否符合预期，然后继续观察真实 LLM 下每日总结质量；同时观察 lazy MCP DB 连接在多 agent 长会话并存时是否还会产生 stale `agentmemory.db.lock`。
 
 ## Last Sync
 - date: 2026-06-08
-- status: 已完成本地 `master` fast-forward 合并和 `1.1.0 -> 1.2.0` minor release bump；release checklist 正在推进到 commit / tag / push / GitHub Release；已在 bump 后通过 `npm run build` 与 `node --test tests/*.test.cjs` 全量 79 项。
+- status: 已完成 `v1.2.0` minor release：`master` 已推送，tag `v1.2.0` 已推送，GitHub Release 已创建；验证覆盖 `npm run build`、`node --test tests/*.test.cjs` 全量 79 项、`git diff --check`、`node dist/bin/cli.js install --strict` 和 Antigravity CLI MCP smoke。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
