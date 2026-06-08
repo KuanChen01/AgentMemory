@@ -46,9 +46,12 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 当前目标是完成 Antigravity CLI 旧 `AgentVault` MCP registry 修复，并恢复真实 MCP `get_project_context` 启动验证；本轮已完成，下一步回到真实 worker Runtime scheduler 检查。
+- 当前目标是执行 `v1.2.0` minor release checklist：`codex/daily-memory-digest` 已 fast-forward 合入本地 `master`，`npm run release:bump -- --next minor` 已完成，下一步是提交 release bump、打 tag、push 并创建 GitHub Release。
 
 ## Current State
+- 本地 `master` 已从 `d792d9e` fast-forward 到 `8ace9d1 Add daily digest workflow and harden MCP setup`，当前领先 `origin/master` 1 个功能提交。
+- `package.json`、`package-lock.json` 和 lockfile root package 版本已从 `1.1.0` bump 到 `1.2.0`；下一步 tag 目标是 `v1.2.0`。
+- `npm run build` 与 `node --test tests/*.test.cjs` 已在 `1.2.0` 版本文件上通过，全量 79 项测试通过。
 - 已修复本机 Antigravity CLI 配置中的旧 `agentvault` / `AgentVault` 路径：当前 `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json` 注册 `mcpServers.agentmem` 并指向 `E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js`。
 - 安装器的 Antigravity resolver 现在优先检查 direct registries（`antigravity-cli`、`antigravity-ide`、`antigravity`、`config\mcp_config.json`），再回退到 plugin registries；写入时会删除遗留 `agentvault`。
 - MCP server 已改为 lazy database lifecycle：`tools/list` 不再打开 SQLite，`tools/call` 按请求创建和关闭 `DatabaseManager`；`DatabaseManager.initialize()` 失败时会关闭半初始化连接。
@@ -154,6 +157,8 @@
 - `node --test tests/install-bootstrap.test.cjs`
 - `node --test tests\mcp-context.test.cjs tests\install-bootstrap.test.cjs tests\installer-uninstall.test.cjs`
 - `node --test tests/*.test.cjs`
+- `npm run release:plan -- --next minor`
+- `npm run release:bump -- --next minor`
 - `git diff --check`
 - Antigravity CLI MCP smoke: `tools/list` and `tools/call get_project_context` against `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json`
 - bundled Playwright + local Chrome screenshot QA against isolated temp worker: desktop 1440x1000 and mobile 390x844, `LLM Settings` active, no horizontal overflow, inline no-key connection failure rendered
@@ -169,6 +174,7 @@
 - 新增的 `/admin` LLM connection test 已用本地 mock provider 覆盖；真实供应商 endpoint 仍应在用户提供真实 API key 后从网页 UI 再跑一次 live test。
 
 ## Latest Durable Changes
+- `codex/daily-memory-digest` 已合入本地 `master`，并完成 `1.1.0 -> 1.2.0` minor version bump；正式 release checklist 已推进到 commit / tag / push / GitHub Release 阶段。
 - Antigravity 安装器现在覆盖 direct CLI / IDE registries，修正旧 `AgentVault` 路径并删除遗留 `agentvault` server key；二机 bootstrap 文档同步了新的 registry 探测顺序。
 - MCP server 已改成按 `tools/call` 短生命周期打开真实 SQLite，`tools/list` 不再抢占数据库；本机 stale `agentmemory.db.lock` 已在确认无活跃持有者后清理。
 - AgentMemory 现在具备每日记忆总结层：`daily_memory_digests` 保留可审阅 digest，worker scheduler 自动 catch-up，Workbench 可手动运行，`ProjectContextView` 可读取 recent daily digests。
@@ -215,9 +221,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 用真实 worker 打开 `/admin` Runtime 面板检查 scheduler 设置是否符合预期，然后继续观察真实 LLM 下每日总结质量；同时观察 lazy MCP DB 连接在多 agent 长会话并存时是否还会产生 stale `agentmemory.db.lock`。
+- 提交 `chore: release v1.2.0`，打 `v1.2.0` tag，push `master --follow-tags`，并创建 GitHub Release；发布后再回到真实 worker Runtime scheduler 检查和 lazy MCP DB 长会话观察。
 
 ## Last Sync
 - date: 2026-06-08
-- status: 已完成 Antigravity CLI 旧 `AgentVault` MCP registry 修复、installer resolver 回归覆盖、MCP lazy DB lifecycle 调整与本机 stale DB lock 清理；已通过 `npm run build`、`node --test tests/*.test.cjs` 全量 79 项、`node dist/bin/cli.js install --strict`、Antigravity CLI `get_project_context` 真实 smoke 和 `git diff --check`。
+- status: 已完成本地 `master` fast-forward 合并和 `1.1.0 -> 1.2.0` minor release bump；release checklist 正在推进到 commit / tag / push / GitHub Release；已在 bump 后通过 `npm run build` 与 `node --test tests/*.test.cjs` 全量 79 项。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
