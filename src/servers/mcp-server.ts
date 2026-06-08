@@ -28,8 +28,6 @@ import { buildReleaseManifest } from '../services/release';
 // Load environment variables
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
-const dbManager = new DatabaseManager();
-
 // Create the MCP Server
 const server = new Server(
   {
@@ -42,6 +40,16 @@ const server = new Server(
     },
   }
 );
+
+async function withDatabase<T>(run: (dbManager: DatabaseManager) => Promise<T>): Promise<T> {
+  const dbManager = new DatabaseManager();
+  await dbManager.initialize();
+  try {
+    return await run(dbManager);
+  } finally {
+    dbManager.close();
+  }
+}
 
 // Register tools schema
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -234,13 +242,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const currentPath = path.resolve(process.cwd()).replace(/\\/g, '/');
 
   try {
-    switch (name) {
-      case 'get_project_context': {
+    return await withDatabase(async (dbManager) => {
+      switch (name) {
+        case 'get_project_context': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {
           const text = renderProjectContextView({
             project_path: String(args?.project_path || currentPath).replace(/\\/g, '/'),
             current_state: [],
+            daily_digests: [],
             summary_blocks: [],
             recent_observations: [],
             generated_at: new Date().toISOString(),
@@ -270,9 +280,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: renderProjectContextView(view) }],
         };
-      }
+        }
 
-      case 'search_memory': {
+        case 'search_memory': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {
           return {
@@ -301,9 +311,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const output = `Found ${results.length} memories:\n\n${lines.join('\n')}\n\nUse get_memory_details with the relevant IDs to retrieve full facts, concepts, and files modified.`;
 
         return { content: [{ type: 'text', text: output }] };
-      }
+        }
 
-      case 'memory_timeline': {
+        case 'memory_timeline': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {
           return {
@@ -326,9 +336,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const output = `Chronological timeline (${timeline.length} entries):\n\n${lines.join('\n')}\n\nUse get_memory_details to view detailed narratives.`;
 
         return { content: [{ type: 'text', text: output }] };
-      }
+        }
 
-      case 'get_memory_details': {
+        case 'get_memory_details': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {
           return {
@@ -371,9 +381,9 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
         });
 
         return { content: [{ type: 'text', text: blocks.join('\n\n') }] };
-      }
+        }
 
-      case 'record_memory': {
+        case 'record_memory': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.writeEnabled) {
           return {
@@ -428,9 +438,9 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
             },
           ],
         };
-      }
+        }
 
-      case 'get_memory_state': {
+        case 'get_memory_state': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {
           return {
@@ -474,9 +484,9 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
         return {
           content: [{ type: 'text', text: `${header}\n\n${lines.join('\n')}` }],
         };
-      }
+        }
 
-      case 'set_memory_state': {
+        case 'set_memory_state': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.writeEnabled) {
           return {
@@ -504,11 +514,12 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
             },
           ],
         };
-      }
+        }
 
-      default:
-        throw new Error(`Tool not found: ${name}`);
-    }
+        default:
+          throw new Error(`Tool not found: ${name}`);
+      }
+    });
   } catch (err: any) {
     console.error(`MCP Tool execution error: ${err.message}`);
     return {
@@ -577,7 +588,6 @@ function getLocalHashingEmbedding(text: string): number[] {
 
 // Start STDIO transport listener
 async function main() {
-  await dbManager.initialize();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('AgentMemory MCP Server started on STDIO transport.');

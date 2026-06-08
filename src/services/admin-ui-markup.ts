@@ -57,6 +57,10 @@ export function renderAdminWorkbenchMarkup(): string {
           <div class="metaLabel" data-i18n="metrics.currentStateFacts">Current State Facts</div>
           <div id="currentStateFactsCount" class="metricValue">-</div>
         </div>
+        <div class="metricTile">
+          <div class="metaLabel" data-i18n="metrics.dailyDigests">Daily Digests</div>
+          <div id="dailyDigestsCount" class="metricValue">-</div>
+        </div>
       </div>
 
       <div class="policyRow">
@@ -160,6 +164,83 @@ export function renderAdminWorkbenchMarkup(): string {
                 <button id="releaseCheckButton" class="button primary" type="button" data-i18n="runtime.releaseCheckButton">Check for Updates</button>
                 <button id="releaseOpenButton" class="button secondary" type="button" data-i18n="runtime.releaseOpenButton">Open Release</button>
               </div>
+            </div>
+          </div>
+          <div id="dailyDigestCard" class="card" style="grid-column: 1 / -1;">
+            <div class="policyTitleRow">
+              <div>
+                <div class="metaLabel" data-i18n="runtime.dailyDigestSection">Daily Digest</div>
+                <h3 class="policyTitle" style="margin-top: 8px;" data-i18n="runtime.dailyDigestTitle">Manual memory synthesis</h3>
+              </div>
+              <span id="dailyDigestStatusBadge" class="statusChip warning" data-i18n="runtime.dailyDigestIdle">Idle</span>
+            </div>
+            <p class="panelLead" style="margin-top: 10px;" data-i18n="runtime.dailyDigestLead">
+              Run the same daily memory digest job that the worker schedules automatically, then inspect the latest saved digest.
+            </p>
+
+            <div class="toolbar compact" style="margin-top: 16px;">
+              <label>
+                <span class="fieldLabel" data-i18n="field.project">Project</span>
+                <select id="dailyDigestProjectSelect" class="selectInput">
+                  <option value="" data-i18n="field.chooseProject">Choose a project</option>
+                </select>
+              </label>
+              <label>
+                <span class="fieldLabel" data-i18n="field.localDate">Local Date</span>
+                <input id="dailyDigestDateInput" class="dateInput" type="date" />
+              </label>
+              <div class="buttonSlot">
+                <button id="dailyDigestRunButton" class="button primary" type="button" data-i18n="runtime.dailyDigestRunButton">Run Digest</button>
+              </div>
+            </div>
+
+            <div class="toolbarFooter" style="margin-top: 14px;">
+              <div id="dailyDigestStatusText" class="finePrint" data-i18n="runtime.dailyDigestNoProject">Choose a project to inspect daily digests.</div>
+            </div>
+            <div class="divider"></div>
+            <div class="policyTitleRow">
+              <div>
+                <div class="metaLabel" data-i18n="runtime.dailyDigestSchedulerSection">Scheduler Settings</div>
+                <p class="panelLead" style="margin-top: 8px;" data-i18n="runtime.dailyDigestSchedulerLead">
+                  Control automatic daily digest catch-up without changing the digest selection policy.
+                </p>
+              </div>
+              <span id="dailyDigestSchedulerRuntimeBadge" class="statusChip warning" data-i18n="runtime.dailyDigestSchedulerLoading">Loading</span>
+            </div>
+            <label class="checkRow" style="margin-top: 14px;">
+              <input id="dailyDigestSchedulerEnabledInput" type="checkbox" />
+              <span data-i18n="runtime.dailyDigestSchedulerEnabled">Enable scheduled daily digest runs</span>
+            </label>
+            <div class="toolbar" style="margin-top: 14px;">
+              <label>
+                <span class="fieldLabel" data-i18n="field.scheduleTime">Run Time</span>
+                <input id="dailyDigestScheduleTimeInput" class="dateInput" type="time" value="23:50" />
+              </label>
+              <label>
+                <span class="fieldLabel" data-i18n="field.timeZone">Time Zone</span>
+                <input id="dailyDigestTimeZoneInput" class="textInput" type="text" list="dailyDigestTimeZoneOptions" placeholder="Asia/Shanghai" />
+                <datalist id="dailyDigestTimeZoneOptions">
+                  <option value="Asia/Shanghai"></option>
+                  <option value="UTC"></option>
+                  <option value="America/New_York"></option>
+                  <option value="America/Los_Angeles"></option>
+                  <option value="Europe/London"></option>
+                </datalist>
+              </label>
+              <label>
+                <span class="fieldLabel" data-i18n="field.lookbackDays">Catch-up Days</span>
+                <input id="dailyDigestLookbackInput" class="numberInput" type="number" min="1" max="14" value="2" />
+              </label>
+              <div class="buttonSlot">
+                <button id="dailyDigestSchedulerSaveButton" class="button secondary" type="button" data-i18n="runtime.dailyDigestSchedulerSaveButton">Save Schedule</button>
+              </div>
+            </div>
+            <div class="toolbarFooter" style="margin-top: 14px;">
+              <div id="dailyDigestSchedulerStatusText" class="finePrint" data-i18n="runtime.dailyDigestSchedulerLoading">Loading scheduler settings...</div>
+              <div id="dailyDigestSchedulerNextRunText" class="finePrint"></div>
+            </div>
+            <div id="dailyDigestLatest" class="listBlock" style="margin-top: 12px;">
+              <div class="emptyState" data-i18n="runtime.dailyDigestNoProject">Choose a project to inspect daily digests.</div>
             </div>
           </div>
           <div class="card">
@@ -295,6 +376,10 @@ export function renderAdminWorkbenchMarkup(): string {
             <div class="card">
               <div class="metaLabel" data-i18n="projectContext.currentStructuredState">Current Structured State</div>
               <div id="currentStateList" class="listBlock" style="margin-top: 12px;"></div>
+            </div>
+            <div class="card">
+              <div class="metaLabel" data-i18n="projectContext.dailyDigests">Daily Digests</div>
+              <div id="dailyDigestList" class="listBlock" style="margin-top: 12px;"></div>
             </div>
             <div class="card">
               <div class="metaLabel" data-i18n="projectContext.summaryBlocks">Summary Blocks</div>

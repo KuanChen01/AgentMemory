@@ -49,6 +49,23 @@ export interface RuntimeMemoryPolicy {
   updatedAt: string;
 }
 
+export interface DailyDigestSchedulerConfig {
+  enabled: boolean;
+  lookback_days: number;
+  schedule_hour: number;
+  schedule_minute: number;
+  schedule_time: string;
+  time_zone: string;
+  updatedAt: string;
+}
+
+export interface DailyDigestSchedulerConfigInput {
+  enabled?: boolean;
+  lookback_days?: number;
+  schedule_time?: string;
+  time_zone?: string;
+}
+
 export interface ObservationListFilters {
   agent?: string;
   page?: number;
@@ -92,6 +109,126 @@ export interface StateFactQuery {
   asOf?: string;
 }
 
+export type DailyMemoryDigestStatus =
+  | 'success'
+  | 'skipped_missing_llm'
+  | 'skipped_no_observations'
+  | 'failed';
+
+export interface DailyMemoryDigestPayload {
+  summary: string;
+  facts: string[];
+  decisions: string[];
+  verified_commands: string[];
+  open_questions: string[];
+  next_actions: string[];
+  state_fact_candidates: unknown[];
+  skill_candidates: unknown[];
+  low_signal_patterns: string[];
+  confidence: number;
+}
+
+export interface DailyMemoryDigest {
+  id: string;
+  project_path: string;
+  local_date: string;
+  status: DailyMemoryDigestStatus;
+  digest: DailyMemoryDigestPayload | null;
+  digest_json: string | null;
+  source_observation_ids: string[];
+  source_count: number;
+  model: string | null;
+  prompt_version: string;
+  generated_at: string;
+  reviewed_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DailyMemoryDigestInput {
+  project_path: string;
+  local_date: string;
+  status: DailyMemoryDigestStatus;
+  digest: DailyMemoryDigestPayload | null;
+  source_observation_ids: string[];
+  source_count?: number;
+  model?: string | null;
+  prompt_version: string;
+  generated_at?: string;
+  reviewed_at?: string | null;
+  last_error?: string | null;
+}
+
+export interface DailyMemoryDigestQuery {
+  projectPath?: string;
+  localDate?: string;
+  status?: DailyMemoryDigestStatus;
+  limit?: number;
+}
+
+const DAILY_DIGEST_SCHEDULER_CONFIG_KEY = 'daily_digest_scheduler_config';
+const RUNTIME_MEMORY_POLICY_KEY = 'runtime_memory_policy';
+
+function getDefaultDailyDigestSchedulerConfig(): Omit<DailyDigestSchedulerConfig, 'updatedAt'> {
+  return {
+    enabled: process.env.AGENTMEM_DAILY_DIGEST_DISABLED !== 'true',
+    lookback_days: 2,
+    schedule_hour: 23,
+    schedule_minute: 50,
+    schedule_time: '23:50',
+    time_zone: 'Asia/Shanghai',
+  };
+}
+
+function normalizeDailyDigestSchedulerConfig(
+  input: DailyDigestSchedulerConfigInput
+): Omit<DailyDigestSchedulerConfig, 'updatedAt'> {
+  const schedule = parseScheduleTime(input.schedule_time || '23:50');
+  const timeZone = normalizeTimeZone(input.time_zone || 'Asia/Shanghai');
+  const lookback = Number(input.lookback_days);
+
+  return {
+    enabled: input.enabled !== false,
+    lookback_days: Number.isFinite(lookback)
+      ? Math.max(1, Math.min(14, Math.trunc(lookback)))
+      : 2,
+    schedule_hour: schedule.hour,
+    schedule_minute: schedule.minute,
+    schedule_time: schedule.value,
+    time_zone: timeZone,
+  };
+}
+
+function parseScheduleTime(value: string): { hour: number; minute: number; value: string } {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    throw new Error('Daily digest schedule_time must use HH:mm format.');
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+    throw new Error('Daily digest schedule_time must be between 00:00 and 23:59.');
+  }
+
+  return {
+    hour,
+    minute,
+    value: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+  };
+}
+
+function normalizeTimeZone(value: string): string {
+  const timeZone = String(value || '').trim() || 'Asia/Shanghai';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+  } catch (_error) {
+    throw new Error(`Invalid daily digest time_zone: ${timeZone}`);
+  }
+  return timeZone;
+}
+
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
@@ -118,6 +255,7 @@ export class DatabaseManager {
       this.db.run('PRAGMA journal_mode = WAL;');
       await this.runMigrations();
     } catch (err: any) {
+      this.close();
       throw new Error(`Database initialization failed: ${err.message}`);
     }
   }
@@ -199,6 +337,32 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_state_facts_current
       ON state_facts (project_path, superseded_at)
     `);
+
+    // 6. Daily derived memory digests table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS daily_memory_digests (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        local_date TEXT NOT NULL,
+        status TEXT NOT NULL,
+        digest_json TEXT,
+        source_observation_ids TEXT NOT NULL,
+        source_count INTEGER NOT NULL,
+        model TEXT,
+        prompt_version TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(project_path, local_date)
+      )
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_daily_memory_digests_project_date
+      ON daily_memory_digests (project_path, local_date DESC)
+    `);
   }
 
   // Create or update a session
@@ -223,11 +387,44 @@ export class DatabaseManager {
     const embeddingStr = JSON.stringify(obs.embedding);
 
     // Insert into primary table
-    this.db.run(
-      `INSERT INTO observations (id, session_id, project_path, agent_id, title, narrative, facts, concepts, files_read, files_modified, embedding)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [obs.id, obs.session_id, obs.project_path, obs.agent_id, obs.title, obs.narrative, factsStr, conceptsStr, filesReadStr, filesModStr, embeddingStr]
-    );
+    if (obs.created_at) {
+      this.db.run(
+        `INSERT INTO observations (id, session_id, project_path, agent_id, title, narrative, facts, concepts, files_read, files_modified, embedding, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          obs.id,
+          obs.session_id,
+          obs.project_path,
+          obs.agent_id,
+          obs.title,
+          obs.narrative,
+          factsStr,
+          conceptsStr,
+          filesReadStr,
+          filesModStr,
+          embeddingStr,
+          obs.created_at,
+        ]
+      );
+    } else {
+      this.db.run(
+        `INSERT INTO observations (id, session_id, project_path, agent_id, title, narrative, facts, concepts, files_read, files_modified, embedding)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          obs.id,
+          obs.session_id,
+          obs.project_path,
+          obs.agent_id,
+          obs.title,
+          obs.narrative,
+          factsStr,
+          conceptsStr,
+          filesReadStr,
+          filesModStr,
+          embeddingStr,
+        ]
+      );
+    }
 
     // Insert into FTS virtual table
     this.db.run(
@@ -271,7 +468,7 @@ export class DatabaseManager {
 
     const row = this.db.get(
       `SELECT value, updated_at FROM app_settings WHERE key = ?`,
-      ['runtime_memory_policy']
+      [RUNTIME_MEMORY_POLICY_KEY]
     ) as any;
 
     if (!row) {
@@ -297,6 +494,34 @@ export class DatabaseManager {
       readEnabled: partialPolicy.readEnabled ?? current.readEnabled,
       writeEnabled: partialPolicy.writeEnabled ?? current.writeEnabled,
     });
+  }
+
+  public async getDailyDigestSchedulerConfig(): Promise<DailyDigestSchedulerConfig> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const row = this.db.get(
+      `SELECT value, updated_at FROM app_settings WHERE key = ?`,
+      [DAILY_DIGEST_SCHEDULER_CONFIG_KEY]
+    ) as any;
+
+    if (!row) {
+      return this.persistDailyDigestSchedulerConfig(getDefaultDailyDigestSchedulerConfig());
+    }
+
+    return this.parseDailyDigestSchedulerConfigRow(row);
+  }
+
+  public async updateDailyDigestSchedulerConfig(
+    input: DailyDigestSchedulerConfigInput
+  ): Promise<DailyDigestSchedulerConfig> {
+    const current = await this.getDailyDigestSchedulerConfig();
+    const normalized = normalizeDailyDigestSchedulerConfig({
+      enabled: input.enabled ?? current.enabled,
+      lookback_days: input.lookback_days ?? current.lookback_days,
+      schedule_time: input.schedule_time ?? current.schedule_time,
+      time_zone: input.time_zone ?? current.time_zone,
+    });
+    return this.persistDailyDigestSchedulerConfig(normalized);
   }
 
   public async listObservations(filters: ObservationListFilters = {}): Promise<ObservationListResult> {
@@ -365,6 +590,139 @@ export class DatabaseManager {
   public async countSessions(): Promise<number> {
     if (!this.db) throw new Error('Database not initialized');
     const row = this.db.get(`SELECT COUNT(*) as total FROM sessions`) as any;
+    return Number(row?.total || 0);
+  }
+
+  public async saveDailyMemoryDigest(input: DailyMemoryDigestInput): Promise<DailyMemoryDigest> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+    const id = randomUUID();
+    const generatedAt = input.generated_at || new Date().toISOString();
+    const sourceObservationIds = JSON.stringify(input.source_observation_ids);
+    const digestJson = input.digest === null ? null : JSON.stringify(input.digest);
+    const sourceCount = input.source_count ?? input.source_observation_ids.length;
+
+    this.db.run(
+      `INSERT INTO daily_memory_digests (
+        id,
+        project_path,
+        local_date,
+        status,
+        digest_json,
+        source_observation_ids,
+        source_count,
+        model,
+        prompt_version,
+        generated_at,
+        reviewed_at,
+        last_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_path, local_date) DO UPDATE SET
+        status = excluded.status,
+        digest_json = excluded.digest_json,
+        source_observation_ids = excluded.source_observation_ids,
+        source_count = excluded.source_count,
+        model = excluded.model,
+        prompt_version = excluded.prompt_version,
+        generated_at = excluded.generated_at,
+        reviewed_at = excluded.reviewed_at,
+        last_error = excluded.last_error,
+        updated_at = CURRENT_TIMESTAMP`,
+      [
+        id,
+        normalizedProjectPath,
+        input.local_date,
+        input.status,
+        digestJson,
+        sourceObservationIds,
+        sourceCount,
+        input.model ?? null,
+        input.prompt_version,
+        generatedAt,
+        input.reviewed_at ?? null,
+        input.last_error ?? null,
+      ]
+    );
+
+    const digest = await this.getDailyMemoryDigest({
+      projectPath: normalizedProjectPath,
+      localDate: input.local_date,
+    });
+    if (!digest) {
+      throw new Error('Daily memory digest was not saved');
+    }
+    return digest;
+  }
+
+  public async getDailyMemoryDigest(
+    query: Required<Pick<DailyMemoryDigestQuery, 'projectPath' | 'localDate'>>
+  ): Promise<DailyMemoryDigest | null> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const row = this.db.get(
+      `SELECT *
+       FROM daily_memory_digests
+       WHERE LOWER(project_path) = LOWER(?)
+         AND local_date = ?
+       LIMIT 1`,
+      [this.normalizeProjectPath(query.projectPath), query.localDate]
+    ) as any;
+
+    return row ? this.parseDailyMemoryDigest(row) : null;
+  }
+
+  public async listDailyMemoryDigests(
+    query: DailyMemoryDigestQuery = {}
+  ): Promise<DailyMemoryDigest[]> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const whereParts: string[] = [];
+    const params: any[] = [];
+
+    if (query.projectPath) {
+      whereParts.push(`LOWER(project_path) = LOWER(?)`);
+      params.push(this.normalizeProjectPath(query.projectPath));
+    }
+
+    if (query.localDate) {
+      whereParts.push(`local_date = ?`);
+      params.push(query.localDate);
+    }
+
+    if (query.status) {
+      whereParts.push(`status = ?`);
+      params.push(query.status);
+    }
+
+    const limit = Math.max(1, Math.min(100, Math.trunc(Number(query.limit || 10))));
+    const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const rows = this.db.all(
+      `SELECT *
+       FROM daily_memory_digests
+       ${whereClause}
+       ORDER BY local_date DESC, generated_at DESC, updated_at DESC
+       LIMIT ?`,
+      [...params, limit]
+    ) as any[];
+
+    return rows.map((row) => this.parseDailyMemoryDigest(row));
+  }
+
+  public async countDailyMemoryDigests(projectPath?: string): Promise<number> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    if (projectPath) {
+      const row = this.db.get(
+        `SELECT COUNT(*) as total
+         FROM daily_memory_digests
+         WHERE LOWER(project_path) = LOWER(?)`,
+        [this.normalizeProjectPath(projectPath)]
+      ) as any;
+      return Number(row?.total || 0);
+    }
+
+    const row = this.db.get(`SELECT COUNT(*) as total FROM daily_memory_digests`) as any;
     return Number(row?.total || 0);
   }
 
@@ -654,7 +1012,7 @@ export class DatabaseManager {
          value = excluded.value,
          updated_at = CURRENT_TIMESTAMP`,
       [
-        'runtime_memory_policy',
+        RUNTIME_MEMORY_POLICY_KEY,
         JSON.stringify({
           readEnabled: policy.readEnabled,
           writeEnabled: policy.writeEnabled,
@@ -664,13 +1022,59 @@ export class DatabaseManager {
 
     const row = this.db.get(
       `SELECT value, updated_at FROM app_settings WHERE key = ?`,
-      ['runtime_memory_policy']
+      [RUNTIME_MEMORY_POLICY_KEY]
     ) as any;
     const parsed = JSON.parse(row.value);
 
     return {
       readEnabled: parsed.readEnabled !== false,
       writeEnabled: parsed.writeEnabled !== false,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private async persistDailyDigestSchedulerConfig(
+    config: Omit<DailyDigestSchedulerConfig, 'updatedAt'>
+  ): Promise<DailyDigestSchedulerConfig> {
+    if (!this.db) throw new Error('Database not initialized');
+    const normalized = normalizeDailyDigestSchedulerConfig(config);
+
+    this.db.run(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = CURRENT_TIMESTAMP`,
+      [
+        DAILY_DIGEST_SCHEDULER_CONFIG_KEY,
+        JSON.stringify({
+          enabled: normalized.enabled,
+          lookback_days: normalized.lookback_days,
+          schedule_time: normalized.schedule_time,
+          time_zone: normalized.time_zone,
+        }),
+      ]
+    );
+
+    const row = this.db.get(
+      `SELECT value, updated_at FROM app_settings WHERE key = ?`,
+      [DAILY_DIGEST_SCHEDULER_CONFIG_KEY]
+    ) as any;
+
+    return this.parseDailyDigestSchedulerConfigRow(row);
+  }
+
+  private parseDailyDigestSchedulerConfigRow(row: any): DailyDigestSchedulerConfig {
+    const parsed = JSON.parse(row.value);
+    const normalized = normalizeDailyDigestSchedulerConfig({
+      enabled: parsed.enabled !== false,
+      lookback_days: parsed.lookback_days,
+      schedule_time: parsed.schedule_time,
+      time_zone: parsed.time_zone,
+    });
+
+    return {
+      ...normalized,
       updatedAt: row.updated_at,
     };
   }
@@ -704,6 +1108,26 @@ export class DatabaseManager {
       effective_at: row.effective_at,
       recorded_at: row.recorded_at,
       superseded_at: row.superseded_at,
+    };
+  }
+
+  private parseDailyMemoryDigest(row: any): DailyMemoryDigest {
+    return {
+      id: row.id,
+      project_path: row.project_path,
+      local_date: row.local_date,
+      status: row.status,
+      digest: row.digest_json ? JSON.parse(row.digest_json) : null,
+      digest_json: row.digest_json,
+      source_observation_ids: JSON.parse(row.source_observation_ids),
+      source_count: Number(row.source_count || 0),
+      model: row.model,
+      prompt_version: row.prompt_version,
+      generated_at: row.generated_at,
+      reviewed_at: row.reviewed_at,
+      last_error: row.last_error,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     };
   }
 

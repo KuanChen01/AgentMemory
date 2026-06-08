@@ -26,10 +26,15 @@ export async function loadProjectContextView(
   limit: number
 ): Promise<ProjectContextView> {
   const normalizedLimit = parseProjectContextLimit(limit);
-  const [stateFacts, timeline] = await Promise.all([
+  const [stateFacts, timeline, dailyDigests] = await Promise.all([
     dbManager.getProjectStateFacts(projectPath),
     dbManager.getTimeline(projectPath),
+    dbManager.listDailyMemoryDigests({
+      projectPath,
+      status: 'success',
+      limit: Math.min(normalizedLimit, 7),
+    }),
   ]);
 
-  return createProjectContextView(projectPath, stateFacts, timeline, normalizedLimit);
+  return createProjectContextView(projectPath, stateFacts, timeline, normalizedLimit, dailyDigests);
 }

@@ -214,6 +214,7 @@ export function ensureAntigravityMcpServer(jsonText: string, mcpServerPath: stri
     parsed.mcpServers = {};
   }
 
+  delete parsed.mcpServers.agentvault;
   parsed.mcpServers.agentmem = {
     command: 'node',
     args: [mcpServerPath],
@@ -245,6 +246,17 @@ export function resolveAntigravityConfigPath(
 ): string | null {
   if (overridePath) {
     return path.resolve(overridePath);
+  }
+
+  const directCandidates = [
+    path.join(homeDir, '.gemini', 'antigravity-cli', 'mcp_config.json'),
+    path.join(homeDir, '.gemini', 'antigravity-ide', 'mcp_config.json'),
+    path.join(homeDir, '.gemini', 'antigravity', 'mcp_config.json'),
+    path.join(homeDir, '.gemini', 'config', 'mcp_config.json'),
+  ].filter((candidate) => fs.existsSync(candidate));
+
+  if (directCandidates.length > 0) {
+    return directCandidates[0];
   }
 
   const pluginsRoot = path.join(homeDir, '.gemini', 'config', 'plugins');
@@ -444,6 +456,7 @@ function cleanupOpenCodeConfig(config: Record<string, any>) {
 
 function cleanupAntigravityConfig(config: Record<string, any>) {
   if (isObject(config.mcpServers)) {
+    delete config.mcpServers.agentvault;
     delete config.mcpServers.agentmem;
     pruneEmptyObject(config, 'mcpServers');
   }
@@ -478,7 +491,9 @@ function detectOpenCodeLegacy(config: Record<string, any>): boolean {
 }
 
 function detectAntigravityLegacy(config: Record<string, any>): boolean {
-  return !!config?.mcpServers?.agentmem;
+  return !!config?.mcpServers?.agentmem ||
+    !!config?.mcpServers?.agentvault ||
+    hasMarkerInJson(config?.mcpServers, ['AgentVault', 'agentvault']);
 }
 
 function applyManagedTextWrite(
@@ -894,7 +909,7 @@ function installAntigravity(context: InstallContext, overridePath?: string): Ins
   const configPath = resolveAntigravityConfigPath(context.homeDir, overridePath);
   if (!configPath) {
     throw new Error(
-      'Antigravity MCP registry was not found under ~/.gemini/config/plugins/*/mcp_config.json. ' +
+      'Antigravity MCP registry was not found under ~/.gemini/antigravity-cli, ~/.gemini/antigravity-ide, ~/.gemini/antigravity, or ~/.gemini/config/plugins/*/mcp_config.json. ' +
       'Create the plugin registry first or pass --antigravity-config <path>.'
     );
   }

@@ -11,6 +11,7 @@ const cliPath = path.join(projectRoot, 'dist', 'bin', 'cli.js');
 const {
   ensureAntigravityMcpServer,
   renderOpenCodePlugin,
+  resolveAntigravityConfigPath,
 } = require('../dist/services/agent-installer.js');
 const { ensureBootstrapEnvFile } = require('../dist/services/bootstrap.js');
 
@@ -95,6 +96,10 @@ test('ensureAntigravityMcpServer upserts a single mcpServers.agentmem entry', ()
           args: ['old/path.js'],
           disabled: true,
         },
+        agentvault: {
+          command: 'node',
+          args: ['E:/Repo/AgentVault/dist/servers/mcp-server.js'],
+        },
       },
     },
     null,
@@ -112,11 +117,36 @@ test('ensureAntigravityMcpServer upserts a single mcpServers.agentmem entry', ()
     args: ['E:/Repo/AgentMemory/dist/servers/mcp-server.js'],
     disabled: false,
   });
+  assert.equal(parsed.mcpServers.agentvault, undefined);
   assert.deepEqual(parsed.mcpServers.other, {
     command: 'python',
     args: ['server.py'],
     disabled: false,
   });
+});
+
+test('resolveAntigravityConfigPath prefers the Antigravity CLI registry', () => {
+  const tempHome = makeTempHome();
+
+  try {
+    const cliConfigPath = path.join(tempHome, '.gemini', 'antigravity-cli', 'mcp_config.json');
+    const pluginConfigPath = path.join(
+      tempHome,
+      '.gemini',
+      'config',
+      'plugins',
+      'local-game-mcps',
+      'mcp_config.json'
+    );
+    fs.mkdirSync(path.dirname(cliConfigPath), { recursive: true });
+    fs.mkdirSync(path.dirname(pluginConfigPath), { recursive: true });
+    fs.writeFileSync(cliConfigPath, '{"mcpServers":{}}\n', 'utf8');
+    fs.writeFileSync(pluginConfigPath, '{"mcpServers":{}}\n', 'utf8');
+
+    assert.equal(resolveAntigravityConfigPath(tempHome), cliConfigPath);
+  } finally {
+    removeDir(tempHome);
+  }
 });
 
 test('agentmem install creates the OpenCode plugin and configures Antigravity when a registry exists', async () => {
@@ -166,6 +196,48 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
     assert.match(pluginText, /opencode-post-tool\.js/);
 
     const antigravityConfig = JSON.parse(fs.readFileSync(antigravityConfigPath, 'utf8'));
+    assert.deepEqual(antigravityConfig.mcpServers.agentmem, {
+      command: 'node',
+      args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
+      disabled: false,
+    });
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
+test('agentmem install migrates stale Antigravity CLI agentvault registry', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    const antigravityConfigPath = path.join(
+      tempHome,
+      '.gemini',
+      'antigravity-cli',
+      'mcp_config.json'
+    );
+    fs.mkdirSync(path.dirname(antigravityConfigPath), { recursive: true });
+    fs.writeFileSync(
+      antigravityConfigPath,
+      JSON.stringify(
+        {
+          mcpServers: {
+            agentvault: {
+              command: 'node',
+              args: ['E:/Kuan/Projects/Codex/AgentVault/dist/servers/mcp-server.js'],
+            },
+          },
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    await runCli(tempHome, ['install', '--strict']);
+
+    const antigravityConfig = JSON.parse(fs.readFileSync(antigravityConfigPath, 'utf8'));
+    assert.equal(antigravityConfig.mcpServers.agentvault, undefined);
     assert.deepEqual(antigravityConfig.mcpServers.agentmem, {
       command: 'node',
       args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],

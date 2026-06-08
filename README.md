@@ -12,6 +12,7 @@ AgentMemory is a compilation-free, lightweight, and universal persistent memory 
 *   **Compilation-Free & Lightweight**: Built with a pure JavaScript in-memory Feature Hashing Vectorizer and WebAssembly SQLite (`node-sqlite3-wasm`), bypassing complex C++ native compiler dependencies (`node-gyp`).
 *   **Hybrid Search**: Combines SQLite FTS5 BM25 keyword matching with Cosine Similarity vector retrieval for highly relevant results.
 *   **Background Summarization**: Uses the DeepSeek Flash API to summarize session tool logs asynchronously in the background.
+*   **Daily Memory Digests**: Runs a daily per-project synthesis job that filters low-signal observations, writes compact fact/decision/action digests, and feeds recent digests into startup context.
 *   **Secure Global Config**: Stores API keys and settings globally (`~/.agentmem/.env`) to keep codebase repositories clean and credentials safe.
 *   **Loopback Admin Console**: Exposes a local-only `/admin` page for inspecting the database, filtering observations, and toggling global memory read/write gates at runtime.
 *   **Persistent Runtime Policy**: Persists `readEnabled` and `writeEnabled` flags in SQLite so runtime gating survives worker restarts.
@@ -192,9 +193,9 @@ Windows local control now has two entrypoints:
 
 The page provides:
 
-*   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, workbench posture, and a read-only GitHub Release update check with manual upgrade guidance
+*   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, daily digest status / manual run / scheduler settings, workbench posture, and a read-only GitHub Release update check with manual upgrade guidance
 *   **LLM Settings** for switching `AGENTMEM_LLM_MODEL`, updating the OpenAI-compatible API base URL, preserving or replacing the API key, and running a live connection test
-*   **Project Context** for the current `ProjectContextView`, rendered startup text, and payload / summary health metrics
+*   **Project Context** for the current `ProjectContextView`, recent daily digests, rendered startup text, and payload / summary health metrics
 *   **State Lab** for explicit structured state reads and writes
 *   **Search Diagnostics** for raw hybrid search scores (`hybrid_score`, `fts_score`, `vector_score`) and low-signal title visibility
 *   **Observation Ledger** for filterable observation browsing and detailed drill-down
@@ -205,6 +206,7 @@ AgentMemory now separates two memory layers:
 
 *   **Observations** remain the append-only historical ledger used for hybrid search and detailed recall.
 *   **State facts** store explicit current or historical truth with `effective_at`, `recorded_at`, and `superseded_at`.
+*   **Daily digests** store scheduled or manually triggered per-project summaries with fact, decision, command, open-question, and next-action lists. Digest output is not auto-promoted into state facts.
 
 New interfaces in this first cut:
 
@@ -216,6 +218,7 @@ New interfaces in this first cut:
 `ProjectContextView` combines:
 
 *   `current_state`
+*   `daily_digests` from recent successful daily summaries, trimmed for startup use
 *   `summary_blocks` built from curated recent observations with low-signal titles filtered out and duplicate titles collapsed
 *   `recent_observations` as a slim startup-oriented metadata list (`id`, `title`, `created_at`, `agent_id`) without full narratives or embeddings
 *   `generated_at`
@@ -233,6 +236,10 @@ The workbench also exposes loopback-only admin APIs for the UI:
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads structured state for the workbench
 *   `POST /admin/api/state` explicitly writes a structured state fact from the workbench
 *   `POST /admin/api/search` returns raw hybrid search diagnostics for the current project without changing the ranking algorithm
+*   `GET /admin/api/digests?project_path=&limit=` returns recent saved daily memory digests for a project
+*   `POST /admin/api/digests/run` manually runs the daily memory digest job for a selected project and optional `local_date`
+*   `GET /admin/api/digest-scheduler` returns the persisted daily digest scheduler config and current runtime status
+*   `POST /admin/api/digest-scheduler` saves scheduler `enabled`, `schedule_time`, `time_zone`, and `lookback_days`, then applies the new timer to the running worker
 *   `GET /admin/api/release-check` compares the current checkout against the latest published GitHub Release and returns manual upgrade guidance for either git checkouts or source archives
 *   `GET /admin/api/llm-config` returns a sanitized LLM config snapshot without exposing the full API key
 *   `POST /admin/api/llm-config` persists model, API URL, JSON-mode, headers, and optional API key changes to `~/.agentmem/.env` and updates the running worker process
@@ -251,16 +258,19 @@ The workbench also exposes loopback-only admin APIs for the UI:
 
 Both flags are stored in SQLite `app_settings`, so the selected policy survives worker restarts.
 
+Daily digest reads use the same read gate as startup context, and manual digest runs use the same write gate as observation and state writes. Scheduler settings are persisted in SQLite `app_settings`; the legacy `AGENTMEM_DAILY_DIGEST_DISABLED=true` environment flag only seeds the default value before a scheduler setting is saved.
+
 #### Operating workflow
 
 1. Use `npm run workbench` for the old one-click launch, or use `start-workbench.cmd` for interactive `Start / Stop / Restart / Status / Open Admin` control
 2. Open `http://127.0.0.1:38888/admin`
 3. Use the `Read Memory` and `Write Memory` switches to change runtime policy
 4. Use the Runtime release card to compare the current checkout with the latest GitHub Release and choose the recommended manual upgrade path
-5. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
-6. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
-7. Use `Observation Ledger` to drill into the raw observation history when needed
-8. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
+5. Use Runtime daily digest controls to inspect the latest per-project digest, manually run one for a selected local date, or change the automatic scheduler's enabled state, run time, time zone, and catch-up window
+6. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
+7. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
+8. Use `Observation Ledger` to drill into the raw observation history when needed
+9. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
 
 ---
 
@@ -357,7 +367,7 @@ args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
 #### 4. Antigravity CLI
-`agentmem install` now also updates the active Antigravity MCP registry. On this machine, the validated registration path is the plugin MCP config under the Gemini-compatible config root. If your second machine keeps that registry somewhere else, pass:
+`agentmem install` now also updates the active Antigravity MCP registry. It checks Antigravity's direct registries first (`%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`, then `antigravity-ide`, `antigravity`, and `.gemini\config\mcp_config.json`) before falling back to Gemini-compatible plugin registries under `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json`. If your machine keeps that registry somewhere else, pass:
 
 ```bash
 agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"

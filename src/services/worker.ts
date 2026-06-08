@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import {
+  DailyDigestSchedulerConfig,
   DatabaseManager,
   Observation,
   ObservationListFilters,
@@ -35,6 +36,12 @@ import {
 } from './llm-config';
 import { buildReleaseManifest } from './release';
 import { checkLatestRelease } from './release-check';
+import { runDailyMemoryDigest } from './daily-digest';
+import {
+  DailyDigestSchedulerHandle,
+  millisecondsUntilNextLocalDigestRun,
+  startDailyDigestScheduler,
+} from './daily-digest-scheduler';
 
 // Load environment variables
 dotenv.config({ path: getAgentMemoryEnvPath() });
@@ -44,6 +51,7 @@ app.use(express.json({ limit: '10mb' })); // Support large logs
 
 const PORT = process.env.AGENTMEM_PORT || 38888;
 const dbManager = new DatabaseManager();
+let dailyDigestScheduler: DailyDigestSchedulerHandle | null = null;
 
 // Queue to process tool executions sequentially in the background
 interface QueuedToolLog {
@@ -163,10 +171,58 @@ function parseSearchLimit(rawLimit: unknown, fallback: number = 10): number {
   return Math.min(Math.trunc(value), 50);
 }
 
+function applyDailyDigestSchedulerConfig(config: DailyDigestSchedulerConfig) {
+  dailyDigestScheduler?.stop();
+  dailyDigestScheduler = null;
+  if (!config.enabled) {
+    return;
+  }
+
+  dailyDigestScheduler = startDailyDigestScheduler(dbManager, {
+    lookbackDays: config.lookback_days,
+    scheduleHour: config.schedule_hour,
+    scheduleMinute: config.schedule_minute,
+    timeZone: config.time_zone,
+  });
+}
+
+function buildDailyDigestSchedulerPayload(config: DailyDigestSchedulerConfig) {
+  const active = !!dailyDigestScheduler;
+  const delayMs = active
+    ? millisecondsUntilNextLocalDigestRun(
+        new Date(),
+        config.schedule_hour,
+        config.schedule_minute,
+        config.time_zone
+      )
+    : null;
+
+  return {
+    config,
+    runtime: {
+      active,
+      next_run_at: delayMs === null ? null : new Date(Date.now() + delayMs).toISOString(),
+      next_run_delay_ms: delayMs,
+    },
+  };
+}
+
+function normalizeDailyDigestSchedulerBody(body: any) {
+  return {
+    enabled: Object.prototype.hasOwnProperty.call(body, 'enabled') ? !!body.enabled : undefined,
+    lookback_days: Object.prototype.hasOwnProperty.call(body, 'lookback_days')
+      ? Number(body.lookback_days)
+      : undefined,
+    schedule_time: typeof body.schedule_time === 'string' ? body.schedule_time : undefined,
+    time_zone: typeof body.time_zone === 'string' ? body.time_zone : undefined,
+  };
+}
+
 // Initialize database before starting the server
 async function startServer() {
   await dbManager.initialize();
   console.log('AgentMemory SQLite database initialized.');
+  applyDailyDigestSchedulerConfig(await dbManager.getDailyDigestSchedulerConfig());
   
   app.listen(PORT, () => {
     console.log(`AgentMemory worker service running on port ${PORT}`);
@@ -179,13 +235,14 @@ app.get('/admin', adminOnlyGuard, async (_req, res) => {
 
 app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
   try {
-    const [policy, observations, sessions, projects, agents, currentStateFacts] = await Promise.all([
+    const [policy, observations, sessions, projects, agents, currentStateFacts, dailyDigests] = await Promise.all([
       dbManager.getRuntimePolicy(),
       dbManager.countObservations(),
       dbManager.countSessions(),
       dbManager.listDistinctProjects(),
       dbManager.listDistinctAgents(),
       dbManager.countCurrentStateFacts(),
+      dbManager.countDailyMemoryDigests(),
     ]);
 
     res.json({
@@ -196,6 +253,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
         projects: projects.length,
         agents: agents.length,
         currentStateFacts,
+        dailyDigests,
       },
       release: buildReleaseManifest(),
       projects,
@@ -371,6 +429,99 @@ app.post('/admin/api/search', adminOnlyGuard, async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error running admin search diagnostics:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/digests', adminOnlyGuard, async (req, res) => {
+  const projectPath = req.query.project_path as string;
+  const limit = parseSearchLimit(req.query.limit, 10);
+
+  if (!projectPath) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  const normalizedProjectPath = normalizeProjectPath(projectPath);
+  try {
+    if (!(await isReadEnabled())) {
+      return res.json({
+        disabled: true,
+        message: READ_DISABLED_MESSAGE,
+        project_path: normalizedProjectPath,
+        latest: null,
+        digests: [],
+      });
+    }
+
+    const digests = await dbManager.listDailyMemoryDigests({
+      projectPath: normalizedProjectPath,
+      limit,
+    });
+    res.json({
+      project_path: normalizedProjectPath,
+      latest: digests[0] || null,
+      digests,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error fetching admin daily digests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/digest-scheduler', adminOnlyGuard, async (_req, res) => {
+  try {
+    const config = await dbManager.getDailyDigestSchedulerConfig();
+    res.json(buildDailyDigestSchedulerPayload(config));
+  } catch (err: any) {
+    console.error('Error fetching admin daily digest scheduler config:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/digest-scheduler', adminOnlyGuard, async (req, res) => {
+  try {
+    const config = await dbManager.updateDailyDigestSchedulerConfig(
+      normalizeDailyDigestSchedulerBody(req.body || {})
+    );
+    applyDailyDigestSchedulerConfig(config);
+    res.json({
+      success: true,
+      ...buildDailyDigestSchedulerPayload(config),
+    });
+  } catch (err: any) {
+    console.error('Error updating admin daily digest scheduler config:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/digests/run', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+
+  if (!body.project_path) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
+    const result = await runDailyMemoryDigest({
+      dbManager,
+      localDate: body.local_date ? String(body.local_date) : undefined,
+      projectPath: normalizeProjectPath(String(body.project_path)),
+      timeZone: body.time_zone ? String(body.time_zone) : undefined,
+    });
+
+    res.json({
+      success: true,
+      digest: result.digest,
+      local_date: result.localDate,
+      selection: result.selection,
+    });
+  } catch (err: any) {
+    console.error('Error running admin daily digest:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -615,6 +766,7 @@ app.post('/shutdown', (req, res) => {
   res.json({ success: true, message: 'Shutting down AgentMemory worker...' });
   console.log('Shutdown request received. Exiting...');
   setTimeout(() => {
+    dailyDigestScheduler?.stop();
     dbManager.close();
     process.exit(0);
   }, 500);

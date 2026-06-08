@@ -76,6 +76,28 @@ async function seedDatabase(dbPath, projectPath) {
       value: 38888,
       effective_at: '2026-02-01T00:00:00.000Z',
     });
+    await db.saveDailyMemoryDigest({
+      project_path: projectPath,
+      local_date: '2026-06-08',
+      status: 'success',
+      digest: {
+        summary: 'Daily digest service was implemented.',
+        facts: ['Digest fact'],
+        decisions: ['Original observations remain append-only.'],
+        verified_commands: ['node --test tests/context-worker.test.cjs'],
+        open_questions: [],
+        next_actions: ['Review digest candidates in admin.'],
+        state_fact_candidates: [],
+        skill_candidates: [],
+        low_signal_patterns: [],
+        confidence: 0.9,
+      },
+      source_observation_ids: ['digest-source-1'],
+      source_count: 1,
+      model: 'mock',
+      prompt_version: 'daily-digest-v1',
+      generated_at: '2026-06-08T23:50:00.000Z',
+    });
   } finally {
     db.close();
     if (previous === undefined) {
@@ -201,9 +223,11 @@ test('worker context endpoint returns ProjectContextView and hooks render it', a
     const payload = await response.json();
     assert.equal(payload.project_path, projectPath);
     assert.ok(Array.isArray(payload.current_state));
+    assert.ok(Array.isArray(payload.daily_digests));
     assert.ok(Array.isArray(payload.summary_blocks));
     assert.ok(Array.isArray(payload.recent_observations));
     assert.ok(payload.current_state.some((entry) => entry.fact_key === 'user_budget' && entry.value === 80000));
+    assert.equal(payload.daily_digests[0].summary, 'Daily digest service was implemented.');
     assert.ok(payload.summary_blocks.length > 0);
     assert.equal(payload.recent_observations[0].title, 'Alpha memory');
     assert.equal(payload.recent_observations[0].embedding, undefined);
@@ -213,7 +237,9 @@ test('worker context endpoint returns ProjectContextView and hooks render it', a
     for (const scriptName of ['claude-session-start.js', 'codex-session-start.js', 'opencode-session-start.js']) {
       const output = await runHook(scriptName, projectPath, port);
       assert.match(output, /Current structured state/i);
+      assert.match(output, /Recent daily digests/i);
       assert.match(output, /user_budget/);
+      assert.match(output, /Daily digest service was implemented/);
       assert.match(output, /Alpha memory/);
       assert.doesNotMatch(output, /Read README\.md file/);
       assert.doesNotMatch(output, /Checked git status/);

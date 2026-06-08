@@ -46,9 +46,25 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 当前目标是把 AgentMemory 推进到更正式的可分发产品形态：先建立 v1 的发布机制与版本纪律，包括 `master` 稳定线、严格 `SemVer`、`GitHub Release + 源码归档` 分发主线，以及后续网页 update-check 需要依赖的 release metadata。
+- 当前目标是完成 Antigravity CLI 旧 `AgentVault` MCP registry 修复，并恢复真实 MCP `get_project_context` 启动验证；本轮已完成，下一步回到真实 worker Runtime scheduler 检查。
 
 ## Current State
+- 已修复本机 Antigravity CLI 配置中的旧 `agentvault` / `AgentVault` 路径：当前 `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json` 注册 `mcpServers.agentmem` 并指向 `E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js`。
+- 安装器的 Antigravity resolver 现在优先检查 direct registries（`antigravity-cli`、`antigravity-ide`、`antigravity`、`config\mcp_config.json`），再回退到 plugin registries；写入时会删除遗留 `agentvault`。
+- MCP server 已改为 lazy database lifecycle：`tools/list` 不再打开 SQLite，`tools/call` 按请求创建和关闭 `DatabaseManager`；`DatabaseManager.initialize()` 失败时会关闭半初始化连接。
+- 已清理本机遗留 `C:\Users\Admin\.agentmem\agentmemory.db.lock` stale lock directory，并删除未被 OpenCode 配置引用的旧 `C:\Users\Admin\.config\opencode\plugins\agentvault-plugin.mjs`。
+- 已用 Antigravity CLI 当前 registry 拉起真实 MCP server，验证 `tools/list` 与 `get_project_context` 均可用；当前活跃配置面没有再发现 `AgentVault` / `agentvault`。
+- 已新增 `daily_memory_digests` 数据层：按 `(project_path, local_date)` 唯一保存每日总结，记录运行状态、source observation IDs、LLM 模型、prompt version、digest JSON 和错误信息。
+- 已新增 daily digest selection policy：只选择高信号 observation，过滤低信号内容、重复标题和超限记录，并保留选择 / 排除原因用于测试与调试。
+- Worker 启动时默认启动每日 digest scheduler，对最近项目日期做 deterministic catch-up；已有 success digest 会跳过，测试可用 `AGENTMEM_DAILY_DIGEST_DISABLED=true` 禁用。
+- 已新增 loopback-only admin API：`GET /admin/api/digests?project_path=&limit=` 读取项目 digest，`POST /admin/api/digests/run` 为项目和可选 `local_date` 手动运行每日总结。
+- 已新增 loopback-only scheduler API：`GET /admin/api/digest-scheduler` 返回每日总结 scheduler 配置与运行态，`POST /admin/api/digest-scheduler` 保存 `enabled`、`schedule_time`、`time_zone` 和 `lookback_days` 并重启当前 worker timer。
+- 每日总结 scheduler 配置现在持久化在 SQLite `app_settings`，`AGENTMEM_DAILY_DIGEST_DISABLED=true` 只作为首次默认值种子；保存后的网页配置成为准确信源。
+- `/admin` Runtime 面板已新增 Daily Digest 卡片，可选择项目和本地日期手动运行总结，并查看最新 digest；Project Context 面板现在显示进入 startup context 的 recent daily digests。
+- `/admin` Runtime 的 Daily Digest 卡片现在包含 Scheduler Settings：启停、运行时间、时区、catch-up 天数、保存状态和下一次运行时间。
+- `ProjectContextView` 已新增 `daily_digests` 字段，最近成功的 digest 会排在 `summary_blocks` 之前渲染，作为 agent 启动时的压缩长期上下文。
+- 双语 README 已补充每日总结、admin digest API、Runtime 手动入口、`ProjectContextView.daily_digests` 和 runtime policy gate 语义。
+- Vault 项目笔记已记录本轮 daily digest 落地状态，并新增 decision note：`Decision - AgentMemory daily digests stay reviewable before state promotion`。
 - 彻底解决了 Codex 持久化记忆未记录的问题，在 `~/.codex/hooks.json` 中配置了会话钩子并启用了 `hooks` 功能旗标。
 - 在 `src/hooks/` 下新增了 Codex 专用的 `codex-session-start.ts` 和 `codex-post-tool.ts` 钩子脚本。
 - 在 Codex 的 `AGENTS.md` 尾部追加了独立的 `AgentMemory Sync Rules` 章节，保持原有 Obsidian 规则不受修改或混淆。
@@ -123,6 +139,8 @@
 - `node --test tests\embedding-config.test.cjs`
 - `node --test tests\mcp-state.test.cjs`
 - `node --test tests\worker-admin.test.cjs`
+- `node --test tests/db-daily-digest.test.cjs tests/memory-policy.test.cjs tests/daily-digest.test.cjs tests/daily-digest-scheduler.test.cjs tests/context-view.test.cjs tests/context-worker.test.cjs tests/mcp-context.test.cjs tests/worker-admin.test.cjs`
+- `node --test tests/db-daily-digest-scheduler-config.test.cjs tests/daily-digest-scheduler.test.cjs tests/worker-admin.test.cjs`
 - `node --test tests\mcp-policy.test.cjs`
 - `node dist/services/worker.js`
 - `node dist/hooks/claude-session-start.js`
@@ -134,12 +152,15 @@
 - `node dist/bin/cli.js uninstall --strict --purge-all`
 - `node dist/bin/cli.js bootstrap-win --no-open --strict`
 - `node --test tests/install-bootstrap.test.cjs`
+- `node --test tests\mcp-context.test.cjs tests\install-bootstrap.test.cjs tests\installer-uninstall.test.cjs`
 - `node --test tests/*.test.cjs`
+- `git diff --check`
+- Antigravity CLI MCP smoke: `tools/list` and `tools/call get_project_context` against `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json`
 - bundled Playwright + local Chrome screenshot QA against isolated temp worker: desktop 1440x1000 and mobile 390x844, `LLM Settings` active, no horizontal overflow, inline no-key connection failure rendered
 
 ## Known Constraints
 - 不同 agent 的配置文件格式不一致，安装器需要分别处理 OpenCode 与 Claude Code 的差异。
-- 本机真实 `C:\Users\Admin\.agentmem\agentmemory.db` 可能被多个 `dist/servers/mcp-server.js` 进程持有；在这些进程存活时，直接重启默认 `/admin` worker 可能因 DB open lock 失败。当前 UI / API 验证均使用隔离 temp DB，不会污染真实数据库。
+- MCP server 现在不会在 idle / `tools/list` 阶段持有真实 DB；如果 agent 在 DB 写入期间异常退出，`node-sqlite3-wasm` 仍可能留下 stale `C:\Users\Admin\.agentmem\agentmemory.db.lock`，需要先确认没有活跃 AgentMemory DB 进程再清理。
 
 ## Open Questions
 - `Raw Execution:*` 这类标题是否也应该纳入更严格的 low-signal 过滤规则，还是保留为少量原始执行证据。
@@ -148,6 +169,12 @@
 - 新增的 `/admin` LLM connection test 已用本地 mock provider 覆盖；真实供应商 endpoint 仍应在用户提供真实 API key 后从网页 UI 再跑一次 live test。
 
 ## Latest Durable Changes
+- Antigravity 安装器现在覆盖 direct CLI / IDE registries，修正旧 `AgentVault` 路径并删除遗留 `agentvault` server key；二机 bootstrap 文档同步了新的 registry 探测顺序。
+- MCP server 已改成按 `tools/call` 短生命周期打开真实 SQLite，`tools/list` 不再抢占数据库；本机 stale `agentmemory.db.lock` 已在确认无活跃持有者后清理。
+- AgentMemory 现在具备每日记忆总结层：`daily_memory_digests` 保留可审阅 digest，worker scheduler 自动 catch-up，Workbench 可手动运行，`ProjectContextView` 可读取 recent daily digests。
+- 每日总结输出保持 reviewable-before-promotion：LLM 可以产出 `state_fact_candidates` 与 `skill_candidates`，但不会自动写入 `state_facts` 或技能库，避免未经审核的推断变成长期真相。
+- `/admin` 已新增 Daily Digest Runtime 卡片与对应 admin API，双语 README 和 Vault decision note 已同步记录新的长期记忆 harness 边界。
+- `/admin` Daily Digest Runtime 卡片现在可控制 scheduler 参数，配置保存到 `app_settings` 后会立即停止或重启当前 worker 的定时器；scheduler 的下一次运行时间按配置时区计算。
 - 实现了 Codex 自动化钩子配置并集成了全局 `hooks.json` 规则。
 - 数据库和工作区路径已完成从 `AgentVault` 到 `AgentMemory` 的迁移。
 - OpenCode 安装器已改用字符级 JSONC 注释剥离器。
@@ -188,9 +215,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 观察 `v1.1.0` 发布后的 operator 反馈，并决定是否继续把本机 `install-state / backup` 状态以只读诊断方式暴露到 `/admin`，以及是否需要给 workbench 增加显式 port selector。
+- 用真实 worker 打开 `/admin` Runtime 面板检查 scheduler 设置是否符合预期，然后继续观察真实 LLM 下每日总结质量；同时观察 lazy MCP DB 连接在多 agent 长会话并存时是否还会产生 stale `agentmemory.db.lock`。
 
 ## Last Sync
-- date: 2026-06-07
-- status: 已完成交互式 workbench 控制入口与 `v1.1.0` release candidate 验证：`start-workbench.cmd` 现已支持状态感知菜单与参数模式，`npm run workbench` 继续保留一键启动语义，并已通过无参数菜单 smoke、`node --test tests/workbench-*.test.cjs`、`npm run build` 与 `node --test tests/*.test.cjs` 全量回归验证。
+- date: 2026-06-08
+- status: 已完成 Antigravity CLI 旧 `AgentVault` MCP registry 修复、installer resolver 回归覆盖、MCP lazy DB lifecycle 调整与本机 stale DB lock 清理；已通过 `npm run build`、`node --test tests/*.test.cjs` 全量 79 项、`node dist/bin/cli.js install --strict`、Antigravity CLI `get_project_context` 真实 smoke 和 `git diff --check`。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

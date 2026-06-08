@@ -32,9 +32,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     llmTestResult: null,
     releaseCheck: null,
     contextPayload: null,
+    digestSchedulerPayload: null,
+    digestPayload: null,
     statePayload: null,
     searchPayload: null,
     isCheckingRelease: false,
+    isSavingDigestScheduler: false,
+    isRunningDigest: false,
     pollHandle: null,
     statusLineState: {},
   };
@@ -47,6 +51,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     projectsCount: document.getElementById("projectsCount"),
     agentsCount: document.getElementById("agentsCount"),
     currentStateFactsCount: document.getElementById("currentStateFactsCount"),
+    dailyDigestsCount: document.getElementById("dailyDigestsCount"),
     statusText: document.getElementById("statusText"),
     policyUpdatedAt: document.getElementById("policyUpdatedAt"),
     runtimeProjectList: document.getElementById("runtimeProjectList"),
@@ -63,6 +68,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     releaseCheckedAt: document.getElementById("releaseCheckedAt"),
     releaseCheckButton: document.getElementById("releaseCheckButton"),
     releaseOpenButton: document.getElementById("releaseOpenButton"),
+    dailyDigestStatusBadge: document.getElementById("dailyDigestStatusBadge"),
+    dailyDigestProjectSelect: document.getElementById("dailyDigestProjectSelect"),
+    dailyDigestDateInput: document.getElementById("dailyDigestDateInput"),
+    dailyDigestRunButton: document.getElementById("dailyDigestRunButton"),
+    dailyDigestStatusText: document.getElementById("dailyDigestStatusText"),
+    dailyDigestLatest: document.getElementById("dailyDigestLatest"),
+    dailyDigestSchedulerRuntimeBadge: document.getElementById("dailyDigestSchedulerRuntimeBadge"),
+    dailyDigestSchedulerEnabledInput: document.getElementById("dailyDigestSchedulerEnabledInput"),
+    dailyDigestScheduleTimeInput: document.getElementById("dailyDigestScheduleTimeInput"),
+    dailyDigestTimeZoneInput: document.getElementById("dailyDigestTimeZoneInput"),
+    dailyDigestLookbackInput: document.getElementById("dailyDigestLookbackInput"),
+    dailyDigestSchedulerSaveButton: document.getElementById("dailyDigestSchedulerSaveButton"),
+    dailyDigestSchedulerStatusText: document.getElementById("dailyDigestSchedulerStatusText"),
+    dailyDigestSchedulerNextRunText: document.getElementById("dailyDigestSchedulerNextRunText"),
     llmStatusLine: document.getElementById("llmStatusLine"),
     llmCurrentModel: document.getElementById("llmCurrentModel"),
     llmCurrentEndpoint: document.getElementById("llmCurrentEndpoint"),
@@ -106,6 +125,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     contextMetrics: document.getElementById("contextMetrics"),
     contextRenderedText: document.getElementById("contextRenderedText"),
     currentStateList: document.getElementById("currentStateList"),
+    dailyDigestList: document.getElementById("dailyDigestList"),
     summaryBlocksList: document.getElementById("summaryBlocksList"),
     recentObservationsList: document.getElementById("recentObservationsList"),
     projectContextStatus: document.getElementById("projectContextStatus"),
@@ -262,6 +282,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderOverview();
     renderLlmConfig();
     renderLlmTestResult();
+    renderDailyDigestScheduler();
+    renderDailyDigest();
     renderProjectContext();
     renderStateFacts();
     renderSearchResults();
@@ -350,6 +372,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (firstProject && !els.contextProjectSelect.value) {
       els.contextProjectSelect.value = firstProject;
     }
+    if (firstProject && !els.dailyDigestProjectSelect.value) {
+      els.dailyDigestProjectSelect.value = firstProject;
+    }
     if (firstProject && !els.stateProjectSelect.value) {
       els.stateProjectSelect.value = firstProject;
     }
@@ -378,6 +403,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.projectsCount.textContent = String(stats.projects || 0);
     els.agentsCount.textContent = String(stats.agents || 0);
     els.currentStateFactsCount.textContent = String(stats.currentStateFacts || 0);
+    els.dailyDigestsCount.textContent = String(stats.dailyDigests || 0);
     renderPolicyCard("read", !!policy.readEnabled);
     renderPolicyCard("write", !!policy.writeEnabled);
     els.statusText.textContent = state.isSavingPolicy
@@ -396,11 +422,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncSelect(els.projectSelect, projects, t("field.allProjects"), state.filters.project, true);
     syncSelect(els.agentSelect, agents, t("field.allAgents"), state.filters.agent, true);
     syncSelect(els.contextProjectSelect, projects, t("field.chooseProject"), els.contextProjectSelect.value, true);
+    syncSelect(els.dailyDigestProjectSelect, projects, t("field.chooseProject"), els.dailyDigestProjectSelect.value, true);
     syncSelect(els.stateProjectSelect, projects, t("field.chooseProject"), els.stateProjectSelect.value, true);
     syncSelect(els.stateWriteProjectSelect, projects, t("field.chooseProject"), els.stateWriteProjectSelect.value, true);
     syncSelect(els.searchProjectSelect, projects, t("field.chooseProject"), els.searchProjectSelect.value, true);
     ensureProjectDefaults(projects);
     renderReleaseCheck();
+    renderDailyDigest();
   }
 
   function getReleaseStatusPresentation(result) {
@@ -559,9 +587,179 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.llmTestResult.innerHTML = details.join("");
   }
 
+  function getLocalDateInputValue(date) {
+    const current = date || new Date();
+    return new Date(current.getTime() - current.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  }
+
+  function ensureDailyDigestDateDefault() {
+    if (!els.dailyDigestDateInput.value) {
+      els.dailyDigestDateInput.value = getLocalDateInputValue();
+    }
+  }
+
+  function getDigestStatusPresentation(status) {
+    if (state.isRunningDigest) {
+      return { label: t("runtime.dailyDigestRunning"), variant: "warning" };
+    }
+    switch (status) {
+      case "success":
+        return { label: "success", variant: "success" };
+      case "failed":
+        return { label: "failed", variant: "error" };
+      case "skipped_missing_llm":
+      case "skipped_no_observations":
+        return { label: String(status).replace(/_/g, " "), variant: "warning" };
+      default:
+        return { label: t("runtime.dailyDigestIdle"), variant: "warning" };
+    }
+  }
+
+  function getDigestContent(entry) {
+    if (!entry) return {};
+    return entry.digest || entry;
+  }
+
+  function formatConfidence(value) {
+    const numeric = Number(value || 0);
+    return numeric > 0 ? numeric.toFixed(2) : "0";
+  }
+
+  function renderDigestLines(labelKey, lines) {
+    const values = Array.isArray(lines) ? lines.filter(Boolean).slice(0, 4) : [];
+    if (values.length === 0) return "";
+    return '<div style="margin-top: 12px;">' +
+      '<div class="metaLabel">' + escapeHtml(t(labelKey)) + '</div>' +
+      values.map((line) => '<div class="summaryLine subtle" style="margin-top: 6px;">' + escapeHtml(line) + '</div>').join("") +
+      '</div>';
+  }
+
+  function renderDigestCard(entry, options) {
+    const digest = getDigestContent(entry);
+    const status = String(entry && entry.status || digest.status || "");
+    const statusPresentation = getDigestStatusPresentation(status);
+    const localDate = String(entry && entry.local_date || digest.local_date || "");
+    const sourceCount = Number(entry && entry.source_count || digest.source_count || 0);
+    const confidence = typeof digest.confidence === "number" ? digest.confidence : Number(entry && entry.confidence || 0);
+    const summary = String(digest.summary || "");
+    const model = entry && entry.model ? String(entry.model) : "";
+    const generatedAt = String(entry && entry.generated_at || digest.generated_at || "");
+    const error = String(entry && entry.last_error || digest.last_error || "");
+    const compact = !!(options && options.compact);
+    const meta = [
+      localDate ? localDate : "",
+      generatedAt ? formatDate(generatedAt) : "",
+      t("runtime.dailyDigestSources", { count: String(sourceCount) }),
+      t("runtime.dailyDigestConfidence", { confidence: formatConfidence(confidence) }),
+    ].filter(Boolean);
+    const details = [
+      summary
+        ? '<p class="panelLead" style="margin-top: 10px;">' + escapeHtml(summary) + '</p>'
+        : '<div class="emptyState" style="margin-top: 10px;">' + escapeHtml(error || t("runtime.dailyDigestNoDigest")) + '</div>',
+      compact ? "" : renderDigestLines("runtime.dailyDigestFacts", digest.facts),
+      compact ? "" : renderDigestLines("runtime.dailyDigestDecisions", digest.decisions),
+      compact ? "" : renderDigestLines("runtime.dailyDigestNextActions", digest.next_actions),
+      !compact && model ? '<div class="finePrint" style="margin-top: 10px;">' + escapeHtml(t("runtime.dailyDigestModel", { model })) + '</div>' : "",
+      error ? '<div class="finePrint" style="margin-top: 10px;">' + escapeHtml(error) + '</div>' : "",
+    ];
+    return '<div class="summaryCard">' +
+      '<div class="policyTitleRow">' +
+        '<div style="font-weight: 700;">' + escapeHtml(localDate || t("runtime.dailyDigestSummary")) + '</div>' +
+        '<span class="statusChip ' + escapeHtml(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
+      '</div>' +
+      '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(meta.join(" · ")) + '</div>' +
+      details.join("") +
+    '</div>';
+  }
+
+  function renderDailyDigestScheduler() {
+    const payload = state.digestSchedulerPayload;
+    const config = payload && payload.config ? payload.config : null;
+    const runtime = payload && payload.runtime ? payload.runtime : {};
+    const isActive = !!(runtime && runtime.active);
+
+    els.dailyDigestSchedulerSaveButton.disabled = state.isSavingDigestScheduler;
+    els.dailyDigestSchedulerSaveButton.textContent = state.isSavingDigestScheduler
+      ? t("runtime.dailyDigestSchedulerSavingButton")
+      : t("runtime.dailyDigestSchedulerSaveButton");
+
+    if (!config) {
+      els.dailyDigestSchedulerRuntimeBadge.textContent = t("runtime.dailyDigestSchedulerLoading");
+      els.dailyDigestSchedulerRuntimeBadge.className = "statusChip warning";
+      els.dailyDigestSchedulerStatusText.textContent = t("runtime.dailyDigestSchedulerLoading");
+      els.dailyDigestSchedulerNextRunText.textContent = "";
+      return;
+    }
+
+    els.dailyDigestSchedulerEnabledInput.checked = !!config.enabled;
+    els.dailyDigestScheduleTimeInput.value = String(config.schedule_time || "23:50");
+    els.dailyDigestTimeZoneInput.value = String(config.time_zone || "Asia/Shanghai");
+    els.dailyDigestLookbackInput.value = String(config.lookback_days || 2);
+
+    els.dailyDigestSchedulerRuntimeBadge.textContent = isActive
+      ? t("runtime.dailyDigestSchedulerActive")
+      : t("runtime.dailyDigestSchedulerInactive");
+    els.dailyDigestSchedulerRuntimeBadge.className = "statusChip " + (isActive ? "success" : "warning");
+    if (!state.isSavingDigestScheduler) {
+      els.dailyDigestSchedulerStatusText.textContent = t("runtime.dailyDigestSchedulerReady");
+    }
+    els.dailyDigestSchedulerNextRunText.textContent = runtime.next_run_at
+      ? t("runtime.dailyDigestSchedulerNextRun", { timestamp: formatDate(runtime.next_run_at) })
+      : t("runtime.dailyDigestSchedulerNoNextRun");
+  }
+
+  function renderDailyDigest() {
+    ensureDailyDigestDateDefault();
+    const projectPath = els.dailyDigestProjectSelect.value;
+    const payload = state.digestPayload;
+    const latest = payload && payload.latest ? payload.latest : null;
+    const statusPresentation = getDigestStatusPresentation(latest && latest.status);
+    els.dailyDigestStatusBadge.textContent = statusPresentation.label;
+    els.dailyDigestStatusBadge.className = "statusChip " + statusPresentation.variant;
+    els.dailyDigestRunButton.disabled = state.isRunningDigest || !projectPath;
+    els.dailyDigestRunButton.textContent = state.isRunningDigest
+      ? t("runtime.dailyDigestRunningButton")
+      : t("runtime.dailyDigestRunButton");
+
+    if (!projectPath) {
+      els.dailyDigestStatusText.textContent = t("runtime.dailyDigestNoProject");
+      els.dailyDigestLatest.innerHTML = '<div class="emptyState">' + escapeHtml(t("runtime.dailyDigestNoProject")) + '</div>';
+      return;
+    }
+
+    if (state.isRunningDigest) {
+      els.dailyDigestStatusText.textContent = t("runtime.dailyDigestRunning");
+      return;
+    }
+
+    if (!payload) {
+      els.dailyDigestStatusText.textContent = t("runtime.dailyDigestLoading");
+      els.dailyDigestLatest.innerHTML = '<div class="emptyState">' + escapeHtml(t("runtime.dailyDigestLoading")) + '</div>';
+      return;
+    }
+
+    if (payload.disabled) {
+      els.dailyDigestStatusText.textContent = String(payload.message || t("runtime.dailyDigestDisabled"));
+      els.dailyDigestLatest.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || t("runtime.dailyDigestDisabled")) + '</div>';
+      return;
+    }
+
+    if (!latest) {
+      els.dailyDigestStatusText.textContent = t("runtime.dailyDigestNoDigest");
+      els.dailyDigestLatest.innerHTML = '<div class="emptyState">' + escapeHtml(t("runtime.dailyDigestNoDigest")) + '</div>';
+      return;
+    }
+
+    els.dailyDigestStatusText.textContent = latest.status === "failed"
+      ? t("runtime.dailyDigestFailed")
+      : t("runtime.dailyDigestLoaded");
+    els.dailyDigestLatest.innerHTML = renderDigestCard(latest);
+  }
+
   function renderContextCards(view) {
     if (!view || view.disabled) {
       els.currentStateList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.contextReadDisabled")) + '</div>';
+      els.dailyDigestList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.dailyDigestsUnavailable")) + '</div>';
       els.summaryBlocksList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.summaryUnavailable")) + '</div>';
       els.recentObservationsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.recentUnavailable")) + '</div>';
       return;
@@ -577,6 +775,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           '</div>'
         )).join("")
       : '<div class="emptyState">' + escapeHtml(t("projectContext.noCurrentStructuredState")) + '</div>';
+
+    els.dailyDigestList.innerHTML = Array.isArray(view.daily_digests) && view.daily_digests.length > 0
+      ? view.daily_digests.map((digest) => renderDigestCard(digest, { compact: true })).join("")
+      : '<div class="emptyState">' + escapeHtml(t("projectContext.noDailyDigests")) + '</div>';
 
     els.summaryBlocksList.innerHTML = Array.isArray(view.summary_blocks) && view.summary_blocks.length > 0
       ? view.summary_blocks.map((block) => (
@@ -614,6 +816,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       els.contextMetrics.innerHTML = "";
       els.contextRenderedText.textContent = t("projectContext.chooseProjectPrompt");
       els.currentStateList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.noProjectPanel")) + '</div>';
+      els.dailyDigestList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.noDailyDigests")) + '</div>';
       els.summaryBlocksList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.noSummaryDisplay")) + '</div>';
       els.recentObservationsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("projectContext.noRecentDisplay")) + '</div>';
       return;
@@ -623,6 +826,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const view = payload.view || {};
     els.contextMetrics.innerHTML = [
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.payload")) + '</strong> ' + escapeHtml(String(metrics.payloadBytes || 0)) + ' ' + escapeHtml(t("common.bytes")) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.dailyDigests")) + '</strong> ' + escapeHtml(String((view.daily_digests || []).length)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.summary")) + '</strong> ' + escapeHtml(String(metrics.summaryCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.lowSignal")) + '</strong> ' + escapeHtml(String(metrics.lowSignalCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.duplicateTitles")) + '</strong> ' + escapeHtml(String(metrics.duplicateTitleCount || 0)) + '</span>'
@@ -944,6 +1148,95 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderProjectContext();
   }
 
+  async function loadDailyDigestStatus() {
+    const projectPath = els.dailyDigestProjectSelect.value;
+    if (!projectPath) {
+      state.digestPayload = null;
+      renderDailyDigest();
+      return;
+    }
+
+    const params = new URLSearchParams({
+      project_path: projectPath,
+      limit: "5",
+    });
+    state.digestPayload = await fetchJson("/admin/api/digests?" + params.toString());
+    renderDailyDigest();
+  }
+
+  async function loadDailyDigestSchedulerConfig() {
+    state.digestSchedulerPayload = await fetchJson("/admin/api/digest-scheduler");
+    renderDailyDigestScheduler();
+  }
+
+  async function saveDailyDigestSchedulerConfig() {
+    state.isSavingDigestScheduler = true;
+    els.dailyDigestSchedulerStatusText.textContent = t("runtime.dailyDigestSchedulerSavingButton");
+    renderDailyDigestScheduler();
+    try {
+      state.digestSchedulerPayload = await fetchJson("/admin/api/digest-scheduler", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: els.dailyDigestSchedulerEnabledInput.checked,
+          lookback_days: Number(els.dailyDigestLookbackInput.value || "2"),
+          schedule_time: els.dailyDigestScheduleTimeInput.value || "23:50",
+          time_zone: els.dailyDigestTimeZoneInput.value || "Asia/Shanghai",
+        }),
+      });
+      state.isSavingDigestScheduler = false;
+      renderDailyDigestScheduler();
+      els.dailyDigestSchedulerStatusText.textContent = t("runtime.dailyDigestSchedulerSaved", {
+        timestamp: formatDate(state.digestSchedulerPayload.config && state.digestSchedulerPayload.config.updatedAt),
+      });
+    } catch (error) {
+      state.isSavingDigestScheduler = false;
+      renderDailyDigestScheduler();
+      throw error;
+    }
+  }
+
+  async function runDailyDigest() {
+    const projectPath = els.dailyDigestProjectSelect.value;
+    if (!projectPath) {
+      throw new Error(t("runtime.dailyDigestChooseProjectBeforeRun"));
+    }
+
+    state.isRunningDigest = true;
+    renderDailyDigest();
+    try {
+      const payload = await fetchJson("/admin/api/digests/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_path: projectPath,
+          local_date: els.dailyDigestDateInput.value || undefined,
+        }),
+      });
+      state.digestPayload = {
+        project_path: projectPath,
+        latest: payload.digest || null,
+        digests: payload.digest ? [payload.digest] : [],
+        generated_at: new Date().toISOString(),
+      };
+      state.isRunningDigest = false;
+      renderDailyDigest();
+      els.dailyDigestStatusText.textContent = t("runtime.dailyDigestRunComplete", {
+        date: String(payload.local_date || els.dailyDigestDateInput.value || ""),
+        status: String(payload.digest && payload.digest.status || ""),
+      });
+      await loadDailyDigestStatus();
+      if (els.contextProjectSelect.value === projectPath) {
+        await loadProjectContext();
+      }
+      await loadOverview();
+    } catch (error) {
+      state.isRunningDigest = false;
+      renderDailyDigest();
+      throw error;
+    }
+  }
+
   async function loadStateFacts() {
     const projectPath = els.stateProjectSelect.value;
     if (!projectPath) {
@@ -1103,6 +1396,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (state.activePanel === "projectContextPanel" && els.contextProjectSelect.value) {
         await loadProjectContext();
       }
+      if (state.activePanel === "runtimePanel" && !state.isSavingDigestScheduler) {
+        await loadDailyDigestSchedulerConfig();
+      }
+      if (state.activePanel === "runtimePanel" && els.dailyDigestProjectSelect.value && !state.isRunningDigest) {
+        await loadDailyDigestStatus();
+      }
     } catch (error) {
       // Keep polling best-effort only.
     }
@@ -1140,6 +1439,29 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const releaseUrl = getReleasePageUrl();
       if (!releaseUrl) return;
       window.open(releaseUrl, "_blank", "noopener,noreferrer");
+    });
+    els.dailyDigestProjectSelect.addEventListener("change", async () => {
+      state.digestPayload = null;
+      renderDailyDigest();
+      await loadDailyDigestStatus();
+    });
+    els.dailyDigestRunButton.addEventListener("click", async () => {
+      try {
+        await runDailyDigest();
+      } catch (error) {
+        els.dailyDigestStatusText.textContent = error.message || t("runtime.dailyDigestFailed");
+        els.dailyDigestStatusBadge.textContent = t("runtime.dailyDigestFailed");
+        els.dailyDigestStatusBadge.className = "statusChip error";
+      }
+    });
+    els.dailyDigestSchedulerSaveButton.addEventListener("click", async () => {
+      try {
+        await saveDailyDigestSchedulerConfig();
+      } catch (error) {
+        els.dailyDigestSchedulerStatusText.textContent = error.message || t("runtime.dailyDigestSchedulerSaveFailed");
+        els.dailyDigestSchedulerRuntimeBadge.textContent = t("runtime.dailyDigestSchedulerSaveFailed");
+        els.dailyDigestSchedulerRuntimeBadge.className = "statusChip error";
+      }
     });
 
     els.refreshButton.addEventListener("click", async () => {
@@ -1245,6 +1567,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       void loadReleaseCheck();
       await loadLlmConfig();
       await loadRecords("ledger.loading");
+      await loadDailyDigestSchedulerConfig();
+      if (els.dailyDigestProjectSelect.value) {
+        await loadDailyDigestStatus();
+      } else {
+        renderDailyDigest();
+      }
       if (els.contextProjectSelect.value) {
         await loadProjectContext();
       } else {

@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createProjectContextView } = require('../dist/services/context-view.js');
+const {
+  createProjectContextView,
+  renderProjectContextView,
+} = require('../dist/services/context-view.js');
 
 function makeObservation(overrides = {}) {
   return {
@@ -70,4 +73,59 @@ test('createProjectContextView drops low-signal summaries, dedupes titles, and s
     Object.keys(view.recent_observations[0]).sort(),
     ['agent_id', 'created_at', 'id', 'title']
   );
+});
+
+test('createProjectContextView renders daily digests before recent summary blocks', () => {
+  const view = createProjectContextView(
+    'E:/Repo/A',
+    [],
+    [
+      makeObservation({
+        id: 'obs-1',
+        title: 'Implemented daily digest service',
+        facts: ['Observation fact'],
+        created_at: '2026-06-08T12:00:00.000Z',
+      }),
+    ],
+    5,
+    [
+      {
+        id: 'digest-1',
+        project_path: 'E:/Repo/A',
+        local_date: '2026-06-08',
+        status: 'success',
+        digest: {
+          summary: 'Daily digest service was implemented.',
+          facts: ['Digest fact'],
+          decisions: ['Keep original observations append-only.'],
+          verified_commands: ['node --test tests/context-view.test.cjs'],
+          open_questions: [],
+          next_actions: ['Expose digest in workbench.'],
+          state_fact_candidates: [],
+          skill_candidates: [],
+          low_signal_patterns: [],
+          confidence: 0.9,
+        },
+        digest_json: null,
+        source_observation_ids: ['obs-1'],
+        source_count: 1,
+        model: 'mock',
+        prompt_version: 'daily-digest-v1',
+        generated_at: '2026-06-08T23:50:00.000Z',
+        reviewed_at: null,
+        last_error: null,
+        created_at: '2026-06-08T23:50:00.000Z',
+        updated_at: '2026-06-08T23:50:00.000Z',
+      },
+    ]
+  );
+
+  assert.equal(view.daily_digests.length, 1);
+  assert.equal(view.daily_digests[0].local_date, '2026-06-08');
+  assert.equal(view.daily_digests[0].summary, 'Daily digest service was implemented.');
+
+  const rendered = renderProjectContextView(view);
+  assert.match(rendered, /Recent daily digests:/);
+  assert.match(rendered, /Daily digest service was implemented\./);
+  assert.ok(rendered.indexOf('Recent daily digests:') < rendered.indexOf('Recent summary blocks:'));
 });

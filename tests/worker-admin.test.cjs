@@ -8,6 +8,7 @@ const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const { DatabaseManager } = require('../dist/services/db.js');
+const { formatLocalDate } = require('../dist/services/daily-digest.js');
 const { bumpSemVer } = require('../dist/services/release.js');
 const projectRoot = path.resolve(__dirname, '..');
 const currentPackageVersion = JSON.parse(
@@ -104,6 +105,7 @@ async function startWorkerWithEnv(dbPath, port, extraEnv) {
     env: {
       ...process.env,
       AGENTMEM_DB_PATH: dbPath,
+      AGENTMEM_DAILY_DIGEST_DISABLED: extraEnv.AGENTMEM_DAILY_DIGEST_DISABLED || 'true',
       AGENTMEM_ENV_PATH: extraEnv.AGENTMEM_ENV_PATH || path.join(os.tmpdir(), `agentmemory-worker-env-${randomUUID()}.env`),
       AGENTMEM_PORT: String(port),
       ...extraEnv,
@@ -196,6 +198,62 @@ async function startMockReleaseServer(payload, statusCode = 200) {
   };
 }
 
+async function startMockDigestLlmServer() {
+  const requests = [];
+  const digest = {
+    summary: 'Admin-triggered digest generated successfully.',
+    facts: ['The admin API can manually run a daily digest.'],
+    decisions: ['Digest candidates are not auto-promoted to state_facts.'],
+    verified_commands: ['node --test tests/worker-admin.test.cjs'],
+    open_questions: [],
+    next_actions: ['Review digest candidates in the workbench.'],
+    state_fact_candidates: [
+      {
+        entity_type: 'project',
+        entity_key: 'E:/Repo/A',
+        fact_key: 'admin_digest_mode',
+        value: 'manual-run',
+        confidence: 0.8,
+        reason: 'The admin API triggered the digest.',
+      },
+    ],
+    skill_candidates: [],
+    low_signal_patterns: [],
+    confidence: 0.88,
+  };
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      requests.push({
+        body: body ? JSON.parse(body) : {},
+        headers: req.headers,
+        url: req.url,
+      });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(digest),
+            },
+          },
+        ],
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  return {
+    close: () => new Promise((resolve) => server.close(resolve)),
+    requests,
+    url: `http://127.0.0.1:${address.port}/v1`,
+  };
+}
+
 async function stopWorker(child, port) {
   try {
     await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
@@ -265,6 +323,21 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.match(adminHtml, /id="releaseCheckButton"/);
     assert.match(adminHtml, /id="releaseOpenButton"/);
     assert.match(adminHtml, /id="releaseStatusBadge"/);
+    assert.match(adminHtml, /Daily Digest/);
+    assert.match(adminHtml, /id="dailyDigestCard"/);
+    assert.match(adminHtml, /id="dailyDigestProjectSelect"/);
+    assert.match(adminHtml, /id="dailyDigestDateInput"/);
+    assert.match(adminHtml, /id="dailyDigestRunButton"/);
+    assert.match(adminHtml, /id="dailyDigestStatusText"/);
+    assert.match(adminHtml, /id="dailyDigestLatest"/);
+    assert.match(adminHtml, /id="dailyDigestList"/);
+    assert.match(adminHtml, /id="dailyDigestSchedulerEnabledInput"/);
+    assert.match(adminHtml, /id="dailyDigestScheduleTimeInput"/);
+    assert.match(adminHtml, /id="dailyDigestTimeZoneInput"/);
+    assert.match(adminHtml, /id="dailyDigestLookbackInput"/);
+    assert.match(adminHtml, /id="dailyDigestSchedulerSaveButton"/);
+    assert.match(adminHtml, /id="dailyDigestSchedulerStatusText"/);
+    assert.match(adminHtml, /\/admin\/api\/digest-scheduler/);
 
     const overviewResponse = await fetch(`http://127.0.0.1:${port}/admin/api/overview`);
     assert.equal(overviewResponse.status, 200);
@@ -274,6 +347,7 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.ok(overview.projects.includes('E:/Repo/A'));
     assert.ok(overview.agents.includes('codex'));
     assert.equal(overview.stats.currentStateFacts, 2);
+    assert.equal(typeof overview.stats.dailyDigests, 'number');
     assert.equal(overview.release.version, currentPackageVersion);
     assert.equal(overview.release.tagName, `v${currentPackageVersion}`);
     assert.equal(overview.release.stableBranch, 'master');
@@ -335,6 +409,77 @@ test('worker serves admin UI and admin APIs', async () => {
   } finally {
     await stopWorker(child, port);
     await mockRelease.close();
+    cleanupDb(dbPath);
+  }
+});
+
+test('worker admin daily digest scheduler config can be saved and restarts runtime', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  const child = await startWorkerWithEnv(dbPath, port, {
+    AGENTMEM_DAILY_DIGEST_DISABLED: 'false',
+  });
+
+  try {
+    const initialResponse = await fetch(`http://127.0.0.1:${port}/admin/api/digest-scheduler`);
+    assert.equal(initialResponse.status, 200);
+    const initial = await initialResponse.json();
+    assert.equal(initial.config.enabled, true);
+    assert.equal(initial.config.schedule_time, '23:50');
+    assert.equal(initial.config.time_zone, 'Asia/Shanghai');
+    assert.equal(initial.config.lookback_days, 2);
+    assert.equal(initial.runtime.active, true);
+    assert.equal(typeof initial.runtime.next_run_at, 'string');
+
+    const disableResponse = await fetch(`http://127.0.0.1:${port}/admin/api/digest-scheduler`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: false,
+        lookback_days: 5,
+        schedule_time: '01:15',
+        time_zone: 'UTC',
+      }),
+    });
+    assert.equal(disableResponse.status, 200);
+    const disabled = await disableResponse.json();
+    assert.equal(disabled.config.enabled, false);
+    assert.equal(disabled.config.schedule_time, '01:15');
+    assert.equal(disabled.config.time_zone, 'UTC');
+    assert.equal(disabled.config.lookback_days, 5);
+    assert.equal(disabled.runtime.active, false);
+    assert.equal(disabled.runtime.next_run_at, null);
+
+    const enableResponse = await fetch(`http://127.0.0.1:${port}/admin/api/digest-scheduler`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        lookback_days: 3,
+        schedule_time: '02:30',
+        time_zone: 'America/New_York',
+      }),
+    });
+    assert.equal(enableResponse.status, 200);
+    const enabled = await enableResponse.json();
+    assert.equal(enabled.config.enabled, true);
+    assert.equal(enabled.config.schedule_time, '02:30');
+    assert.equal(enabled.config.schedule_hour, 2);
+    assert.equal(enabled.config.schedule_minute, 30);
+    assert.equal(enabled.config.time_zone, 'America/New_York');
+    assert.equal(enabled.config.lookback_days, 3);
+    assert.equal(enabled.runtime.active, true);
+    assert.equal(typeof enabled.runtime.next_run_at, 'string');
+
+    const persistedResponse = await fetch(`http://127.0.0.1:${port}/admin/api/digest-scheduler`);
+    assert.equal(persistedResponse.status, 200);
+    const persisted = await persistedResponse.json();
+    assert.equal(persisted.config.enabled, true);
+    assert.equal(persisted.config.schedule_time, '02:30');
+    assert.equal(persisted.config.time_zone, 'America/New_York');
+    assert.equal(persisted.config.lookback_days, 3);
+  } finally {
+    await stopWorker(child, port);
     cleanupDb(dbPath);
   }
 });
@@ -429,6 +574,88 @@ test('worker admin LLM settings save model and test local connection', async () 
     assert.equal(mockLlm.requests.at(-1).url, '/v1/chat/completions');
     assert.equal(mockLlm.requests.at(-1).body.model, 'mock-chat-model');
     assert.equal(mockLlm.requests.at(-1).headers['x-test-header'], 'agentmemory');
+  } finally {
+    await stopWorker(child, port);
+    await mockLlm.close();
+    cleanupDb(dbPath);
+    fs.rmSync(envPath, { force: true });
+  }
+});
+
+test('worker admin daily digest APIs expose status and manual run', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  const envPath = path.join(os.tmpdir(), `agentmemory-worker-digest-${randomUUID()}.env`);
+  const mockLlm = await startMockDigestLlmServer();
+  fs.writeFileSync(envPath, [
+    'AGENTMEM_LLM_API_KEY=digest-token-1234',
+    `AGENTMEM_LLM_API_URL=${mockLlm.url}`,
+    'AGENTMEM_LLM_MODEL=mock-digest-model',
+    'AGENTMEM_LLM_DISABLE_JSON_MODE=false',
+    '',
+  ].join('\n'));
+  await seedDatabase(dbPath);
+  const previousDbPath = process.env.AGENTMEM_DB_PATH;
+  process.env.AGENTMEM_DB_PATH = dbPath;
+  const digestSeedDb = new DatabaseManager();
+  await digestSeedDb.initialize();
+  await digestSeedDb.saveObservation({
+    id: randomUUID(),
+    session_id: randomUUID(),
+    project_path: 'E:/Repo/A',
+    agent_id: 'codex',
+    title: 'Implemented admin digest endpoint',
+    narrative: 'The admin API can trigger a daily digest for a selected project and local date.',
+    facts: ['Admin digest manual run should produce one daily digest.'],
+    concepts: ['daily digest'],
+    files_read: ['src/services/worker.ts'],
+    files_modified: ['src/services/worker.ts'],
+    embedding: [1, 0, 0],
+    created_at: '2026-06-08T08:00:00.000Z',
+  });
+  digestSeedDb.close();
+  if (previousDbPath === undefined) {
+    delete process.env.AGENTMEM_DB_PATH;
+  } else {
+    process.env.AGENTMEM_DB_PATH = previousDbPath;
+  }
+  const localDate = formatLocalDate('2026-06-08T08:00:00.000Z', 'Asia/Shanghai');
+  const child = await startWorkerWithEnv(dbPath, port, {
+    AGENTMEM_ENV_PATH: envPath,
+  });
+
+  try {
+    const beforeResponse = await fetch(`http://127.0.0.1:${port}/admin/api/digests?project_path=${encodeURIComponent('E:/Repo/A')}`);
+    assert.equal(beforeResponse.status, 200);
+    const beforePayload = await beforeResponse.json();
+    assert.equal(beforePayload.project_path, 'E:/Repo/A');
+    assert.equal(beforePayload.latest, null);
+    assert.deepEqual(beforePayload.digests, []);
+
+    const runResponse = await fetch(`http://127.0.0.1:${port}/admin/api/digests/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        local_date: localDate,
+        project_path: 'E:/Repo/A',
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const runPayload = await runResponse.json();
+    assert.equal(runPayload.success, true);
+    assert.equal(runPayload.digest.status, 'success');
+    assert.equal(runPayload.digest.local_date, localDate);
+    assert.equal(runPayload.digest.model, 'mock-digest-model');
+    assert.equal(runPayload.digest.digest.summary, 'Admin-triggered digest generated successfully.');
+    assert.ok(runPayload.digest.source_observation_ids.length > 0);
+    assert.ok(mockLlm.requests.some((request) => request.url === '/v1/chat/completions'));
+
+    const afterResponse = await fetch(`http://127.0.0.1:${port}/admin/api/digests?project_path=${encodeURIComponent('E:/Repo/A')}`);
+    assert.equal(afterResponse.status, 200);
+    const afterPayload = await afterResponse.json();
+    assert.equal(afterPayload.latest.status, 'success');
+    assert.equal(afterPayload.digests.length, 1);
+    assert.equal(afterPayload.digests[0].digest.summary, 'Admin-triggered digest generated successfully.');
   } finally {
     await stopWorker(child, port);
     await mockLlm.close();

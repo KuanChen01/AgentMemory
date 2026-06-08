@@ -101,7 +101,7 @@ AGENTMEM_PORT=38888
 显式指定 Antigravity registry：
 
 ```powershell
-.\bootstrap-second-machine.cmd -AntigravityConfig "C:\Users\YourName\.gemini\config\plugins\local-game-mcps\mcp_config.json"
+.\bootstrap-second-machine.cmd -AntigravityConfig "C:\Users\YourName\.gemini\antigravity-cli\mcp_config.json"
 ```
 
 首次执行时直接注入凭证：
@@ -126,7 +126,7 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.codex\hooks.json`
 - `%USERPROFILE%\.config\opencode\opencode.jsonc`
 - `%USERPROFILE%\.config\opencode\plugins\agentmem-plugin.mjs`
-- `%USERPROFILE%\.gemini\config\plugins\...\mcp_config.json`
+- `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`，或安装器探测到的其它 Antigravity `mcp_config.json`
 
 ## Cleanup and Reinstall
 
@@ -161,8 +161,8 @@ bootstrap 成功后，再做这四项 live acceptance：
 ## Troubleshooting
 
 - `Antigravity MCP registry was not found`
-  - 说明 `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json` 没找到
-  - 先建立插件目录，或显式传 `-AntigravityConfig`
+  - 说明 `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`、`antigravity-ide`、`antigravity`、`.gemini\config\mcp_config.json` 和 `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json` 都没找到
+  - 先确认 Antigravity 已创建 MCP registry，或显式传 `-AntigravityConfig`
 
 - `Bootstrap scaffolded ...\.agentmem\.env`
   - 说明 `.env` 只是模板，还没有真实凭证

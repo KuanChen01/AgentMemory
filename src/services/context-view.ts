@@ -1,4 +1,4 @@
-import { Observation, StateFact } from './db';
+import { DailyMemoryDigest, Observation, StateFact } from './db';
 
 export interface ProjectContextSummaryBlock {
   title: string;
@@ -14,9 +14,23 @@ export interface ProjectContextRecentObservation {
   agent_id: string;
 }
 
+export interface ProjectContextDailyDigest {
+  id: string;
+  local_date: string;
+  status: string;
+  summary: string;
+  facts: string[];
+  decisions: string[];
+  next_actions: string[];
+  source_count: number;
+  confidence: number;
+  generated_at: string;
+}
+
 export interface ProjectContextView {
   project_path: string;
   current_state: StateFact[];
+  daily_digests: ProjectContextDailyDigest[];
   summary_blocks: ProjectContextSummaryBlock[];
   recent_observations: ProjectContextRecentObservation[];
   generated_at: string;
@@ -28,13 +42,17 @@ export function createProjectContextView(
   projectPath: string,
   stateFacts: StateFact[],
   recentObservations: Observation[],
-  limit: number = recentObservations.length
+  limit: number = recentObservations.length,
+  dailyDigests: DailyMemoryDigest[] = []
 ): ProjectContextView {
   const curatedObservations = selectProjectContextObservations(recentObservations, limit);
 
   return {
     project_path: projectPath,
     current_state: stateFacts,
+    daily_digests: dailyDigests
+      .filter((digest) => digest.status === 'success' && digest.digest)
+      .map(toProjectContextDailyDigest),
     summary_blocks: curatedObservations.map((observation) => ({
       title: observation.title,
       created_at: observation.created_at,
@@ -58,6 +76,7 @@ export function createDisabledProjectContextView(
   return {
     project_path: projectPath,
     current_state: [],
+    daily_digests: [],
     summary_blocks: [],
     recent_observations: [],
     generated_at: new Date().toISOString(),
@@ -69,6 +88,7 @@ export function createDisabledProjectContextView(
 export function hasProjectContextData(view: ProjectContextView): boolean {
   return (
     (Array.isArray(view.current_state) && view.current_state.length > 0) ||
+    (Array.isArray(view.daily_digests) && view.daily_digests.length > 0) ||
     (Array.isArray(view.summary_blocks) && view.summary_blocks.length > 0) ||
     (Array.isArray(view.recent_observations) && view.recent_observations.length > 0)
   );
@@ -96,6 +116,25 @@ export function renderProjectContextView(view: ProjectContextView): string {
           fact.value
         )} (effective ${formatTimestamp(fact.effective_at)})`
       );
+    }
+  }
+
+  if (view.daily_digests.length > 0) {
+    sections.push('\nRecent daily digests:');
+    for (const digest of view.daily_digests) {
+      sections.push(
+        `- ${digest.local_date}: ${digest.summary} (${formatTimestamp(digest.generated_at)})`
+      );
+      if (digest.facts.length > 0) {
+        sections.push(`  Facts: ${digest.facts.slice(0, 3).join('; ')}`);
+      }
+      if (digest.decisions.length > 0) {
+        sections.push(`  Decisions: ${digest.decisions.slice(0, 2).join('; ')}`);
+      }
+      if (digest.next_actions.length > 0) {
+        sections.push(`  Next actions: ${digest.next_actions.slice(0, 2).join('; ')}`);
+      }
+      sections.push(`  Source observations: ${digest.source_count}; confidence: ${digest.confidence}`);
     }
   }
 
@@ -160,6 +199,21 @@ function buildSummaryLines(observation: Observation): string[] {
   }
 
   return lines;
+}
+
+function toProjectContextDailyDigest(digest: DailyMemoryDigest): ProjectContextDailyDigest {
+  return {
+    id: digest.id,
+    local_date: digest.local_date,
+    status: digest.status,
+    summary: digest.digest?.summary || '',
+    facts: digest.digest?.facts.slice(0, 5) || [],
+    decisions: digest.digest?.decisions.slice(0, 3) || [],
+    next_actions: digest.digest?.next_actions.slice(0, 3) || [],
+    source_count: digest.source_count,
+    confidence: digest.digest?.confidence || 0,
+    generated_at: digest.generated_at,
+  };
 }
 
 function selectProjectContextObservations(

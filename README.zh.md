@@ -12,6 +12,7 @@ AgentMemory 是一个免编译、轻量化的全局持久化智能体记忆系�
 *   **免编译与轻量化**：基于纯 JS 实现的 Feature Hashing 局部敏感向量编码和 WebAssembly 版本的 SQLite (`node-sqlite3-wasm`)，完美避开了复杂的 C++ 本地编译依赖（如 `node-gyp`）。
 *   **混合检索检索**：集成 SQLite FTS5 的 BM25 全文关键字匹配与 Cosine Similarity 向量相似度算法，提供高相关的召回效果。
 *   **异步后台摘要**：在后台队列中通过 DeepSeek Flash API 异步提炼繁杂的工具执行日志，最大化节省上下文 Token。
+*   **每日记忆总结**：按项目每日运行一次总结任务，过滤低信号 observation，写入紧凑的事实、决策、命令、开放问题和下一步列表，并把最近成功总结注入启动上下文。
 *   **全局配置隔离**：API Key 等敏感配置保存在全局用户路径 (`~/.agentmem/.env`) 下，确保源码仓库干净、密钥安全不泄漏。
 *   **本地管理控制台**：提供仅 loopback 可访问的 `/admin` 页面，用于查看数据库、筛选 observation，并在运行时切换全局记忆读写开关。
 *   **持久化运行时策略**：`readEnabled` 和 `writeEnabled` 会持久化到 SQLite，worker 重启后继续保持上次的策略状态。
@@ -192,9 +193,9 @@ Windows 下现在有两个本机控制入口：
 
 管理页提供：
 
-*   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，展示 project / agent 覆盖面，并提供只读的 GitHub Release 更新检查与手动升级指引
+*   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，展示 project / agent 覆盖面，查看/手动运行每日总结并调整 scheduler 设置，同时提供只读的 GitHub Release 更新检查与手动升级指引
 *   **LLM Settings**：切换 `AGENTMEM_LLM_MODEL`，更新 OpenAI-compatible API base URL，保留或替换 API key，并运行实时连接测试
-*   **Project Context**：查看当前 `ProjectContextView`、渲染后的 startup 文本，以及 payload / summary 健康度指标
+*   **Project Context**：查看当前 `ProjectContextView`、最近每日总结、渲染后的 startup 文本，以及 payload / summary 健康度指标
 *   **State Lab**：显式读取和写入 structured state
 *   **Search Diagnostics**：直接查看 hybrid search 的 `hybrid_score`、`fts_score`、`vector_score` 和低信号标题标记
 *   **Observation Ledger**：保留全库台账浏览和 observation 细节 drill-down
@@ -205,6 +206,7 @@ AgentMemory 现在把记忆拆成两层：
 
 *   **Observations** 继续作为 append-only 的历史账本，用于 hybrid search 和细节回溯。
 *   **State facts** 用来存储显式的当前/历史真相，并带有 `effective_at`、`recorded_at` 和 `superseded_at` 时间语义。
+*   **Daily digests** 保存按计划或手动触发的项目级每日总结，包含事实、决策、命令、开放问题和下一步；digest 输出不会自动晋升为 state fact。
 
 这一阶段新增的接口：
 
@@ -216,6 +218,7 @@ AgentMemory 现在把记忆拆成两层：
 `ProjectContextView` 当前包含：
 
 *   `current_state`
+*   `daily_digests`：最近成功的每日总结，已裁剪为 startup 可用的紧凑结构
 *   `summary_blocks`：基于最近 observation 生成，但会过滤低信号标题并合并重复标题
 *   `recent_observations`：面向 startup 的精简元数据列表，只保留 `id`、`title`、`created_at`、`agent_id`，不再附带完整 narrative 或 embedding
 *   `generated_at`
@@ -233,6 +236,10 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：供 workbench 读取 structured state
 *   `POST /admin/api/state`：供 workbench 显式写入 structured state fact
 *   `POST /admin/api/search`：返回当前 project 的 hybrid search 原始诊断分数，但不在这一步修改排序算法
+*   `GET /admin/api/digests?project_path=&limit=`：读取某个项目最近保存的每日记忆总结
+*   `POST /admin/api/digests/run`：为所选项目和可选 `local_date` 手动运行一次每日记忆总结任务
+*   `GET /admin/api/digest-scheduler`：返回已持久化的每日总结 scheduler 配置和当前运行态
+*   `POST /admin/api/digest-scheduler`：保存 scheduler 的 `enabled`、`schedule_time`、`time_zone` 和 `lookback_days`，并立即应用到当前 worker 的 timer
 *   `GET /admin/api/release-check`：对比当前 checkout 与最新正式 GitHub Release，并返回适用于 git checkout 或源码归档的手动升级指引
 *   `GET /admin/api/llm-config`：返回已脱敏的 LLM 配置快照，不暴露完整 API key
 *   `POST /admin/api/llm-config`：把 model、API URL、JSON mode、headers 和可选 API key 变更持久化到 `~/.agentmem/.env`，并同步更新当前 worker 进程
@@ -251,16 +258,19 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 
 这两个开关都保存在 SQLite `app_settings` 中，因此 worker 重启后会保留上次选中的策略。
 
+每日总结读取复用 read gate；手动运行每日总结复用 write gate，和 observation / state 写入保持同一套运行时策略。Scheduler 设置会持久化在 SQLite `app_settings` 中；旧的 `AGENTMEM_DAILY_DIGEST_DISABLED=true` 环境变量只在还没有保存过 scheduler 设置时作为默认值种子。
+
 #### 基本操作流程
 
 1. 需要一键启动时使用 `npm run workbench`；需要交互式 `Start / Stop / Restart / Status / Open Admin` 控制时使用 `start-workbench.cmd`
 2. 打开 `http://127.0.0.1:38888/admin`
 3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
 4. 在 Runtime 面板的 release 卡片中对比当前 checkout 与最新正式 GitHub Release，并选择推荐的手动升级路径
-5. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
-6. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
-7. 如需深挖原始 observation，再切到 `Observation Ledger`
-8. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
+5. 在 Runtime 面板的每日总结卡片中查看最近项目 digest、为指定本地日期手动运行一次总结，或调整自动 scheduler 的启停、运行时间、时区和 catch-up 窗口
+6. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
+7. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
+8. 如需深挖原始 observation，再切到 `Observation Ledger`
+9. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
 
 ---
 
@@ -357,7 +367,7 @@ args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
 #### 4. Antigravity CLI
-`agentmem install` 现在也会更新当前生效的 Antigravity MCP 注册表。在这台机器上，实际验证通过的是 Gemini 兼容配置根目录下的插件 `mcp_config.json`。如果你的第二台机器把注册表放在别处，可以显式传入：
+`agentmem install` 现在也会更新当前生效的 Antigravity MCP 注册表。安装器会先检查 Antigravity 直接使用的 registry：`%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`，再依次检查 `antigravity-ide`、`antigravity` 和 `.gemini\config\mcp_config.json`，最后才回退到 `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json` 这类 Gemini-compatible plugin registry。如果你的机器把注册表放在别处，可以显式传入：
 
 ```bash
 agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"

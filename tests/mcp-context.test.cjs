@@ -221,6 +221,58 @@ async function callTool(child, requestId, name, args) {
   return responsePromise;
 }
 
+async function listTools(child, requestId) {
+  const responsePromise = waitForResponse(child, requestId);
+  child.stdin.write(JSON.stringify({
+    jsonrpc: '2.0',
+    id: requestId,
+    method: 'tools/list',
+    params: {},
+  }) + '\n');
+  return responsePromise;
+}
+
+async function startDatabaseLockHolder(dbPath) {
+  const code = `
+const { Database } = require('node-sqlite3-wasm');
+const db = new Database(${JSON.stringify(dbPath)});
+db.run('CREATE TABLE IF NOT EXISTS lock_holder (id TEXT PRIMARY KEY)');
+db.run('BEGIN EXCLUSIVE');
+db.run("INSERT OR REPLACE INTO lock_holder (id) VALUES ('held')");
+console.log('ready');
+setInterval(() => {}, 1000);
+process.on('SIGTERM', () => {
+  try { db.run('ROLLBACK'); } catch (_error) {}
+  db.close();
+  process.exit(0);
+});
+`;
+  const child = spawn('node', ['-e', code], {
+    cwd: path.resolve(__dirname, '..'),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  await new Promise((resolve, reject) => {
+    let stderr = '';
+    const timeout = setTimeout(() => reject(new Error(`DB lock holder did not start. STDERR: ${stderr}`)), 5000);
+    child.stdout.on('data', (chunk) => {
+      if (chunk.toString().includes('ready')) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`DB lock holder exited early with code ${code}. STDERR: ${stderr}`));
+    });
+  });
+
+  return child;
+}
+
 async function stopMcpServer(child) {
   child.kill();
   if (child.exitCode !== null) {
@@ -287,6 +339,36 @@ test('MCP get_project_context renders the same curated structured context as /co
       await stopWorker(worker, port);
     }
   });
+});
+
+test('MCP server lists tools without opening the SQLite database while idle', async () => {
+  const previous = process.env.AGENTMEM_DB_PATH;
+  const dbPath = makeDbPath();
+  process.env.AGENTMEM_DB_PATH = dbPath;
+  const holder = await startDatabaseLockHolder(dbPath);
+  const mcp = await startMcpServer(dbPath);
+
+  try {
+    const response = await listTools(mcp, 100);
+    const tools = response.result.tools.map((tool) => tool.name);
+
+    assert.equal(tools.includes('get_project_context'), true);
+    assert.equal(tools.includes('record_memory'), true);
+  } finally {
+    await stopMcpServer(mcp);
+    await stopMcpServer(holder);
+    if (previous === undefined) {
+      delete process.env.AGENTMEM_DB_PATH;
+    } else {
+      process.env.AGENTMEM_DB_PATH = previous;
+    }
+    for (const suffix of ['', '-shm', '-wal']) {
+      const target = `${dbPath}${suffix}`;
+      if (fs.existsSync(target)) {
+        fs.rmSync(target, { force: true });
+      }
+    }
+  }
 });
 
 test('MCP get_project_context returns disabled and empty messages', async () => {
