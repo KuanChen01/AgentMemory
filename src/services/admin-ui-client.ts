@@ -34,11 +34,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     contextPayload: null,
     digestSchedulerPayload: null,
     digestPayload: null,
+    proceduralDigestPayload: null,
+    proceduralSkillsPayload: null,
+    proceduralQueryPayload: null,
     statePayload: null,
     searchPayload: null,
+    selectedProceduralSkillId: null,
     isCheckingRelease: false,
     isSavingDigestScheduler: false,
     isRunningDigest: false,
+    isRefreshingProcedural: false,
+    isPromotingProceduralCandidate: false,
+    promotingProceduralCandidateKey: "",
+    updatingProceduralSkillId: null,
+    isSubmittingProceduralFeedback: false,
+    isRunningProceduralQuery: false,
     pollHandle: null,
     statusLineState: {},
   };
@@ -82,6 +92,26 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     dailyDigestSchedulerSaveButton: document.getElementById("dailyDigestSchedulerSaveButton"),
     dailyDigestSchedulerStatusText: document.getElementById("dailyDigestSchedulerStatusText"),
     dailyDigestSchedulerNextRunText: document.getElementById("dailyDigestSchedulerNextRunText"),
+    proceduralSkillsStatus: document.getElementById("proceduralSkillsStatus"),
+    proceduralProjectSelect: document.getElementById("proceduralProjectSelect"),
+    proceduralLocalDateInput: document.getElementById("proceduralLocalDateInput"),
+    proceduralStatusFilter: document.getElementById("proceduralStatusFilter"),
+    proceduralAsOfInput: document.getElementById("proceduralAsOfInput"),
+    proceduralLimitInput: document.getElementById("proceduralLimitInput"),
+    proceduralRefreshButton: document.getElementById("proceduralRefreshButton"),
+    proceduralStatusText: document.getElementById("proceduralStatusText"),
+    proceduralCandidateList: document.getElementById("proceduralCandidateList"),
+    proceduralSkillsList: document.getElementById("proceduralSkillsList"),
+    proceduralSkillDetail: document.getElementById("proceduralSkillDetail"),
+    proceduralFeedbackOutcomeSelect: document.getElementById("proceduralFeedbackOutcomeSelect"),
+    proceduralFeedbackTaskInput: document.getElementById("proceduralFeedbackTaskInput"),
+    proceduralFeedbackNotesInput: document.getElementById("proceduralFeedbackNotesInput"),
+    proceduralFeedbackStatus: document.getElementById("proceduralFeedbackStatus"),
+    proceduralFeedbackButton: document.getElementById("proceduralFeedbackButton"),
+    proceduralQueryInput: document.getElementById("proceduralQueryInput"),
+    proceduralQueryStatus: document.getElementById("proceduralQueryStatus"),
+    proceduralQueryButton: document.getElementById("proceduralQueryButton"),
+    proceduralQueryResult: document.getElementById("proceduralQueryResult"),
     llmStatusLine: document.getElementById("llmStatusLine"),
     llmCurrentModel: document.getElementById("llmCurrentModel"),
     llmCurrentEndpoint: document.getElementById("llmCurrentEndpoint"),
@@ -233,6 +263,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function rerenderStatusLines() {
     const targets = {
       runtime: els.runtimeStatusLine,
+      proceduralSkills: els.proceduralSkillsStatus,
       llm: els.llmStatusLine,
       ledger: els.listStatus,
       projectContext: els.projectContextStatus,
@@ -280,6 +311,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncLocaleButtons();
     rerenderStatusLines();
     renderOverview();
+    renderProceduralWorkspace();
     renderLlmConfig();
     renderLlmTestResult();
     renderDailyDigestScheduler();
@@ -375,6 +407,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (firstProject && !els.dailyDigestProjectSelect.value) {
       els.dailyDigestProjectSelect.value = firstProject;
     }
+    if (firstProject && !els.proceduralProjectSelect.value) {
+      els.proceduralProjectSelect.value = firstProject;
+    }
     if (firstProject && !els.stateProjectSelect.value) {
       els.stateProjectSelect.value = firstProject;
     }
@@ -423,6 +458,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncSelect(els.agentSelect, agents, t("field.allAgents"), state.filters.agent, true);
     syncSelect(els.contextProjectSelect, projects, t("field.chooseProject"), els.contextProjectSelect.value, true);
     syncSelect(els.dailyDigestProjectSelect, projects, t("field.chooseProject"), els.dailyDigestProjectSelect.value, true);
+    syncSelect(els.proceduralProjectSelect, projects, t("field.chooseProject"), els.proceduralProjectSelect.value, true);
     syncSelect(els.stateProjectSelect, projects, t("field.chooseProject"), els.stateProjectSelect.value, true);
     syncSelect(els.stateWriteProjectSelect, projects, t("field.chooseProject"), els.stateWriteProjectSelect.value, true);
     syncSelect(els.searchProjectSelect, projects, t("field.chooseProject"), els.searchProjectSelect.value, true);
@@ -754,6 +790,408 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       ? t("runtime.dailyDigestFailed")
       : t("runtime.dailyDigestLoaded");
     els.dailyDigestLatest.innerHTML = renderDigestCard(latest);
+  }
+
+  function getProceduralSkillStatusPresentation(status) {
+    switch (String(status || "")) {
+      case "enabled":
+        return { label: t("procedural.statusEnabled"), variant: "success" };
+      case "disabled":
+        return { label: t("procedural.statusDisabled"), variant: "warning" };
+      case "retired":
+        return { label: t("procedural.statusRetired"), variant: "error" };
+      default:
+        return { label: t("procedural.statusDraft"), variant: "warning" };
+    }
+  }
+
+  function formatProceduralOutcomeLabel(outcome) {
+    switch (String(outcome || "")) {
+      case "failure":
+        return t("procedural.outcomeFailure");
+      case "rejected":
+        return t("procedural.outcomeRejected");
+      case "skipped":
+        return t("procedural.outcomeSkipped");
+      default:
+        return t("procedural.outcomeSuccess");
+    }
+  }
+
+  function getProceduralLimitValue() {
+    const parsed = Number(els.proceduralLimitInput.value || "10");
+    if (!Number.isFinite(parsed)) return 10;
+    return Math.max(1, Math.min(20, Math.trunc(parsed)));
+  }
+
+  function getProceduralCandidateKey(localDate, index) {
+    return String(localDate || "") + ":" + String(index);
+  }
+
+  function getProceduralDigests() {
+    const payload = state.proceduralDigestPayload;
+    return Array.isArray(payload && payload.digests) ? payload.digests : [];
+  }
+
+  function getProceduralFilteredDigests() {
+    const localDate = String(els.proceduralLocalDateInput.value || "").trim();
+    const digests = getProceduralDigests();
+    if (!localDate) {
+      return digests;
+    }
+    return digests.filter((digest) => String(digest && digest.local_date || "") === localDate);
+  }
+
+  function getProceduralSkills() {
+    const payload = state.proceduralSkillsPayload;
+    return Array.isArray(payload && payload.skills) ? payload.skills : [];
+  }
+
+  function syncSelectedProceduralSkill() {
+    const skills = getProceduralSkills();
+    if (!skills.length) {
+      state.selectedProceduralSkillId = null;
+      return;
+    }
+    if (skills.some((skill) => skill.id === state.selectedProceduralSkillId)) {
+      return;
+    }
+    state.selectedProceduralSkillId = skills[0].id;
+  }
+
+  function getSelectedProceduralSkill() {
+    const skills = getProceduralSkills();
+    return skills.find((skill) => skill.id === state.selectedProceduralSkillId) || null;
+  }
+
+  function getRolloutStageFromCurrentState(currentState) {
+    const facts = Array.isArray(currentState) ? currentState : [];
+    const rolloutFact = facts.find((fact) => String(fact && fact.fact_key || "") === "rollout_stage");
+    if (!rolloutFact) {
+      return t("procedural.rolloutStageUnknown");
+    }
+    return typeof rolloutFact.value === "string"
+      ? rolloutFact.value
+      : JSON.stringify(rolloutFact.value);
+  }
+
+  function renderProceduralStatusActions(skill) {
+    const updatingSkill = state.updatingProceduralSkillId === skill.id;
+    const disabled = updatingSkill || state.isPromotingProceduralCandidate || state.isSubmittingProceduralFeedback;
+    const labels = [
+      { status: "enabled", label: t("procedural.enableButton") },
+      { status: "disabled", label: t("procedural.disableButton") },
+      { status: "retired", label: t("procedural.retireButton") },
+    ];
+    return '<div class="actionCluster">' +
+      labels.map((entry) => {
+        const isCurrent = String(skill.status || "") === entry.status;
+        const label = updatingSkill && entry.status === skill.status
+          ? t("common.saving")
+          : entry.label;
+        return '<button class="button ' + (entry.status === "retired" ? "ghost" : "secondary") + '" type="button"' +
+          ' data-procedural-skill-status="' + escapeHtml(entry.status) + '"' +
+          ' data-procedural-skill-id="' + escapeHtml(skill.id) + '"' +
+          (disabled || isCurrent ? " disabled" : "") +
+          '>' + escapeHtml(label) + '</button>';
+      }).join("") +
+      '</div>';
+  }
+
+  function renderProceduralCandidateList() {
+    const projectPath = els.proceduralProjectSelect.value;
+    const payload = state.proceduralDigestPayload;
+
+    if (!projectPath) {
+      els.proceduralCandidateList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.noCandidatesPrompt")) + '</div>';
+      return;
+    }
+
+    if (!payload) {
+      els.proceduralCandidateList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.loadingCandidates")) + '</div>';
+      return;
+    }
+
+    if (payload.disabled) {
+      els.proceduralCandidateList.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || t("procedural.readDisabled")) + '</div>';
+      return;
+    }
+
+    const filteredDigests = getProceduralFilteredDigests();
+    if (filteredDigests.length === 0) {
+      const message = els.proceduralLocalDateInput.value
+        ? t("procedural.noDigestForDate", { date: els.proceduralLocalDateInput.value })
+        : t("procedural.noDigests");
+      els.proceduralCandidateList.innerHTML = '<div class="emptyState">' + escapeHtml(message) + '</div>';
+      return;
+    }
+
+    const groups = filteredDigests
+      .map((digest) => {
+        const digestContent = getDigestContent(digest);
+        const candidates = Array.isArray(digestContent.skill_candidates) ? digestContent.skill_candidates : [];
+        if (!candidates.length) {
+          return '<div class="summaryCard proceduralCandidateGroup">' +
+            '<div class="policyTitleRow">' +
+              '<div style="font-weight: 700;">' + escapeHtml(String(digest.local_date || t("field.localDate"))) + '</div>' +
+              '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.candidateCount")) + '</strong> 0</span>' +
+            '</div>' +
+            '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(String(digestContent.summary || "")) + '</div>' +
+            '<div class="emptyState">' + escapeHtml(t("procedural.noCandidates")) + '</div>' +
+          '</div>';
+        }
+        return '<div class="summaryCard proceduralCandidateGroup">' +
+          '<div class="policyTitleRow">' +
+            '<div style="font-weight: 700;">' + escapeHtml(String(digest.local_date || t("field.localDate"))) + '</div>' +
+            '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.candidateCount")) + '</strong> ' + escapeHtml(String(candidates.length)) + '</span>' +
+          '</div>' +
+          '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(String(digestContent.summary || "")) + '</div>' +
+          '<div class="listBlock" style="margin-top: 12px;">' +
+            candidates.map((candidate, index) => {
+              const triggerText = String(candidate && (candidate.trigger_text || candidate.trigger) || "");
+              const steps = Array.isArray(candidate && candidate.steps)
+                ? candidate.steps.map((step) => String(step).trim()).filter(Boolean)
+                : [];
+              const candidateKey = getProceduralCandidateKey(digest.local_date, index);
+              const isPromoting = state.promotingProceduralCandidateKey === candidateKey;
+              return '<div class="summaryCard">' +
+                '<div class="policyTitleRow">' +
+                  '<div style="font-weight: 700;">' + escapeHtml(String(candidate && candidate.title || t("common.none"))) + '</div>' +
+                  '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(candidate && candidate.confidence)) + '</span>' +
+                '</div>' +
+                '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(triggerText || t("common.none")) + '</div>' +
+                '<p class="panelLead" style="margin-top: 10px;">' + escapeHtml(String(candidate && candidate.summary || "")) + '</p>' +
+                (steps.length
+                  ? '<ol class="proceduralSteps">' + steps.map((step) => '<li>' + escapeHtml(step) + '</li>').join("") + '</ol>'
+                  : '<div class="finePrint" style="margin-top: 10px;">' + escapeHtml(t("procedural.noSteps")) + '</div>') +
+                '<div class="toolbarFooter" style="margin-top: 12px;">' +
+                  '<div class="finePrint">' + escapeHtml(t("procedural.promoteHint")) + '</div>' +
+                  '<button class="button primary" type="button" data-procedural-promote="true" data-procedural-local-date="' + escapeHtml(String(digest.local_date || "")) + '" data-procedural-candidate-index="' + escapeHtml(String(index)) + '"' + (isPromoting || state.isRefreshingProcedural ? " disabled" : "") + '>' +
+                    escapeHtml(isPromoting ? t("common.saving") : t("procedural.promoteButton")) +
+                  '</button>' +
+                '</div>' +
+              '</div>';
+            }).join("") +
+          '</div>' +
+        '</div>';
+      })
+      .join("");
+
+    els.proceduralCandidateList.innerHTML = groups || ('<div class="emptyState">' + escapeHtml(t("procedural.noCandidates")) + '</div>');
+  }
+
+  function renderProceduralSkillsList() {
+    const projectPath = els.proceduralProjectSelect.value;
+    const payload = state.proceduralSkillsPayload;
+
+    if (!projectPath) {
+      els.proceduralSkillsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.noSkillsPrompt")) + '</div>';
+      return;
+    }
+
+    if (!payload) {
+      els.proceduralSkillsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.loadingSkills")) + '</div>';
+      return;
+    }
+
+    if (payload.disabled) {
+      els.proceduralSkillsList.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || t("procedural.readDisabled")) + '</div>';
+      return;
+    }
+
+    const skills = getProceduralSkills();
+    if (!skills.length) {
+      els.proceduralSkillsList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.noSkills")) + '</div>';
+      return;
+    }
+
+    els.proceduralSkillsList.innerHTML = skills.map((skill) => {
+      const statusPresentation = getProceduralSkillStatusPresentation(skill.status);
+      const isSelected = skill.id === state.selectedProceduralSkillId;
+      return '<div class="summaryCard proceduralSkillCard' + (isSelected ? ' is-selected' : '') + '" role="button" tabindex="0" data-procedural-skill-select="true" data-procedural-skill-id="' + escapeHtml(skill.id) + '">' +
+        '<div class="policyTitleRow">' +
+          '<div style="font-weight: 700;">' + escapeHtml(skill.title) + '</div>' +
+          '<span class="statusChip ' + escapeHtml(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
+        '</div>' +
+        '<p class="panelLead" style="margin-top: 10px;">' + escapeHtml(skill.summary) + '</p>' +
+        '<div class="metaRow" style="margin-top: 10px;">' +
+          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(skill.confidence)) + '</span>' +
+          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.successFailureLabel")) + '</strong> ' + escapeHtml(String(skill.success_count || 0) + "/" + String(skill.failure_count || 0)) + '</span>' +
+          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at) : t("procedural.neverUsed")) + '</span>' +
+        '</div>' +
+        '<div class="toolbarFooter" style="margin-top: 12px;">' +
+          '<div class="finePrint">' + escapeHtml(skill.trigger_text || t("common.none")) + '</div>' +
+          renderProceduralStatusActions(skill) +
+        '</div>' +
+      '</div>';
+    }).join("");
+  }
+
+  function renderProceduralSkillDetail() {
+    const skill = getSelectedProceduralSkill();
+    if (!skill) {
+      els.proceduralSkillDetail.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.noSkillSelected")) + '</div>';
+      return;
+    }
+
+    const statusPresentation = getProceduralSkillStatusPresentation(skill.status);
+    const steps = Array.isArray(skill.steps) ? skill.steps : [];
+    els.proceduralSkillDetail.innerHTML = '<div class="summaryCard">' +
+      '<div class="policyTitleRow">' +
+        '<div style="font-weight: 700;">' + escapeHtml(skill.title) + '</div>' +
+        '<span class="statusChip ' + escapeHtml(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
+      '</div>' +
+      '<div class="proceduralDetailStats">' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(skill.confidence)) + '</span>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.successFailureLabel")) + '</strong> ' + escapeHtml(String(skill.success_count || 0) + "/" + String(skill.failure_count || 0)) + '</span>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at) : t("procedural.neverUsed")) + '</span>' +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.triggerLabel")) + '</div>' +
+        '<div class="recordSummary" style="margin-top: 8px;">' + escapeHtml(skill.trigger_text || t("common.none")) + '</div>' +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.summaryLabel")) + '</div>' +
+        '<div class="recordSummary" style="margin-top: 8px;">' + escapeHtml(skill.summary || t("common.none")) + '</div>' +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.stepsLabel")) + '</div>' +
+        (steps.length
+          ? '<ol class="proceduralSteps">' + steps.map((step) => '<li>' + escapeHtml(step) + '</li>').join("") + '</ol>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("procedural.noSteps")) + '</div>') +
+      '</div>' +
+      '<div class="toolbarFooter" style="margin-top: 14px;">' +
+        '<div class="finePrint">' + escapeHtml(t("procedural.statusActionsHint")) + '</div>' +
+        renderProceduralStatusActions(skill) +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderProceduralQueryResult() {
+    const payload = state.proceduralQueryPayload;
+    if (!payload) {
+      els.proceduralQueryResult.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.queryEmpty")) + '</div>';
+      return;
+    }
+
+    if (payload.disabled) {
+      els.proceduralQueryResult.innerHTML = '<div class="emptyState">' + escapeHtml(payload.message || t("procedural.readDisabled")) + '</div>';
+      return;
+    }
+
+    const policy = payload.policy || {};
+    const matchedSkills = Array.isArray(payload.procedural_skills) ? payload.procedural_skills : [];
+    const rolloutStage = getRolloutStageFromCurrentState(payload.project_context && payload.project_context.current_state);
+    const reasons = Array.isArray(policy.reasons) ? policy.reasons : [];
+    const layers = Array.isArray(policy.layers) ? policy.layers : [];
+    els.proceduralQueryResult.innerHTML = '<div class="summaryCard">' +
+      '<div class="policyTitleRow">' +
+        '<div style="font-weight: 700;">' + escapeHtml(t("procedural.queryResultTitle")) + '</div>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.actionLabel")) + '</strong> ' + escapeHtml(String(policy.action || t("common.none"))) + '</span>' +
+      '</div>' +
+      '<div class="metaRow" style="margin-top: 10px;">' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.rolloutStageLabel")) + '</strong> ' + escapeHtml(rolloutStage) + '</span>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.matchedSkillsLabel")) + '</strong> ' + escapeHtml(String(matchedSkills.length)) + '</span>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("field.asOf")) + '</strong> ' + escapeHtml(payload.as_of || t("common.none")) + '</span>' +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.layersLabel")) + '</div>' +
+        '<div class="chipsRow" style="margin-top: 10px;">' +
+          (layers.length
+            ? layers.map((layer) => '<span class="tag">' + escapeHtml(String(layer)) + '</span>').join("")
+            : '<span class="tag">' + escapeHtml(t("common.none")) + '</span>') +
+        '</div>' +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.reasonsLabel")) + '</div>' +
+        (reasons.length
+          ? '<ul class="listDetails" style="margin-top: 10px;">' + reasons.map((reason) => '<li>' + escapeHtml(String(reason)) + '</li>').join("") + '</ul>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("common.none")) + '</div>') +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.matchedTitlesLabel")) + '</div>' +
+        (matchedSkills.length
+          ? '<div class="chipsRow" style="margin-top: 10px;">' + matchedSkills.map((skill) => '<span class="tag">' + escapeHtml(String(skill.title || "")) + '</span>').join("") + '</div>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("procedural.noMatchedSkills")) + '</div>') +
+      '</div>' +
+      '<div class="finePrint" style="margin-top: 14px;">' + escapeHtml(t("procedural.generatedAt", { timestamp: formatDate(payload.generated_at) })) + '</div>' +
+    '</div>';
+  }
+
+  function renderProceduralWorkspace() {
+    const projectPath = els.proceduralProjectSelect.value;
+    const selectedSkill = getSelectedProceduralSkill();
+    const digestPayload = state.proceduralDigestPayload;
+    const skillsPayload = state.proceduralSkillsPayload;
+
+    els.proceduralRefreshButton.disabled = state.isRefreshingProcedural || !projectPath;
+    els.proceduralRefreshButton.textContent = state.isRefreshingProcedural
+      ? t("procedural.refreshingButton")
+      : t("procedural.refreshButton");
+    els.proceduralFeedbackButton.disabled = state.isSubmittingProceduralFeedback || !projectPath || !selectedSkill;
+    els.proceduralFeedbackButton.textContent = state.isSubmittingProceduralFeedback
+      ? t("procedural.feedbackSavingButton")
+      : t("procedural.feedbackButton");
+    els.proceduralQueryButton.disabled = state.isRunningProceduralQuery || !projectPath;
+    els.proceduralQueryButton.textContent = state.isRunningProceduralQuery
+      ? t("procedural.queryRunningButton")
+      : t("procedural.queryButton");
+
+    if (!projectPath) {
+      els.proceduralStatusText.textContent = t("procedural.noProjectSelected");
+      els.proceduralFeedbackStatus.textContent = t("procedural.feedbackIdle");
+      els.proceduralQueryStatus.textContent = t("procedural.queryIdle");
+    } else if (state.isRefreshingProcedural) {
+      els.proceduralStatusText.textContent = t("procedural.loadingWorkspace");
+      els.proceduralFeedbackStatus.textContent = selectedSkill
+        ? t("procedural.feedbackReady", { title: selectedSkill.title })
+        : t("procedural.feedbackIdle");
+      els.proceduralQueryStatus.textContent = t("procedural.queryIdle");
+    } else if (digestPayload && digestPayload.disabled) {
+      els.proceduralStatusText.textContent = String(digestPayload.message || t("procedural.readDisabled"));
+      els.proceduralFeedbackStatus.textContent = selectedSkill
+        ? t("procedural.feedbackReady", { title: selectedSkill.title })
+        : t("procedural.feedbackIdle");
+      els.proceduralQueryStatus.textContent = t("procedural.queryIdle");
+    } else if (skillsPayload && skillsPayload.disabled) {
+      els.proceduralStatusText.textContent = String(skillsPayload.message || t("procedural.readDisabled"));
+      els.proceduralFeedbackStatus.textContent = selectedSkill
+        ? t("procedural.feedbackReady", { title: selectedSkill.title })
+        : t("procedural.feedbackIdle");
+      els.proceduralQueryStatus.textContent = t("procedural.queryIdle");
+    } else {
+      els.proceduralStatusText.textContent = t("procedural.workspaceLoaded", {
+        digests: String(getProceduralDigests().length),
+        skills: String(getProceduralSkills().length),
+      });
+      els.proceduralFeedbackStatus.textContent = state.isSubmittingProceduralFeedback
+        ? t("procedural.feedbackSaving")
+        : selectedSkill
+          ? t("procedural.feedbackReady", { title: selectedSkill.title })
+          : t("procedural.feedbackIdle");
+      if (state.isRunningProceduralQuery) {
+        els.proceduralQueryStatus.textContent = t("procedural.queryRunning");
+      } else if (state.proceduralQueryPayload && !state.proceduralQueryPayload.disabled) {
+        els.proceduralQueryStatus.textContent = t("procedural.generatedAt", {
+          timestamp: formatDate(state.proceduralQueryPayload.generated_at),
+        });
+      } else if (state.proceduralQueryPayload && state.proceduralQueryPayload.disabled) {
+        els.proceduralQueryStatus.textContent = String(state.proceduralQueryPayload.message || t("procedural.readDisabled"));
+      } else {
+        els.proceduralQueryStatus.textContent = t("procedural.queryIdle");
+      }
+    }
+
+    renderProceduralCandidateList();
+    renderProceduralSkillsList();
+    renderProceduralSkillDetail();
+    renderProceduralQueryResult();
+  }
+
+  function showProceduralError(error) {
+    const message = error && error.message ? error.message : t("procedural.workspaceFailed");
+    els.proceduralStatusText.textContent = message;
+    setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, message, "error");
   }
 
   function renderContextCards(view) {
@@ -1171,6 +1609,68 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderDailyDigestScheduler();
   }
 
+  async function loadProceduralWorkspaceData() {
+    const projectPath = els.proceduralProjectSelect.value;
+    if (!projectPath) {
+      state.proceduralDigestPayload = null;
+      state.proceduralSkillsPayload = null;
+      state.selectedProceduralSkillId = null;
+      renderProceduralWorkspace();
+      return;
+    }
+
+    state.isRefreshingProcedural = true;
+    renderProceduralWorkspace();
+    setStoredStatusLine("proceduralSkills", els.proceduralSkillsStatus, "procedural.loadingWorkspace", {}, "warning");
+
+    try {
+      const limit = getProceduralLimitValue();
+      const digestParams = new URLSearchParams({
+        project_path: projectPath,
+        limit: String(limit),
+      });
+      const skillParams = new URLSearchParams({
+        project_path: projectPath,
+        limit: String(limit),
+      });
+      const status = String(els.proceduralStatusFilter.value || "").trim();
+      const asOf = els.proceduralAsOfInput.value.trim();
+      if (status) skillParams.set("status", status);
+      if (asOf) skillParams.set("as_of", asOf);
+
+      const [digestPayload, skillsPayload] = await Promise.all([
+        fetchJson("/admin/api/digests?" + digestParams.toString()),
+        fetchJson("/admin/api/skills?" + skillParams.toString()),
+      ]);
+
+      state.proceduralDigestPayload = digestPayload;
+      if (!els.proceduralLocalDateInput.value) {
+        const latestDigest = Array.isArray(digestPayload.digests) ? digestPayload.digests[0] : null;
+        if (latestDigest && latestDigest.local_date) {
+          els.proceduralLocalDateInput.value = String(latestDigest.local_date);
+        }
+      }
+
+      state.proceduralSkillsPayload = skillsPayload;
+      syncSelectedProceduralSkill();
+      renderProceduralWorkspace();
+
+      if (digestPayload.disabled || skillsPayload.disabled) {
+        setRawStatusLine(
+          "proceduralSkills",
+          els.proceduralSkillsStatus,
+          String(digestPayload.message || skillsPayload.message || t("procedural.readDisabled")),
+          "warning"
+        );
+      } else {
+        setStoredStatusLine("proceduralSkills", els.proceduralSkillsStatus, "procedural.workspaceReady", {}, "");
+      }
+    } finally {
+      state.isRefreshingProcedural = false;
+      renderProceduralWorkspace();
+    }
+  }
+
   async function saveDailyDigestSchedulerConfig() {
     state.isSavingDigestScheduler = true;
     els.dailyDigestSchedulerStatusText.textContent = t("runtime.dailyDigestSchedulerSavingButton");
@@ -1236,6 +1736,182 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       state.isRunningDigest = false;
       renderDailyDigest();
       throw error;
+    }
+  }
+
+  async function promoteProceduralCandidate(localDate, candidateIndex) {
+    const projectPath = els.proceduralProjectSelect.value;
+    if (!projectPath) {
+      throw new Error(t("procedural.noProjectSelected"));
+    }
+
+    let finalMessage = "";
+    state.isPromotingProceduralCandidate = true;
+    state.promotingProceduralCandidateKey = getProceduralCandidateKey(localDate, candidateIndex);
+    renderProceduralWorkspace();
+    setStoredStatusLine("proceduralSkills", els.proceduralSkillsStatus, "procedural.promotingCandidate", {}, "warning");
+
+    try {
+      const payload = await fetchJson("/admin/api/skills/promote-candidate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_path: projectPath,
+          local_date: localDate,
+          candidate_index: candidateIndex,
+        }),
+      });
+      if (payload.disabled) {
+        setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, payload.message || t("procedural.writeDisabled"), "warning");
+        els.proceduralStatusText.textContent = payload.message || t("procedural.writeDisabled");
+        return;
+      }
+
+      state.selectedProceduralSkillId = payload.skill && payload.skill.id ? payload.skill.id : state.selectedProceduralSkillId;
+      if (els.proceduralStatusFilter.value && els.proceduralStatusFilter.value !== "draft") {
+        els.proceduralStatusFilter.value = "";
+      }
+      await loadOverview();
+      if (els.dailyDigestProjectSelect.value === projectPath) {
+        await loadDailyDigestStatus();
+      }
+      await loadProceduralWorkspaceData();
+      const title = payload.skill && payload.skill.title ? payload.skill.title : t("procedural.statusDraft");
+      finalMessage = t("procedural.promotedCandidate", { title });
+    } finally {
+      state.isPromotingProceduralCandidate = false;
+      state.promotingProceduralCandidateKey = "";
+      renderProceduralWorkspace();
+      if (finalMessage) {
+        els.proceduralStatusText.textContent = finalMessage;
+        setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, finalMessage, "");
+      }
+    }
+  }
+
+  async function updateProceduralSkillStatus(skillId, status) {
+    let finalMessage = "";
+    state.updatingProceduralSkillId = skillId;
+    renderProceduralWorkspace();
+    setStoredStatusLine("proceduralSkills", els.proceduralSkillsStatus, "procedural.updatingStatus", {}, "warning");
+
+    try {
+      const payload = await fetchJson("/admin/api/skills/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          skill_id: skillId,
+          status,
+        }),
+      });
+      if (payload.disabled) {
+        setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, payload.message || t("procedural.writeDisabled"), "warning");
+        els.proceduralStatusText.textContent = payload.message || t("procedural.writeDisabled");
+        return;
+      }
+
+      state.selectedProceduralSkillId = payload.skill && payload.skill.id ? payload.skill.id : state.selectedProceduralSkillId;
+      if (els.proceduralStatusFilter.value && els.proceduralStatusFilter.value !== status) {
+        els.proceduralStatusFilter.value = "";
+      }
+      await loadProceduralWorkspaceData();
+      finalMessage = t("procedural.statusUpdated", {
+        title: payload.skill && payload.skill.title ? payload.skill.title : "",
+        status: getProceduralSkillStatusPresentation(status).label,
+      });
+    } finally {
+      state.updatingProceduralSkillId = null;
+      renderProceduralWorkspace();
+      if (finalMessage) {
+        els.proceduralStatusText.textContent = finalMessage;
+        setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, finalMessage, "");
+      }
+    }
+  }
+
+  async function submitProceduralFeedback() {
+    const projectPath = els.proceduralProjectSelect.value;
+    const skill = getSelectedProceduralSkill();
+    if (!projectPath || !skill) {
+      throw new Error(t("procedural.feedbackRequiresSkill"));
+    }
+
+    let finalMessage = "";
+    state.isSubmittingProceduralFeedback = true;
+    renderProceduralWorkspace();
+    setStoredStatusLine("proceduralSkills", els.proceduralSkillsStatus, "procedural.feedbackSaving", {}, "warning");
+
+    try {
+      const payload = await fetchJson("/admin/api/skills/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          skill_id: skill.id,
+          project_path: projectPath,
+          outcome: els.proceduralFeedbackOutcomeSelect.value,
+          task_text: els.proceduralFeedbackTaskInput.value.trim() || undefined,
+          notes: els.proceduralFeedbackNotesInput.value.trim() || undefined,
+        }),
+      });
+      if (payload.disabled) {
+        setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, payload.message || t("procedural.writeDisabled"), "warning");
+        els.proceduralFeedbackStatus.textContent = payload.message || t("procedural.writeDisabled");
+        return;
+      }
+
+      await loadProceduralWorkspaceData();
+      els.proceduralFeedbackTaskInput.value = "";
+      els.proceduralFeedbackNotesInput.value = "";
+      finalMessage = t("procedural.feedbackSaved", {
+        outcome: formatProceduralOutcomeLabel(payload.feedback && payload.feedback.outcome),
+      });
+    } finally {
+      state.isSubmittingProceduralFeedback = false;
+      renderProceduralWorkspace();
+      if (finalMessage) {
+        els.proceduralFeedbackStatus.textContent = finalMessage;
+        setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, finalMessage, "");
+      }
+    }
+  }
+
+  async function runProceduralValidationQuery() {
+    const projectPath = els.proceduralProjectSelect.value;
+    if (!projectPath) {
+      throw new Error(t("procedural.noProjectSelected"));
+    }
+    const query = els.proceduralQueryInput.value.trim();
+    if (!query) {
+      throw new Error(t("procedural.queryRequired"));
+    }
+
+    state.isRunningProceduralQuery = true;
+    renderProceduralWorkspace();
+    setStoredStatusLine("proceduralSkills", els.proceduralSkillsStatus, "procedural.queryRunning", {}, "warning");
+
+    try {
+      state.proceduralQueryPayload = await fetchJson("/admin/api/memory/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_path: projectPath,
+          query,
+          as_of: els.proceduralAsOfInput.value.trim() || undefined,
+          limit: getProceduralLimitValue(),
+          skill_limit: getProceduralLimitValue(),
+        }),
+      });
+      renderProceduralWorkspace();
+      if (state.proceduralQueryPayload.disabled) {
+        const disabledMessage = state.proceduralQueryPayload.message || t("procedural.readDisabled");
+        els.proceduralQueryStatus.textContent = disabledMessage;
+        setRawStatusLine("proceduralSkills", els.proceduralSkillsStatus, disabledMessage, "warning");
+        return;
+      }
+      setStoredStatusLine("proceduralSkills", els.proceduralSkillsStatus, "procedural.workspaceReady", {}, "");
+    } finally {
+      state.isRunningProceduralQuery = false;
+      renderProceduralWorkspace();
     }
   }
 
@@ -1395,6 +2071,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (state.activePanel === "observationLedgerPanel") {
         await loadRecords("ledger.polling");
       }
+      if (state.activePanel === "proceduralSkillsPanel" && els.proceduralProjectSelect.value && !state.isRefreshingProcedural && !state.isPromotingProceduralCandidate && !state.updatingProceduralSkillId && !state.isSubmittingProceduralFeedback) {
+        await loadProceduralWorkspaceData();
+      }
       if (state.activePanel === "projectContextPanel" && els.contextProjectSelect.value) {
         await loadProjectContext();
       }
@@ -1463,6 +2142,131 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         els.dailyDigestSchedulerStatusText.textContent = error.message || t("runtime.dailyDigestSchedulerSaveFailed");
         els.dailyDigestSchedulerRuntimeBadge.textContent = t("runtime.dailyDigestSchedulerSaveFailed");
         els.dailyDigestSchedulerRuntimeBadge.className = "statusChip error";
+      }
+    });
+    els.proceduralRefreshButton.addEventListener("click", async () => {
+      try {
+        await loadProceduralWorkspaceData();
+      } catch (error) {
+        showProceduralError(error);
+      }
+    });
+    els.proceduralProjectSelect.addEventListener("change", async () => {
+      els.proceduralLocalDateInput.value = "";
+      state.proceduralQueryPayload = null;
+      state.selectedProceduralSkillId = null;
+      renderProceduralWorkspace();
+      try {
+        await loadProceduralWorkspaceData();
+      } catch (error) {
+        showProceduralError(error);
+      }
+    });
+    els.proceduralLocalDateInput.addEventListener("change", () => {
+      renderProceduralWorkspace();
+    });
+    els.proceduralStatusFilter.addEventListener("change", async () => {
+      state.selectedProceduralSkillId = null;
+      try {
+        await loadProceduralWorkspaceData();
+      } catch (error) {
+        showProceduralError(error);
+      }
+    });
+    els.proceduralAsOfInput.addEventListener("change", async () => {
+      state.proceduralQueryPayload = null;
+      renderProceduralWorkspace();
+      try {
+        await loadProceduralWorkspaceData();
+      } catch (error) {
+        showProceduralError(error);
+      }
+    });
+    els.proceduralLimitInput.addEventListener("change", async () => {
+      try {
+        await loadProceduralWorkspaceData();
+      } catch (error) {
+        showProceduralError(error);
+      }
+    });
+    els.proceduralCandidateList.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-procedural-promote]");
+      if (!button) return;
+      try {
+        await promoteProceduralCandidate(
+          button.getAttribute("data-procedural-local-date"),
+          Number(button.getAttribute("data-procedural-candidate-index"))
+        );
+      } catch (error) {
+        showProceduralError(error);
+      }
+    });
+    els.proceduralSkillsList.addEventListener("click", async (event) => {
+      const actionButton = event.target.closest("[data-procedural-skill-status]");
+      if (actionButton) {
+        event.stopPropagation();
+        try {
+          await updateProceduralSkillStatus(
+            actionButton.getAttribute("data-procedural-skill-id"),
+            actionButton.getAttribute("data-procedural-skill-status")
+          );
+        } catch (error) {
+          showProceduralError(error);
+        }
+        return;
+      }
+
+      const skillCard = event.target.closest("[data-procedural-skill-select]");
+      if (!skillCard) return;
+      state.selectedProceduralSkillId = skillCard.getAttribute("data-procedural-skill-id");
+      renderProceduralWorkspace();
+    });
+    els.proceduralSkillsList.addEventListener("keydown", (event) => {
+      const skillCard = event.target.closest("[data-procedural-skill-select]");
+      if (!skillCard) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        state.selectedProceduralSkillId = skillCard.getAttribute("data-procedural-skill-id");
+        renderProceduralWorkspace();
+      }
+    });
+    els.proceduralSkillDetail.addEventListener("click", async (event) => {
+      const actionButton = event.target.closest("[data-procedural-skill-status]");
+      if (!actionButton) return;
+      try {
+        await updateProceduralSkillStatus(
+          actionButton.getAttribute("data-procedural-skill-id"),
+          actionButton.getAttribute("data-procedural-skill-status")
+        );
+      } catch (error) {
+        showProceduralError(error);
+      }
+    });
+    els.proceduralFeedbackButton.addEventListener("click", async () => {
+      try {
+        await submitProceduralFeedback();
+      } catch (error) {
+        els.proceduralFeedbackStatus.textContent = error.message || t("procedural.feedbackSubmitFailed");
+        showProceduralError(error);
+      }
+    });
+    els.proceduralQueryButton.addEventListener("click", async () => {
+      try {
+        await runProceduralValidationQuery();
+      } catch (error) {
+        els.proceduralQueryStatus.textContent = error.message || t("procedural.queryFailed");
+        showProceduralError(error);
+      }
+    });
+    els.proceduralQueryInput.addEventListener("keydown", async (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        try {
+          await runProceduralValidationQuery();
+        } catch (error) {
+          els.proceduralQueryStatus.textContent = error.message || t("procedural.queryFailed");
+          showProceduralError(error);
+        }
       }
     });
 
@@ -1574,6 +2378,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         await loadDailyDigestStatus();
       } else {
         renderDailyDigest();
+      }
+      if (els.proceduralProjectSelect.value) {
+        await loadProceduralWorkspaceData();
+      } else {
+        renderProceduralWorkspace();
       }
       if (els.contextProjectSelect.value) {
         await loadProjectContext();

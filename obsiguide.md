@@ -49,6 +49,14 @@
 - 当前目标已切换为围绕 repo 根目录 `taskgoal.md` 定义的五项差距推进下一阶段 AgentMemory 优化：补强显式 `policy brain`、落地第一版 `procedural memory`、把 `temporal memory` 扩展到统一查询路径、显式化 memory layers，并补上 sliding-window contract；本次先完成 repo-local goal artifact，下一步交给 Codex `/goal` 模式执行。
 
 ## Current State
+- `/admin` 现已新增独立 `Procedural Skills` 顶层工作区，采用共享 toolbar（`project`、`local_date`、`status`、`as_of`、`limit`）+ 双栏布局，把 digest candidate review、skills library、skill detail、feedback submission 和 memory query validation 收敛到同一条 operator 流程里；v1 全程复用既有 admin API，没有新增 HTTP 或 MCP endpoint。
+- `Procedural Skills` workbench 的 live browser smoke 已在真实 `http://127.0.0.1:38888/admin` 上完成：成功切换到新 tab、选择 `E:/Kuan/Projects/Codex/AgentMemory`、从 candidate 卡片 promote draft、在详情区切到 `enabled`、提交 success feedback、运行 validation query，并确认 UI 返回的 `rollout_stage` 仍是 `phase2-antigravity-startup-helper`。
+- 为避免把本次 UI smoke 留成额外的启用态重复技能，smoke 里新 promote 的重复 `Procedural skill lifecycle management` 已在验证完 promote -> enabled -> feedback 后切到 `retired`；当前 validation query 再次返回的命中技能标题已收敛回 `Procedural skill lifecycle management` 与 `Policy-driven procedural memory query` 两条。
+- `/admin` workbench 文案、README / README.zh、以及 `tests/worker-admin.test.cjs` 的 HTML smoke 已同步扩展到 `Procedural Skills` 面板与表单/动作 hook；顺序构建和 focused test suite 已重新通过。
+- `2026-06-15` 的真实 procedural-memory smoke 已推进到 live write path：`2026-06-15` digest 里的两个 `skill_candidates` 已被显式 promote 并切到 `enabled`，当前 live 项目下已有 `Policy-driven procedural memory query` 和 `Procedural skill lifecycle management` 两条启用技能。
+- 使用与四端 smoke 相同的历史任务查询 `query_memory(mode="task_query", as_of="2026-06-15T23:59:59.000Z", query="How do I bootstrap the workbench and what was the rollout stage as of 2026-06-15T23:59:59.000Z?")` 再跑一次后，返回已从 `procedural_skills=0` 变为 `procedural_skills=2`；同一时间切片下 `rollout_stage` 仍稳定为 `phase2-antigravity-startup-helper`。
+- live feedback integrity smoke 已实测通过：同项目 `POST /admin/api/skills/feedback` 返回 `200` 并把 `Policy-driven procedural memory query` 的 `success_count` 提升到 `2`；跨项目写入到 `E:/Kuan/Projects/Codex/NotTheSameRepo` 会返回 `500` 和明确的 project mismatch 错误。
+- `E:\Temp\16\test.md` 中的 Claude Code、Codex、OpenCode 和 Antigravity CLI 复验结果现已完全一致：四端都返回 `procedural_skills=2`、`rollout_stage=phase2-antigravity-startup-helper`，且命中的 skill titles 都是 `Policy-driven procedural memory query` 与 `Procedural skill lifecycle management`。
 - 已按 `taskgoal.md` 完成一轮 additive 的下一阶段优化首版：新增显式 `memory-policy` policy brain、`procedural_skills` / `procedural_skill_feedback` 数据层、policy-driven `POST /memory/query` / MCP `query_memory` 路径、`ProjectContextView.memory_layers` / `procedural_skills` / `sliding_window`，以及 `context` / `search` / `admin search` 的 `as_of` 时间切片支持。
 - procedural memory 现在支持从 daily digest `skill_candidates` 显式提升为 `draft` skill，再由 admin/MCP 路径切换到 `enabled` / `disabled` / `retired`，并记录 success/failure/rejected/skipped 反馈；全程保持 reviewable-before-promotion。
 - 已对这一轮增量能力补上首批 correctness hardening：observation `as_of` 检索不再依赖混合时间文本的原始比较；procedural skill status 切换现在会额外记录显式 transition history，避免历史 `as_of` 读把未来状态投回过去；skill feedback 现在强制校验 `project_path` 与 skill 所属项目一致。
@@ -133,6 +141,8 @@
 
 ## Verified Commands
 - `npm run build`
+- `cmd /c start-workbench.cmd restart --no-open`
+- focused browser smoke on `http://127.0.0.1:38888/admin` for `Procedural Skills` tab: candidate promote -> status enable -> feedback submit -> query validation -> smoke skill retire cleanup
 - `npm run workbench -- --no-open`
 - `node dist/bin/cli.js install`
 - `node dist/bin/cli.js start`
@@ -165,9 +175,16 @@
 - `node --test tests\mcp-context.test.cjs tests\install-bootstrap.test.cjs tests\installer-uninstall.test.cjs`
 - `node --test tests/context-view.test.cjs tests/procedural-memory.test.cjs tests/memory-query.test.cjs tests/context-worker.test.cjs tests/mcp-context.test.cjs tests/worker-admin.test.cjs`
 - `node --test tests/*.test.cjs`
+- `GET /admin/api/digests?project_path=E:/Kuan/Projects/Codex/AgentMemory&limit=3`
+- `POST /admin/api/skills/promote-candidate`
+- `POST /admin/api/skills/status`
+- `GET /admin/api/skills?project_path=E:/Kuan/Projects/Codex/AgentMemory&status=enabled&limit=10`
+- `POST /admin/api/memory/query`
+- `POST /admin/api/skills/feedback`
 - `npm run release:plan -- --next minor`
 - `npm run release:bump -- --next minor`
 - `git diff --check`
+- `node --test tests/worker-admin.test.cjs tests/procedural-memory.test.cjs tests/memory-query.test.cjs`
 - Antigravity CLI MCP smoke: `tools/list` and `tools/call get_project_context` against `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json`
 - bundled Playwright + local Chrome screenshot QA against isolated temp worker: desktop 1440x1000 and mobile 390x844, `LLM Settings` active, no horizontal overflow, inline no-key connection failure rendered
 
@@ -180,9 +197,15 @@
 - `search_memory` 对较宽泛查询仍可能先命中低信号 observation；helper 已解决启动恢复，但后续是否还需要检索排序或 query guidance 的收敛仍待观察。
 - 如果后续要接具体供应商的真实 embedding 端点，仍需要再做一次供应商真实接口的在线校验。
 - 新增的 `/admin` LLM connection test 已用本地 mock provider 覆盖；真实供应商 endpoint 仍应在用户提供真实 API key 后从网页 UI 再跑一次 live test。
-- procedural skill 目前已具备 admin API / MCP 管理面，但 `/admin` 还没有单独的可视技能管理面板；是否要把 candidate review、status flip 和 feedback drill-down 直接做进 workbench 仍待决定。
+- `Procedural Skills` MVP 现已落地，但 v1 仍没有 feedback history drill-down、candidate/source timeline、或 query/result score 明细；是否继续做二期纵深面板仍待决定。
 
 ## Latest Durable Changes
+- 已在 `/admin` Admin Workbench 中落地 `Procedural Skills` MVP：新增独立 top-level tab、共享筛选 toolbar、candidate review、skills library、skill detail、feedback 表单和 query validation，且全部复用既有 admin API。
+- 已为新 workbench 补齐双语 UI 文案、README / README.zh 的产品说明，以及 `tests/worker-admin.test.cjs` 对新 tab、panel ID 与关键 action hooks 的 HTML smoke 覆盖。
+- 已在真实本地 worker 上完成 `Procedural Skills` live browser smoke，并确认 promote -> enabled -> feedback -> query validation 全链路可用；为避免污染 active 集合，smoke 过程中创建的重复技能已退役清理。
+- 已把 `2026-06-15` daily digest 中的两条 procedural `skill_candidates` 真正提升到 live 项目的 enabled skills，证明 digest -> draft -> enabled 的写路径在真实数据库上可用。
+- 已完成 procedural-memory 的 live admin smoke 闭环：相同 `as_of` task query 现在会返回 `procedural_skills=2`，同项目 feedback 会累计 success 计数，跨项目 feedback 会被 integrity guard 拒绝。
+- 已完成真实四端一致性验收：Claude Code、Codex、OpenCode 与 Antigravity CLI 对同一条 `query_memory` 历史任务查询返回完全一致，说明当前 `query_memory + procedural skills + historical as_of` 读路径已在四端稳定对齐。
 - 已落地显式 policy brain：`memory-policy.ts` 现在统一承载读取决策、低信号 observation 写入决策，以及 procedural skill candidate 的 draft promotion gate，不再把这类规则散落在 worker、digest 和 MCP handler 中。
 - 已新增 first-class procedural memory：SQLite 新增 `procedural_skills` 与 `procedural_skill_feedback`，daily digest candidate 可显式提升为 `draft`，随后可启用/停用/淘汰并累计 success/failure 反馈。
 - 已新增 policy-driven `memory-query` 路径：HTTP `/memory/query`、admin `/admin/api/memory/query` 与 MCP `query_memory` 会基于 query 决定读取哪些 memory layers，并返回 `ProjectContextView`、匹配 observation、匹配 procedural skills 和 sliding-window contract。
@@ -235,9 +258,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 基于这一版 additive 实现与 correctness 修复，优先做真实四端 smoke：验证 Claude Code / Codex / OpenCode / Antigravity 在 task-level `query_memory`、procedural skill draft promotion、historical `as_of` 时间切片与 feedback project integrity 上的 live 行为，再决定是否补 `/admin` 的可视 procedural skill 管理面板。
+- `Procedural Skills` MVP 已落地；下一步应决定是继续做 v2 操作深度（feedback history / candidate timeline / drill-down），还是转回更高信号的 skill candidate 与 workbench/bootstrap 查询命中质量优化。
 
 ## Last Sync
-- date: 2026-06-08
-- status: 最近一次 vault sync 仍为 `2026-06-08` 的 `v1.2.0` release 状态同步；`2026-06-15` 新增的 repo-local `taskgoal.md` 属于当前目标与下一步，按合同保持 local-only，暂不提升到 vault。
+- date: 2026-06-15
+- status: 已将 `Procedural Skills` workbench MVP、focused tests、真实 `/admin` browser smoke 结果，以及 smoke duplicate skill 的 retire cleanup 同步到 vault 项目笔记；`taskgoal.md` 仍属于 repo-local 当前目标，不单独提升到 vault。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

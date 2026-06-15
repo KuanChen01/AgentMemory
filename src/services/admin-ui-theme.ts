@@ -514,6 +514,10 @@ export const ADMIN_UI_THEME = `
     grid-template-columns: 1.2fr 0.7fr auto;
   }
 
+  .toolbar.proceduralToolbar {
+    grid-template-columns: minmax(220px, 1.35fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr) minmax(220px, 1fr) minmax(120px, 0.5fr) auto;
+  }
+
   .toolbar.wide {
     grid-template-columns: 1fr 1fr 1fr 1fr auto;
   }
@@ -615,7 +619,8 @@ export const ADMIN_UI_THEME = `
   }
 
   .sectionGrid,
-  .llmLayout {
+  .llmLayout,
+  .proceduralLayout {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
     gap: 16px;
@@ -735,6 +740,37 @@ export const ADMIN_UI_THEME = `
       inset 0 0 0 1px rgba(10, 132, 255, 0.14);
   }
 
+  .proceduralSkillCard {
+    cursor: pointer;
+  }
+
+  .proceduralSkillCard.is-selected {
+    border-color: rgba(10, 132, 255, 0.34);
+    box-shadow:
+      0 6px 12px rgba(10, 132, 255, 0.10),
+      inset 0 0 0 1px rgba(10, 132, 255, 0.14);
+    background: linear-gradient(180deg, rgba(246, 251, 255, 0.88), rgba(255, 255, 255, 0.64));
+  }
+
+  .proceduralCandidateGroup {
+    display: grid;
+    gap: 12px;
+  }
+
+  .proceduralSteps {
+    margin: 10px 0 0;
+    padding-left: 18px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .proceduralDetailStats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    margin-top: 10px;
+  }
+
   .detailPanel {
     min-height: 760px;
   }
@@ -844,6 +880,7 @@ export const ADMIN_UI_THEME = `
     .heroLayout,
     .sectionGrid,
     .llmLayout,
+    .proceduralLayout,
     .ledgerLayout,
     .runtimeMetaGrid,
     .splitGrid,

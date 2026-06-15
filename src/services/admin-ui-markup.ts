@@ -99,6 +99,7 @@ export function renderAdminWorkbenchMarkup(): string {
     <section class="dock">
       <div class="segmented" id="viewTabs">
         <button class="segmentButton is-active" type="button" data-panel-target="runtimePanel" data-i18n="tabs.runtime">Runtime</button>
+        <button class="segmentButton" type="button" data-panel-target="proceduralSkillsPanel" data-i18n="tabs.proceduralSkills">Procedural Skills</button>
         <button class="segmentButton" type="button" data-panel-target="llmSettingsPanel" data-i18n="tabs.llmSettings">LLM Settings</button>
         <button class="segmentButton" type="button" data-panel-target="projectContextPanel" data-i18n="tabs.projectContext">Project Context</button>
         <button class="segmentButton" type="button" data-panel-target="stateLabPanel" data-i18n="tabs.stateLab">State Lab</button>
@@ -250,6 +251,144 @@ export function renderAdminWorkbenchMarkup(): string {
           <div class="card">
             <div class="metaLabel" data-i18n="runtime.knownAgents">Known Agents</div>
             <div id="runtimeAgentList" class="runtimeAgentList"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="proceduralSkillsPanel" class="viewPanel glassPanel">
+        <div class="panelHeader">
+          <div>
+            <div class="sectionEyebrow" data-i18n="procedural.section">Procedural Skills</div>
+            <h2 class="panelTitle" data-i18n="procedural.title">Review digest candidates, manage skills, and validate task queries</h2>
+            <p class="panelLead" data-i18n="procedural.lead">
+              Turn reviewable procedural-memory candidates into operator-managed skills, record live outcomes,
+              and verify the policy-driven memory query path from one workbench surface.
+            </p>
+          </div>
+          <div id="proceduralSkillsStatus" class="statusLine">
+            <span class="statusDot"></span>
+            <span data-i18n="procedural.ready">Ready</span>
+          </div>
+        </div>
+
+        <div class="toolbar proceduralToolbar">
+          <label>
+            <span class="fieldLabel" data-i18n="field.project">Project</span>
+            <select id="proceduralProjectSelect" class="selectInput">
+              <option value="" data-i18n="field.chooseProject">Choose a project</option>
+            </select>
+          </label>
+          <label>
+            <span class="fieldLabel" data-i18n="field.localDate">Local Date</span>
+            <input id="proceduralLocalDateInput" class="dateInput" type="date" />
+          </label>
+          <label>
+            <span class="fieldLabel" data-i18n="field.status">Status</span>
+            <select id="proceduralStatusFilter" class="selectInput">
+              <option value="" data-i18n="procedural.allStatuses">All statuses</option>
+              <option value="enabled" data-i18n="procedural.statusEnabled">Enabled</option>
+              <option value="draft" data-i18n="procedural.statusDraft">Draft</option>
+              <option value="disabled" data-i18n="procedural.statusDisabled">Disabled</option>
+              <option value="retired" data-i18n="procedural.statusRetired">Retired</option>
+            </select>
+          </label>
+          <label>
+            <span class="fieldLabel" data-i18n="field.asOf">As Of</span>
+            <input id="proceduralAsOfInput" class="dateInput" type="text" data-i18n-placeholder="placeholder.asOf" placeholder="2026-06-03T09:00:00.000Z" />
+          </label>
+          <label>
+            <span class="fieldLabel" data-i18n="field.limit">Limit</span>
+            <input id="proceduralLimitInput" class="numberInput" type="number" min="1" max="20" value="10" />
+          </label>
+          <div class="buttonSlot">
+            <button id="proceduralRefreshButton" class="button primary" type="button" data-i18n="procedural.refreshButton">Refresh Workspace</button>
+          </div>
+        </div>
+
+        <div class="toolbarFooter">
+          <div id="proceduralStatusText" class="finePrint" data-i18n="procedural.noProjectSelected">Choose a project to inspect procedural skills.</div>
+        </div>
+
+        <div class="proceduralLayout">
+          <div class="stack">
+            <div class="card">
+              <div class="metaLabel" data-i18n="procedural.candidateSection">Candidate Review</div>
+              <p class="panelLead" style="margin-top: 10px;" data-i18n="procedural.candidateLead">
+                Review skill_candidates from recent digests, then explicitly promote the reusable ones to draft.
+              </p>
+              <div id="proceduralCandidateList" class="listBlock" style="margin-top: 14px;">
+                <div class="emptyState" data-i18n="procedural.noCandidatesPrompt">Choose a project to inspect digest candidates.</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="metaLabel" data-i18n="procedural.librarySection">Skills Library</div>
+              <p class="panelLead" style="margin-top: 10px;" data-i18n="procedural.libraryLead">
+                Inspect the current lifecycle state, confidence, and live counters for procedural skills in this project.
+              </p>
+              <div id="proceduralSkillsList" class="listBlock" style="margin-top: 14px;">
+                <div class="emptyState" data-i18n="procedural.noSkillsPrompt">Choose a project to inspect the procedural skills library.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="card">
+              <div class="metaLabel" data-i18n="procedural.detailSection">Skill Detail</div>
+              <div id="proceduralSkillDetail" class="listBlock" style="margin-top: 14px;">
+                <div class="emptyState" data-i18n="procedural.noSkillSelected">Select a skill to inspect its trigger, summary, steps, and live counters.</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="metaLabel" data-i18n="procedural.feedbackSection">Feedback</div>
+              <p class="panelLead" style="margin-top: 10px;" data-i18n="procedural.feedbackLead">
+                Record whether a skill succeeded, failed, was rejected, or was skipped for the current project.
+              </p>
+              <div class="stack" style="margin-top: 14px;">
+                <label>
+                  <span class="fieldLabel" data-i18n="field.outcome">Outcome</span>
+                  <select id="proceduralFeedbackOutcomeSelect" class="selectInput">
+                    <option value="success" data-i18n="procedural.outcomeSuccess">Success</option>
+                    <option value="failure" data-i18n="procedural.outcomeFailure">Failure</option>
+                    <option value="rejected" data-i18n="procedural.outcomeRejected">Rejected</option>
+                    <option value="skipped" data-i18n="procedural.outcomeSkipped">Skipped</option>
+                  </select>
+                </label>
+                <label>
+                  <span class="fieldLabel" data-i18n="field.taskText">Task Text</span>
+                  <input id="proceduralFeedbackTaskInput" class="textInput" type="text" data-i18n-placeholder="placeholder.proceduralTaskText" placeholder="What task triggered this skill?" />
+                </label>
+                <label>
+                  <span class="fieldLabel" data-i18n="field.notes">Notes</span>
+                  <textarea id="proceduralFeedbackNotesInput" class="textArea" data-i18n-placeholder="placeholder.proceduralNotes" placeholder="Optional operator notes for this outcome."></textarea>
+                </label>
+              </div>
+              <div class="toolbarFooter" style="margin-top: 14px;">
+                <div id="proceduralFeedbackStatus" class="finePrint" data-i18n="procedural.feedbackIdle">Select a skill to record operator feedback.</div>
+                <button id="proceduralFeedbackButton" class="button primary" type="button" data-i18n="procedural.feedbackButton">Submit Feedback</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="metaLabel" data-i18n="procedural.querySection">Query Validation</div>
+              <p class="panelLead" style="margin-top: 10px;" data-i18n="procedural.queryLead">
+                Run the policy-driven task query path and confirm which procedural skills and current rollout state are returned.
+              </p>
+              <div class="stack" style="margin-top: 14px;">
+                <label>
+                  <span class="fieldLabel" data-i18n="field.query">Query</span>
+                  <textarea id="proceduralQueryInput" class="textArea" data-i18n-placeholder="placeholder.proceduralQuery" placeholder="How do I bootstrap the workbench and what is the rollout stage?"></textarea>
+                </label>
+              </div>
+              <div class="toolbarFooter" style="margin-top: 14px;">
+                <div id="proceduralQueryStatus" class="finePrint" data-i18n="procedural.queryIdle">Run a task query to validate policy resolution and rollout stage.</div>
+                <button id="proceduralQueryButton" class="button primary" type="button" data-i18n="procedural.queryButton">Run Validation</button>
+              </div>
+              <div id="proceduralQueryResult" class="listBlock" style="margin-top: 14px;">
+                <div class="emptyState" data-i18n="procedural.queryEmpty">No validation query has been run yet.</div>
+              </div>
+            </div>
           </div>
         </div>
       </section>

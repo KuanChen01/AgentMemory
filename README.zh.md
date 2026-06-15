@@ -194,6 +194,7 @@ Windows 下现在有两个本机控制入口：
 管理页提供：
 
 *   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，展示 project / agent 覆盖面，查看/手动运行每日总结并调整 scheduler 设置，同时提供只读的 GitHub Release 更新检查与手动升级指引
+*   **Procedural Skills**：查看 digest `skill_candidates`，将可复用条目提升为 draft，切换 `enabled / disabled / retired` 生命周期状态，记录 success / failure / rejected / skipped 反馈，并用任务级 query 校验当前 `rollout_stage`
 *   **LLM Settings**：切换 `AGENTMEM_LLM_MODEL`，更新 OpenAI-compatible API base URL，保留或替换 API key，并运行实时连接测试
 *   **Project Context**：查看当前 `ProjectContextView`、最近每日总结、渲染后的 startup 文本，以及 payload / summary 健康度指标
 *   **State Lab**：显式读取和写入 structured state
@@ -284,10 +285,11 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
 4. 在 Runtime 面板的 release 卡片中对比当前 checkout 与最新正式 GitHub Release，并选择推荐的手动升级路径
 5. 在 Runtime 面板的每日总结卡片中查看最近项目 digest、为指定本地日期手动运行一次总结，或调整自动 scheduler 的启停、运行时间、时区和 catch-up 窗口
-6. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
-7. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
-8. 如需深挖原始 observation，再切到 `Observation Ledger`
-9. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
+6. 在 `Procedural Skills` 中评审 digest 候选技能，把可复用条目提升为 draft，切换 `enabled / disabled / retired`，记录操作反馈，并运行验证查询以确认命中的 skill titles 与当前 `rollout_stage`
+7. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
+8. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
+9. 如需深挖原始 observation，再切到 `Observation Ledger`
+10. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
 
 ---
 
