@@ -828,6 +828,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.payload")) + '</strong> ' + escapeHtml(String(metrics.payloadBytes || 0)) + ' ' + escapeHtml(t("common.bytes")) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.dailyDigests")) + '</strong> ' + escapeHtml(String((view.daily_digests || []).length)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.summary")) + '</strong> ' + escapeHtml(String(metrics.summaryCount || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.proceduralSkills")) + '</strong> ' + escapeHtml(String(metrics.proceduralSkillCount || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.windowEntries")) + '</strong> ' + escapeHtml(String(metrics.slidingWindowEntryCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.lowSignal")) + '</strong> ' + escapeHtml(String(metrics.lowSignalCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.duplicateTitles")) + '</strong> ' + escapeHtml(String(metrics.duplicateTitleCount || 0)) + '</span>'
     ].join("");

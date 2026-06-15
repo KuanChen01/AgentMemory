@@ -129,3 +129,71 @@ test('createProjectContextView renders daily digests before recent summary block
   assert.match(rendered, /Daily digest service was implemented\./);
   assert.ok(rendered.indexOf('Recent daily digests:') < rendered.indexOf('Recent summary blocks:'));
 });
+
+test('createProjectContextView exposes explicit layers, procedural skills, and sliding-window contract', () => {
+  const view = createProjectContextView(
+    'E:/Repo/A',
+    [
+      {
+        id: 'fact-1',
+        project_path: 'E:/Repo/A',
+        entity_type: 'project',
+        entity_key: 'E:/Repo/A',
+        fact_key: 'rollout_stage',
+        value: 'policy-brain',
+        value_json: '"policy-brain"',
+        effective_at: '2026-06-15T00:00:00.000Z',
+        recorded_at: '2026-06-15T00:00:00.000Z',
+        superseded_at: null,
+      },
+    ],
+    [
+      makeObservation({
+        id: 'obs-skill',
+        title: 'Implemented policy-driven memory query',
+        facts: ['Introduced a new layered memory query path.'],
+        created_at: '2026-06-15T02:00:00.000Z',
+      }),
+    ],
+    5,
+    [],
+    {
+      asOf: '2026-06-15T03:00:00.000Z',
+      proceduralSkills: [
+        {
+          id: 'skill-1',
+          project_path: 'E:/Repo/A',
+          title: 'Bootstrap workbench',
+          summary: 'Reusable steps for validating the local workbench path.',
+          trigger_text: 'when the user asks how to bootstrap or start the workbench',
+          steps: ['Run npm run build', 'Run npm run workbench -- --no-open'],
+          tags: ['workbench', 'bootstrap'],
+          status: 'enabled',
+          confidence: 0.82,
+          source_digest_id: null,
+          source_observation_ids: ['obs-skill'],
+          success_count: 3,
+          failure_count: 1,
+          last_used_at: '2026-06-15T02:30:00.000Z',
+          embedding: [1, 0, 0],
+          created_at: '2026-06-15T02:10:00.000Z',
+          updated_at: '2026-06-15T02:30:00.000Z',
+          retired_at: null,
+        },
+      ],
+    }
+  );
+
+  assert.equal(view.as_of, '2026-06-15T03:00:00.000Z');
+  assert.equal(view.procedural_skills.length, 1);
+  assert.equal(view.memory_layers.procedural_memory.skills.length, 1);
+  assert.equal(view.memory_layers.metadata.procedural_skill_count, 1);
+  assert.ok(view.sliding_window.window_entries.some((entry) => entry.kind === 'skill'));
+  assert.ok(view.sliding_window.boundary_notes.length > 0);
+
+  const rendered = renderProjectContextView(view);
+  assert.match(rendered, /Memory layers:/);
+  assert.match(rendered, /Procedural memory:/);
+  assert.match(rendered, /Sliding window contract:/);
+  assert.match(rendered, /Bootstrap workbench/);
+});

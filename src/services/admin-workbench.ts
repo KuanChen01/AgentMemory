@@ -5,6 +5,8 @@ export interface ProjectContextMetrics {
   duplicateTitleCount: number;
   lowSignalCount: number;
   payloadBytes: number;
+  proceduralSkillCount: number;
+  slidingWindowEntryCount: number;
   summaryCount: number;
 }
 
@@ -47,6 +49,8 @@ export function getProjectContextMetrics(view: ProjectContextView): ProjectConte
     summaryCount: view.summary_blocks.length,
     lowSignalCount,
     duplicateTitleCount,
+    proceduralSkillCount: view.procedural_skills.length,
+    slidingWindowEntryCount: view.sliding_window.window_entries.length,
   };
 }
 

@@ -6,6 +6,7 @@ import {
   DatabaseManager,
   Observation,
   ObservationListFilters,
+  ProceduralSkillFeedbackInput,
   Session,
   StateFactInput,
 } from './db';
@@ -18,16 +19,22 @@ import {
 import {
   createDisabledProjectContextView,
 } from './context-view';
+import { getEmbedding } from './embedding';
+import { resolveMemoryQuery } from './memory-query';
+import { decideObservationWritePolicy } from './memory-policy';
 import {
   loadProjectContextView,
   parseProjectContextLimit,
 } from './project-context';
 import {
+  promoteProceduralSkillCandidate,
+  recordProceduralSkillFeedback,
+} from './procedural-memory';
+import {
   normalizeRuntimePolicy,
   READ_DISABLED_MESSAGE,
   WRITE_DISABLED_MESSAGE,
 } from './runtime-policy';
-import { resolveEmbeddingConfig } from './embedding-config';
 import {
   getAgentMemoryEnvPath,
   readLlmConfig,
@@ -133,8 +140,14 @@ function normalizeProjectPath(projectPath: string): string {
   return path.resolve(projectPath).replace(/\\/g, '/');
 }
 
-async function buildProjectContext(projectPath: string, limit: number) {
-  return loadProjectContextView(dbManager, projectPath, limit);
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+async function buildProjectContext(projectPath: string, limit: number, asOf?: string) {
+  return loadProjectContextView(dbManager, projectPath, limit, {
+    asOf,
+  });
 }
 
 function sendContextReadDisabled(res: Response, projectPath: string) {
@@ -169,6 +182,28 @@ function parseSearchLimit(rawLimit: unknown, fallback: number = 10): number {
   }
 
   return Math.min(Math.trunc(value), 50);
+}
+
+function parseWindowCharBudget(rawValue: unknown, fallback: number = 1800): number {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value) || value < 200) {
+    return fallback;
+  }
+
+  return Math.min(Math.trunc(value), 12000);
+}
+
+function normalizeSkillStatuses(value: unknown): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value)
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+  return rawValues.map((entry) => String(entry));
 }
 
 function applyDailyDigestSchedulerConfig(config: DailyDigestSchedulerConfig) {
@@ -235,7 +270,7 @@ app.get('/admin', adminOnlyGuard, async (_req, res) => {
 
 app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
   try {
-    const [policy, observations, sessions, projects, agents, currentStateFacts, dailyDigests] = await Promise.all([
+    const [policy, observations, sessions, projects, agents, currentStateFacts, dailyDigests, proceduralSkills] = await Promise.all([
       dbManager.getRuntimePolicy(),
       dbManager.countObservations(),
       dbManager.countSessions(),
@@ -243,6 +278,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
       dbManager.listDistinctAgents(),
       dbManager.countCurrentStateFacts(),
       dbManager.countDailyMemoryDigests(),
+      dbManager.countProceduralSkills(),
     ]);
 
     res.json({
@@ -254,6 +290,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
         agents: agents.length,
         currentStateFacts,
         dailyDigests,
+        proceduralSkills,
       },
       release: buildReleaseManifest(),
       projects,
@@ -328,11 +365,12 @@ app.get('/admin/api/context', adminOnlyGuard, async (req, res) => {
 
   const normalizedProjectPath = normalizeProjectPath(projectPath);
   const limit = parseProjectContextLimit(req.query.limit as string | undefined);
+  const asOf = normalizeOptionalString(req.query.as_of);
 
   try {
     const view = !(await isReadEnabled())
       ? createDisabledProjectContextView(normalizedProjectPath, READ_DISABLED_MESSAGE)
-      : await buildProjectContext(normalizedProjectPath, limit);
+      : await buildProjectContext(normalizedProjectPath, limit, asOf);
     res.json(buildAdminProjectContextPayload(view));
   } catch (err: any) {
     console.error('Error fetching admin context:', err);
@@ -402,7 +440,7 @@ app.post('/admin/api/state', adminOnlyGuard, async (req, res) => {
 });
 
 app.post('/admin/api/search', adminOnlyGuard, async (req, res) => {
-  const { project_path, query, limit } = req.body || {};
+  const { project_path, query, limit, as_of } = req.body || {};
   if (!project_path || !query) {
     return res.status(400).json({ error: 'Missing project_path or query' });
   }
@@ -418,17 +456,171 @@ app.post('/admin/api/search', adminOnlyGuard, async (req, res) => {
       normalizedProjectPath,
       String(query),
       queryVector,
-      parseSearchLimit(limit, 10)
+      parseSearchLimit(limit, 10),
+      { asOf: normalizeOptionalString(as_of) }
     );
 
     res.json({
       project_path: normalizedProjectPath,
       query: String(query),
+      as_of: normalizeOptionalString(as_of) || null,
       results: results.map((result) => toAdminSearchResult(result)),
       generated_at: new Date().toISOString(),
     });
   } catch (err: any) {
     console.error('Error running admin search diagnostics:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/memory/query', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+  if (!body.project_path || !body.query) {
+    return res.status(400).json({ error: 'Missing project_path or query' });
+  }
+
+  try {
+    if (!(await isReadEnabled())) {
+      return res.json({
+        disabled: true,
+        message: READ_DISABLED_MESSAGE,
+        project_context: null,
+        procedural_skills: [],
+        search_results: [],
+      });
+    }
+
+    const result = await resolveMemoryQuery(dbManager, {
+      projectPath: normalizeProjectPath(String(body.project_path)),
+      query: String(body.query),
+      asOf: normalizeOptionalString(body.as_of),
+      limit: parseSearchLimit(body.limit, 5),
+      mode: normalizeOptionalString(body.mode) as any,
+      skillLimit: parseSearchLimit(body.skill_limit, 3),
+      windowCharBudget: parseWindowCharBudget(body.window_char_budget, 1800),
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error('Error resolving admin memory query:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/skills', adminOnlyGuard, async (req, res) => {
+  const projectPath = req.query.project_path as string;
+  if (!projectPath) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  try {
+    if (!(await isReadEnabled())) {
+      return sendReadDisabled(res, 'skills');
+    }
+
+    const skills = await dbManager.listProceduralSkills({
+      projectPath: normalizeProjectPath(projectPath),
+      statuses: normalizeSkillStatuses(req.query.status) as any,
+      limit: parseSearchLimit(req.query.limit, 10),
+      asOf: normalizeOptionalString(req.query.as_of),
+    });
+    res.json({
+      project_path: normalizeProjectPath(projectPath),
+      skills,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error listing admin procedural skills:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/skills/promote-candidate', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+  if (!body.project_path) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
+    const projectPath = normalizeProjectPath(String(body.project_path));
+    let digest = null;
+    let candidate = body.candidate;
+
+    if (candidate === undefined) {
+      const localDate = normalizeOptionalString(body.local_date);
+      const candidateIndex = Number(body.candidate_index);
+      if (!localDate || !Number.isInteger(candidateIndex) || candidateIndex < 0) {
+        return res.status(400).json({
+          error: 'Provide either candidate or local_date + candidate_index.',
+        });
+      }
+
+      digest = await dbManager.getDailyMemoryDigest({
+        projectPath,
+        localDate,
+      });
+      candidate = digest?.digest?.skill_candidates?.[candidateIndex];
+      if (!candidate) {
+        return res.status(404).json({ error: 'Skill candidate not found for that digest entry.' });
+      }
+    }
+
+    const skill = await promoteProceduralSkillCandidate({
+      candidate,
+      dbManager,
+      digest,
+      projectPath,
+    });
+    res.json({ success: true, skill });
+  } catch (err: any) {
+    console.error('Error promoting admin procedural skill candidate:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/skills/status', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+  if (!body.skill_id || !body.status) {
+    return res.status(400).json({ error: 'Missing skill_id or status' });
+  }
+
+  try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
+    const skill = await dbManager.setProceduralSkillStatus(String(body.skill_id), String(body.status) as any);
+    res.json({ success: true, skill });
+  } catch (err: any) {
+    console.error('Error updating admin procedural skill status:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/api/skills/feedback', adminOnlyGuard, async (req, res) => {
+  const body = req.body || {};
+  if (!body.skill_id || !body.project_path || !body.outcome) {
+    return res.status(400).json({ error: 'Missing skill_id, project_path, or outcome' });
+  }
+
+  try {
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
+    const feedback = await recordProceduralSkillFeedback(dbManager, {
+      skill_id: String(body.skill_id),
+      project_path: normalizeProjectPath(String(body.project_path)),
+      outcome: String(body.outcome) as ProceduralSkillFeedbackInput['outcome'],
+      task_text: normalizeOptionalString(body.task_text),
+      notes: normalizeOptionalString(body.notes),
+    });
+    res.json({ success: true, feedback });
+  } catch (err: any) {
+    console.error('Error recording admin procedural skill feedback:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -579,7 +771,8 @@ app.post('/admin/api/llm-test', adminOnlyGuard, async (req, res) => {
 app.get('/context', async (req, res) => {
   const projectPath = req.query.project_path as string;
   const normalizedProjectPath = projectPath ? normalizeProjectPath(projectPath) : '';
-    const limit = parseProjectContextLimit(req.query.limit as string | undefined);
+  const limit = parseProjectContextLimit(req.query.limit as string | undefined);
+  const asOf = normalizeOptionalString(req.query.as_of);
 
   if (!projectPath) {
     return res.status(400).json({ error: 'Missing project_path parameter' });
@@ -590,7 +783,7 @@ app.get('/context', async (req, res) => {
       return sendContextReadDisabled(res, normalizedProjectPath);
     }
 
-    res.json(await buildProjectContext(normalizedProjectPath, limit));
+    res.json(await buildProjectContext(normalizedProjectPath, limit, asOf));
   } catch (err: any) {
     console.error('Error fetching context:', err);
     res.status(500).json({ error: err.message });
@@ -743,7 +936,7 @@ app.post('/sessions/close', async (req, res) => {
 
 // 5. Search Memory Endpoint (Helper for testing and non-MCP clients)
 app.post('/search', async (req, res) => {
-  const { project_path, query, limit } = req.body;
+  const { project_path, query, limit, as_of } = req.body;
   if (!project_path || !query) {
     return res.status(400).json({ error: 'Missing project_path or query' });
   }
@@ -754,9 +947,54 @@ app.post('/search', async (req, res) => {
     }
 
     const queryVector = await getEmbedding(query);
-    const results = await dbManager.searchHybrid(project_path, query, queryVector, limit || 5);
-    res.json(results);
+    const results = await dbManager.searchHybrid(
+      project_path,
+      query,
+      queryVector,
+      limit || 5,
+      { asOf: normalizeOptionalString(as_of) }
+    );
+    res.json({
+      project_path: normalizeProjectPath(project_path),
+      query,
+      as_of: normalizeOptionalString(as_of) || null,
+      results,
+      generated_at: new Date().toISOString(),
+    });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/memory/query', async (req, res) => {
+  const body = req.body || {};
+  if (!body.project_path || !body.query) {
+    return res.status(400).json({ error: 'Missing project_path or query' });
+  }
+
+  try {
+    if (!(await isReadEnabled())) {
+      return res.json({
+        disabled: true,
+        message: READ_DISABLED_MESSAGE,
+        project_context: null,
+        procedural_skills: [],
+        search_results: [],
+      });
+    }
+
+    const result = await resolveMemoryQuery(dbManager, {
+      projectPath: normalizeProjectPath(String(body.project_path)),
+      query: String(body.query),
+      asOf: normalizeOptionalString(body.as_of),
+      limit: parseSearchLimit(body.limit, 5),
+      mode: normalizeOptionalString(body.mode) as any,
+      skillLimit: parseSearchLimit(body.skill_limit, 3),
+      windowCharBudget: parseWindowCharBudget(body.window_char_budget, 1800),
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error('Error resolving memory query:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -920,8 +1158,20 @@ ${log.output.substring(0, 20000)}
       embedding
     };
 
+    const writeDecision = decideObservationWritePolicy({
+      observation,
+      source: 'tool_log',
+    });
+
+    if (writeDecision.action === 'skip') {
+      console.log(`[Memory] Skipped observation for session ${log.session_id}: ${writeDecision.reasons.join(' | ')}`);
+      return;
+    }
+
     await dbManager.saveObservation(observation);
-    console.log(`[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}"`);
+    console.log(
+      `[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}" (${writeDecision.action})`
+    );
 
   } catch (err: any) {
     console.error(`[Error] Failed LLM summarization: ${err.message}. Falling back to raw save.`);
@@ -948,70 +1198,13 @@ async function saveMockObservation(log: QueuedToolLog, reason: string) {
     embedding
   };
 
-  await dbManager.saveObservation(observation);
-}
-
-// Embedding helper with local compilation-free Feature Hashing fallback
-async function getEmbedding(text: string): Promise<number[]> {
-  const { apiKey, embeddingUrl, shouldUseExternalEmbedding } = resolveEmbeddingConfig();
-
-  if (shouldUseExternalEmbedding && apiKey && embeddingUrl) {
-    try {
-      const response = await fetch(embeddingUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          input: text,
-          model: 'text-embedding-3-small' // Or appropriate model for specified URL
-        })
-      });
-
-      if (response.ok) {
-        const data: any = await response.json();
-        const vector = data.data?.[0]?.embedding;
-        if (vector) return vector;
-      }
-    } catch (e: any) {
-      console.warn('Embedding API call failed, falling back to local hashing:', e.message);
-    }
+  const writeDecision = decideObservationWritePolicy({
+    observation,
+    source: 'tool_log',
+  });
+  if (writeDecision.action !== 'skip') {
+    await dbManager.saveObservation(observation);
   }
-
-  // Fallback: Pure TypeScript/JS Feature Hashing Vectorizer (1024 dimensions)
-  return getLocalHashingEmbedding(text);
-}
-
-// Feature Hashing Vectorizer (Hash Trick) - 1024 float dimensions
-function getLocalHashingEmbedding(text: string): number[] {
-  const words = text.toLowerCase().match(/\b\w+\b/g) || [];
-  const vector = new Array(1024).fill(0);
-
-  for (const word of words) {
-    // DJB2 Hash
-    let hash = 5381;
-    for (let i = 0; i < word.length; i++) {
-      hash = (hash * 33) ^ word.charCodeAt(i);
-    }
-    const index = Math.abs(hash) % 1024;
-    vector[index] += 1.0;
-  }
-
-  // L2 Norm normalization
-  let sumSq = 0;
-  for (const val of vector) {
-    sumSq += val * val;
-  }
-
-  if (sumSq > 0) {
-    const magnitude = Math.sqrt(sumSq);
-    for (let i = 0; i < 1024; i++) {
-      vector[i] /= magnitude;
-    }
-  }
-
-  return vector;
 }
 
 // Run server

@@ -109,6 +109,17 @@ async function seedProjectContext(db, projectPath) {
     value: 'mcp+get_project_context',
     effective_at: '2026-06-03T00:00:00.000Z',
   });
+  await db.saveProceduralSkill({
+    project_path: projectPath,
+    title: 'Bootstrap workbench',
+    summary: 'Reusable steps for bootstrapping the local workbench.',
+    trigger_text: 'when the user asks how to bootstrap the workbench',
+    steps: ['Run npm run build', 'Run npm run workbench -- --no-open'],
+    tags: ['workbench', 'bootstrap'],
+    status: 'enabled',
+    confidence: 0.8,
+    embedding: [1, 1, 0],
+  });
 }
 
 async function startMcpServer(dbPath) {
@@ -326,9 +337,11 @@ test('MCP get_project_context renders the same curated structured context as /co
 
       assert.equal(text, rendered);
       assert.match(text, /Current structured state:/);
+      assert.match(text, /Procedural memory:/);
       assert.match(text, /Recent summary blocks:/);
       assert.match(text, /Recent observations:/);
       assert.match(text, /rollout_stage = phase2-antigravity-helper/);
+      assert.match(text, /Bootstrap workbench/);
       assert.match(text, /Validated MCP-only startup path/);
       assert.doesNotMatch(text, /Read README\.md file/);
       assert.doesNotMatch(text, /Chronological timeline/);
@@ -337,6 +350,37 @@ test('MCP get_project_context renders the same curated structured context as /co
     } finally {
       await stopMcpServer(mcp);
       await stopWorker(worker, port);
+    }
+  });
+});
+
+test('MCP query_memory and list_procedural_skills expose the policy-driven path', async () => {
+  await withDatabase(async (db, dbPath) => {
+    const projectPath = 'E:/Repo/Antigravity';
+    await seedProjectContext(db, projectPath);
+    const mcp = await startMcpServer(dbPath);
+
+    try {
+      const queryToolResponse = await callTool(mcp, 200, 'query_memory', {
+        project_path: projectPath,
+        query: 'How do I bootstrap the workbench and what is the current rollout stage?',
+        skill_limit: 3,
+        limit: 5,
+      });
+      const queryText = queryToolResponse.result.content[0].text;
+      assert.match(queryText, /Policy Resolution/);
+      assert.match(queryText, /Bootstrap workbench/);
+      assert.match(queryText, /Sliding window contract/);
+
+      const listSkillsResponse = await callTool(mcp, 201, 'list_procedural_skills', {
+        project_path: projectPath,
+        status: 'enabled',
+      });
+      const listText = listSkillsResponse.result.content[0].text;
+      assert.match(listText, /Skill: Bootstrap workbench/);
+      assert.match(listText, /Status: enabled/);
+    } finally {
+      await stopMcpServer(mcp);
     }
   });
 });

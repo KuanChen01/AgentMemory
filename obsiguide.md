@@ -46,13 +46,17 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 当前目标是完成 `v1.2.0` minor release 后的状态同步：`master`、tag `v1.2.0` 与 GitHub Release 已发布，下一步回到真实 worker Runtime scheduler 检查和 lazy MCP DB 长会话观察。
+- 当前目标已切换为围绕 repo 根目录 `taskgoal.md` 定义的五项差距推进下一阶段 AgentMemory 优化：补强显式 `policy brain`、落地第一版 `procedural memory`、把 `temporal memory` 扩展到统一查询路径、显式化 memory layers，并补上 sliding-window contract；本次先完成 repo-local goal artifact，下一步交给 Codex `/goal` 模式执行。
 
 ## Current State
+- 已按 `taskgoal.md` 完成一轮 additive 的下一阶段优化首版：新增显式 `memory-policy` policy brain、`procedural_skills` / `procedural_skill_feedback` 数据层、policy-driven `POST /memory/query` / MCP `query_memory` 路径、`ProjectContextView.memory_layers` / `procedural_skills` / `sliding_window`，以及 `context` / `search` / `admin search` 的 `as_of` 时间切片支持。
+- procedural memory 现在支持从 daily digest `skill_candidates` 显式提升为 `draft` skill，再由 admin/MCP 路径切换到 `enabled` / `disabled` / `retired`，并记录 success/failure/rejected/skipped 反馈；全程保持 reviewable-before-promotion。
+- 已对这一轮增量能力补上首批 correctness hardening：observation `as_of` 检索不再依赖混合时间文本的原始比较；procedural skill status 切换现在会额外记录显式 transition history，避免历史 `as_of` 读把未来状态投回过去；skill feedback 现在强制校验 `project_path` 与 skill 所属项目一致。
+- `/admin` 已补齐 procedural skill 与 policy-query 诊断 API：`/admin/api/memory/query`、`/admin/api/skills`、`/admin/api/skills/promote-candidate`、`/admin/api/skills/status`、`/admin/api/skills/feedback`；MCP 端同步新增 `query_memory`、`list_procedural_skills`、`promote_skill_candidate`、`set_procedural_skill_status`、`record_procedural_skill_feedback`。
 - 本地 `master` 已从 `d792d9e` fast-forward 到 `8ace9d1 Add daily digest workflow and harden MCP setup`，并已提交 release bump `abd843e chore: release v1.2.0`。
 - `package.json`、`package-lock.json` 和 lockfile root package 版本已从 `1.1.0` bump 到 `1.2.0`；tag `v1.2.0` 已推送到 GitHub。
 - GitHub Release `v1.2.0` 已创建：`https://github.com/KuanChen01/AgentMemory/releases/tag/v1.2.0`。
-- `npm run build` 与 `node --test tests/*.test.cjs` 已在 `1.2.0` 版本文件上通过，全量 79 项测试通过。
+- `npm run build` 与 `node --test tests/*.test.cjs` 已在当前源码与分发产物上通过；全量回归现为 88 项测试通过。
 - 已修复本机 Antigravity CLI 配置中的旧 `agentvault` / `AgentVault` 路径：当前 `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json` 注册 `mcpServers.agentmem` 并指向 `E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js`。
 - 安装器的 Antigravity resolver 现在优先检查 direct registries（`antigravity-cli`、`antigravity-ide`、`antigravity`、`config\mcp_config.json`），再回退到 plugin registries；写入时会删除遗留 `agentvault`。
 - MCP server 已改为 lazy database lifecycle：`tools/list` 不再打开 SQLite，`tools/call` 按请求创建和关闭 `DatabaseManager`；`DatabaseManager.initialize()` 失败时会关闭半初始化连接。
@@ -124,6 +128,8 @@
 - 已新增共享 `src/services/release-check.ts` 与 loopback-only `GET /admin/api/release-check`：服务端会读取当前 release manifest、请求 GitHub latest release API、按严格 `SemVer` 比较版本，并把结果归一化为 `up_to_date`、`update_available`、`invalid_latest_tag` 或 `network_error`。
 - `/admin` 的 `Runtime` 面板现已新增 release/update 卡片：初始化时会主动检查一次最新正式 GitHub Release，之后只在用户点击 `Check for Updates` 时再次请求；页面会显示当前版本、最新版本、状态 badge、检查时间、`Open Release` 入口，以及适用于 git checkout 或源码归档的手动升级指引。
 - 已新增 `docs/Release Process.md`，并在双语 README 中补齐正式版本发布纪律、release 命令入口和维护者工作流；同时修正二机 bootstrap 中文指南中与当前实现漂移的 `.env` scaffold 文案。
+- 已新增 repo 根目录 `taskgoal.md`，将对照本地 `AgenticMem` 参考视频确认的五项差距收敛为可交给 Codex `/goal` 模式执行的 repo-local 目标文档；按合同该文档属于当前目标与下一步，不同步进 vault。
+- 已将 `taskgoal.md` 的视频引用边界显式化：本地 `AgenticMem` 视频现在只作为架构参考基线，不作为逐句验收文本；真正的完成标准仍以 repo 内可执行的接口、测试、文档和诊断条件为准。
 
 ## Verified Commands
 - `npm run build`
@@ -157,6 +163,7 @@
 - `node dist/bin/cli.js bootstrap-win --no-open --strict`
 - `node --test tests/install-bootstrap.test.cjs`
 - `node --test tests\mcp-context.test.cjs tests\install-bootstrap.test.cjs tests\installer-uninstall.test.cjs`
+- `node --test tests/context-view.test.cjs tests/procedural-memory.test.cjs tests/memory-query.test.cjs tests/context-worker.test.cjs tests/mcp-context.test.cjs tests/worker-admin.test.cjs`
 - `node --test tests/*.test.cjs`
 - `npm run release:plan -- --next minor`
 - `npm run release:bump -- --next minor`
@@ -173,8 +180,14 @@
 - `search_memory` 对较宽泛查询仍可能先命中低信号 observation；helper 已解决启动恢复，但后续是否还需要检索排序或 query guidance 的收敛仍待观察。
 - 如果后续要接具体供应商的真实 embedding 端点，仍需要再做一次供应商真实接口的在线校验。
 - 新增的 `/admin` LLM connection test 已用本地 mock provider 覆盖；真实供应商 endpoint 仍应在用户提供真实 API key 后从网页 UI 再跑一次 live test。
+- procedural skill 目前已具备 admin API / MCP 管理面，但 `/admin` 还没有单独的可视技能管理面板；是否要把 candidate review、status flip 和 feedback drill-down 直接做进 workbench 仍待决定。
 
 ## Latest Durable Changes
+- 已落地显式 policy brain：`memory-policy.ts` 现在统一承载读取决策、低信号 observation 写入决策，以及 procedural skill candidate 的 draft promotion gate，不再把这类规则散落在 worker、digest 和 MCP handler 中。
+- 已新增 first-class procedural memory：SQLite 新增 `procedural_skills` 与 `procedural_skill_feedback`，daily digest candidate 可显式提升为 `draft`，随后可启用/停用/淘汰并累计 success/failure 反馈。
+- 已新增 policy-driven `memory-query` 路径：HTTP `/memory/query`、admin `/admin/api/memory/query` 与 MCP `query_memory` 会基于 query 决定读取哪些 memory layers，并返回 `ProjectContextView`、匹配 observation、匹配 procedural skills 和 sliding-window contract。
+- `ProjectContextView` 现在显式暴露 `as_of`、`memory_layers`、`procedural_skills` 与 `sliding_window`；`/context`、`/search` 和 `/admin/api/search` 同步支持 `as_of` 时间切片，避免把未来 observation 或过期 truth 混进历史查询。
+- 已补上三条关键 correctness fix：`searchHybrid(...asOf)` 现改为先统一归一化 observation 时间再过滤，procedural skill status 读路径新增 `procedural_skill_status_events` 历史层，`recordProceduralSkillFeedback` 会拒绝跨项目 feedback 写入并保住 per-project 计数完整性。
 - `codex/daily-memory-digest` 已合入 `master`，并完成 `1.1.0 -> 1.2.0` minor release；`v1.2.0` tag、`master` push 和 GitHub Release 均已完成。
 - Antigravity 安装器现在覆盖 direct CLI / IDE registries，修正旧 `AgentVault` 路径并删除遗留 `agentvault` server key；二机 bootstrap 文档同步了新的 registry 探测顺序。
 - MCP server 已改成按 `tools/call` 短生命周期打开真实 SQLite，`tools/list` 不再抢占数据库；本机 stale `agentmemory.db.lock` 已在确认无活跃持有者后清理。
@@ -222,9 +235,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 用真实 worker 打开 `/admin` Runtime 面板检查每日总结 scheduler 设置是否符合预期，然后继续观察真实 LLM 下每日总结质量；同时观察 lazy MCP DB 连接在多 agent 长会话并存时是否还会产生 stale `agentmemory.db.lock`。
+- 基于这一版 additive 实现与 correctness 修复，优先做真实四端 smoke：验证 Claude Code / Codex / OpenCode / Antigravity 在 task-level `query_memory`、procedural skill draft promotion、historical `as_of` 时间切片与 feedback project integrity 上的 live 行为，再决定是否补 `/admin` 的可视 procedural skill 管理面板。
 
 ## Last Sync
 - date: 2026-06-08
-- status: 已完成 `v1.2.0` minor release：`master` 已推送，tag `v1.2.0` 已推送，GitHub Release 已创建；验证覆盖 `npm run build`、`node --test tests/*.test.cjs` 全量 79 项、`git diff --check`、`node dist/bin/cli.js install --strict` 和 Antigravity CLI MCP smoke。
+- status: 最近一次 vault sync 仍为 `2026-06-08` 的 `v1.2.0` release 状态同步；`2026-06-15` 新增的 repo-local `taskgoal.md` 属于当前目标与下一步，按合同保持 local-only，暂不提升到 vault。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

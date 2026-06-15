@@ -202,28 +202,40 @@ The page provides:
 
 #### Structured state and context view
 
-AgentMemory now separates two memory layers:
+AgentMemory now separates memory into explicit layers:
 
 *   **Observations** remain the append-only historical ledger used for hybrid search and detailed recall.
 *   **State facts** store explicit current or historical truth with `effective_at`, `recorded_at`, and `superseded_at`.
 *   **Daily digests** store scheduled or manually triggered per-project summaries with fact, decision, command, open-question, and next-action lists. Digest output is not auto-promoted into state facts.
+*   **Procedural skills** are now first-class, reviewable memory objects with draft/enabled/disabled/retired states plus success/failure feedback logs.
+
+The policy brain is now explicit instead of being scattered across hooks and ad-hoc call sites:
+
+*   `memory-policy.ts` centralizes read decisions, low-signal ledger writes, and draft promotion gates for procedural skill candidates.
+*   `memory-query.ts` is the new task-oriented resolution path that decides which layers to read, when to consult procedural memory, and how to assemble a bounded sliding-window contract for host agents.
 
 New interfaces in this first cut:
 
-*   `GET /context?project_path=&limit=` returns a `ProjectContextView` object instead of a raw observation array.
+*   `GET /context?project_path=&limit=&as_of=` returns a `ProjectContextView` object instead of a raw observation array.
 *   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads current or historical structured state.
 *   `POST /state` explicitly writes a structured state fact.
-*   MCP tools: `get_project_context`, `get_memory_state`, `set_memory_state`
+*   `POST /memory/query` returns the policy decision, layered context, matching observations, matching procedural skills, and a sliding-window contract for a task query.
+*   `POST /search` and `POST /admin/api/search` now accept optional `as_of` filtering for historical replay.
+*   MCP tools: `get_project_context`, `query_memory`, `get_memory_state`, `set_memory_state`, `list_procedural_skills`, `promote_skill_candidate`, `set_procedural_skill_status`, `record_procedural_skill_feedback`
 
 `ProjectContextView` combines:
 
+*   `as_of` for time-sliced reconstruction
 *   `current_state`
 *   `daily_digests` from recent successful daily summaries, trimmed for startup use
+*   `procedural_skills` from enabled or draft first-class procedural memory
 *   `summary_blocks` built from curated recent observations with low-signal titles filtered out and duplicate titles collapsed
 *   `recent_observations` as a slim startup-oriented metadata list (`id`, `title`, `created_at`, `agent_id`) without full narratives or embeddings
+*   `sliding_window` as a host-facing bounded recent-context contract
+*   `memory_layers` for explicit metadata/profile/recent-summary/ledger/procedural/window separation
 *   `generated_at`
 
-Structured state is **explicit-write only** in this phase. Observations, hook logs, and LLM summaries do not automatically promote themselves into the state layer.
+Structured state is still **explicit-write only** in this phase. Observations, hook logs, and LLM summaries do not automatically promote themselves into the state layer. Procedural skill candidates also remain **reviewable before promotion**: they can be promoted into draft skills, but they are never auto-enabled.
 
 #### Admin-only diagnostics APIs
 
@@ -235,7 +247,12 @@ The workbench also exposes loopback-only admin APIs for the UI:
     *   `metrics`: `payloadBytes`, `summaryCount`, `lowSignalCount`, `duplicateTitleCount`
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads structured state for the workbench
 *   `POST /admin/api/state` explicitly writes a structured state fact from the workbench
-*   `POST /admin/api/search` returns raw hybrid search diagnostics for the current project without changing the ranking algorithm
+*   `POST /admin/api/search` returns raw hybrid search diagnostics for the current project without changing the ranking algorithm, and accepts optional `as_of`
+*   `POST /admin/api/memory/query` exposes the policy-driven task resolution path used to assemble layered memory context
+*   `GET /admin/api/skills?project_path=&status=&as_of=&limit=` lists current procedural skills
+*   `POST /admin/api/skills/promote-candidate` explicitly promotes a digest `skill_candidate` into a draft procedural skill
+*   `POST /admin/api/skills/status` flips a procedural skill between `draft`, `enabled`, `disabled`, and `retired`
+*   `POST /admin/api/skills/feedback` records success/failure/rejected/skipped feedback for a procedural skill
 *   `GET /admin/api/digests?project_path=&limit=` returns recent saved daily memory digests for a project
 *   `POST /admin/api/digests/run` manually runs the daily memory digest job for a selected project and optional `local_date`
 *   `GET /admin/api/digest-scheduler` returns the persisted daily digest scheduler config and current runtime status
@@ -248,12 +265,12 @@ The workbench also exposes loopback-only admin APIs for the UI:
 #### Runtime policy semantics
 
 *   `readEnabled=false` blocks memory restoration and explicit read APIs:
-    *   HTTP: `/context`, `/search`, `/state`
-    *   MCP: `get_project_context`, `search_memory`, `memory_timeline`, `get_memory_details`, `get_memory_state`
+    *   HTTP: `/context`, `/search`, `/state`, `/memory/query`
+    *   MCP: `get_project_context`, `query_memory`, `search_memory`, `memory_timeline`, `get_memory_details`, `get_memory_state`, `list_procedural_skills`
     *   Session-start hooks stop printing restored memory into the agent session
 *   `writeEnabled=false` blocks new memory creation:
-    *   HTTP: `/tools`, `/sessions`, `/sessions/close`, `/state`
-    *   MCP: `record_memory`, `set_memory_state`
+    *   HTTP: `/tools`, `/sessions`, `/sessions/close`, `/state`, `/admin/api/skills/*`
+    *   MCP: `record_memory`, `set_memory_state`, `promote_skill_candidate`, `set_procedural_skill_status`, `record_procedural_skill_feedback`
     *   Post-tool hooks stop producing new observations
 
 Both flags are stored in SQLite `app_settings`, so the selected policy survives worker restarts.

@@ -4,6 +4,11 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import {
+  compareTimestamps,
+  isTimestampOnOrBefore,
+  timestampsEqual,
+} from './timestamps';
 
 // Type definitions
 export interface Observation {
@@ -165,6 +170,94 @@ export interface DailyMemoryDigestQuery {
   localDate?: string;
   status?: DailyMemoryDigestStatus;
   limit?: number;
+  generatedBefore?: string;
+}
+
+export type ProceduralSkillStatus = 'draft' | 'enabled' | 'disabled' | 'retired';
+
+export interface ProceduralSkill {
+  id: string;
+  project_path: string;
+  title: string;
+  summary: string;
+  trigger_text: string;
+  steps: string[];
+  tags: string[];
+  status: ProceduralSkillStatus;
+  confidence: number;
+  source_digest_id: string | null;
+  source_observation_ids: string[];
+  success_count: number;
+  failure_count: number;
+  last_used_at: string | null;
+  embedding: number[];
+  created_at: string;
+  updated_at: string;
+  retired_at: string | null;
+}
+
+export interface ProceduralSkillInput {
+  project_path: string;
+  title: string;
+  summary: string;
+  trigger_text: string;
+  steps: string[];
+  tags?: string[];
+  status?: ProceduralSkillStatus;
+  confidence?: number;
+  source_digest_id?: string | null;
+  source_observation_ids?: string[];
+  embedding?: number[];
+}
+
+export interface ProceduralSkillQuery {
+  projectPath: string;
+  statuses?: ProceduralSkillStatus[];
+  limit?: number;
+  asOf?: string;
+}
+
+export type ProceduralSkillFeedbackOutcome = 'success' | 'failure' | 'rejected' | 'skipped';
+
+export interface ProceduralSkillFeedback {
+  id: string;
+  skill_id: string;
+  project_path: string;
+  outcome: ProceduralSkillFeedbackOutcome;
+  task_text: string;
+  notes: string;
+  created_at: string;
+}
+
+export interface ProceduralSkillFeedbackInput {
+  skill_id: string;
+  project_path: string;
+  outcome: ProceduralSkillFeedbackOutcome;
+  task_text?: string;
+  notes?: string;
+}
+
+export interface ProceduralSkillSearchResult {
+  id: string;
+  title: string;
+  summary: string;
+  trigger_text: string;
+  steps: string[];
+  tags: string[];
+  status: ProceduralSkillStatus;
+  confidence: number;
+  success_count: number;
+  failure_count: number;
+  last_used_at: string | null;
+  created_at: string;
+  lexical_score: number;
+  vector_score: number;
+  hybrid_score: number;
+}
+
+interface ProceduralSkillStatusEvent {
+  effective_at: string;
+  status: ProceduralSkillStatus;
 }
 
 const DAILY_DIGEST_SCHEDULER_CONFIG_KEY = 'daily_digest_scheduler_config';
@@ -362,6 +455,68 @@ export class DatabaseManager {
     this.db.run(`
       CREATE INDEX IF NOT EXISTS idx_daily_memory_digests_project_date
       ON daily_memory_digests (project_path, local_date DESC)
+    `);
+
+    // 7. Procedural skills table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS procedural_skills (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        trigger_text TEXT NOT NULL,
+        steps_json TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        source_digest_id TEXT,
+        source_observation_ids TEXT NOT NULL,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        failure_count INTEGER NOT NULL DEFAULT 0,
+        last_used_at TEXT,
+        embedding TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        retired_at TEXT
+      )
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_procedural_skills_project_status
+      ON procedural_skills (project_path, status, updated_at DESC)
+    `);
+
+    // 8. Procedural skill feedback table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS procedural_skill_feedback (
+        id TEXT PRIMARY KEY,
+        skill_id TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        task_text TEXT NOT NULL,
+        notes TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_procedural_skill_feedback_skill
+      ON procedural_skill_feedback (skill_id, created_at DESC)
+    `);
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS procedural_skill_status_events (
+        id TEXT PRIMARY KEY,
+        skill_id TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        effective_at TEXT NOT NULL
+      )
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_procedural_skill_status_events_skill_time
+      ON procedural_skill_status_events (skill_id, effective_at DESC)
     `);
   }
 
@@ -695,6 +850,11 @@ export class DatabaseManager {
       params.push(query.status);
     }
 
+    if (query.generatedBefore) {
+      whereParts.push(`generated_at <= ?`);
+      params.push(query.generatedBefore);
+    }
+
     const limit = Math.max(1, Math.min(100, Math.trunc(Number(query.limit || 10))));
     const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
     const rows = this.db.all(
@@ -723,6 +883,296 @@ export class DatabaseManager {
     }
 
     const row = this.db.get(`SELECT COUNT(*) as total FROM daily_memory_digests`) as any;
+    return Number(row?.total || 0);
+  }
+
+  public async saveProceduralSkill(input: ProceduralSkillInput): Promise<ProceduralSkill> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+    const id = randomUUID();
+    const status = normalizeProceduralSkillStatus(input.status);
+    const confidence = normalizeConfidence(input.confidence);
+    const sourceObservationIds = JSON.stringify(input.source_observation_ids || []);
+    const stepsJson = JSON.stringify((input.steps || []).map((step) => String(step)).filter(Boolean));
+    const tagsJson = JSON.stringify((input.tags || []).map((tag) => String(tag)).filter(Boolean));
+    const embeddingJson = JSON.stringify(Array.isArray(input.embedding) ? input.embedding : []);
+    const createdAt = new Date().toISOString();
+
+    this.db.run(
+      `INSERT INTO procedural_skills (
+        id,
+        project_path,
+        title,
+        summary,
+        trigger_text,
+        steps_json,
+        tags_json,
+        status,
+        confidence,
+        source_digest_id,
+        source_observation_ids,
+        embedding,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        normalizedProjectPath,
+        input.title,
+        input.summary,
+        input.trigger_text,
+        stepsJson,
+        tagsJson,
+        status,
+        confidence,
+        input.source_digest_id ?? null,
+        sourceObservationIds,
+        embeddingJson,
+        createdAt,
+        createdAt,
+      ]
+    );
+
+    this.recordProceduralSkillStatusEvent(id, normalizedProjectPath, status, createdAt);
+
+    const row = this.db.get(`SELECT * FROM procedural_skills WHERE id = ?`, [id]) as any;
+    return this.parseProceduralSkill(row);
+  }
+
+  public async getProceduralSkillById(id: string): Promise<ProceduralSkill | null> {
+    if (!this.db) throw new Error('Database not initialized');
+    const row = this.db.get(`SELECT * FROM procedural_skills WHERE id = ? LIMIT 1`, [id]) as any;
+    return row ? this.parseProceduralSkill(row) : null;
+  }
+
+  public async listProceduralSkills(query: ProceduralSkillQuery): Promise<ProceduralSkill[]> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const whereParts = [`LOWER(project_path) = LOWER(?)`];
+    const params: any[] = [this.normalizeProjectPath(query.projectPath)];
+
+    if (!query.asOf && query.statuses && query.statuses.length > 0) {
+      whereParts.push(`status IN (${query.statuses.map(() => '?').join(', ')})`);
+      params.push(...query.statuses.map((status) => normalizeProceduralSkillStatus(status)));
+    }
+
+    const limit = Math.max(1, Math.min(100, Math.trunc(Number(query.limit || 20))));
+    const rows = this.db.all(
+      `SELECT *
+       FROM procedural_skills
+        WHERE ${whereParts.join(' AND ')}
+        ORDER BY updated_at DESC, created_at DESC`,
+      params
+    ) as any[];
+
+    const skills = rows.map((row) => this.parseProceduralSkill(row));
+    if (!query.asOf) {
+      return skills
+        .sort((left, right) => compareProceduralSkillsByRecency(left, right))
+        .slice(0, limit);
+    }
+
+    const statuses = query.statuses?.map((status) => normalizeProceduralSkillStatus(status)) || null;
+    const statusEvents = this.getProceduralSkillStatusEventMap(skills.map((skill) => skill.id));
+    return skills
+      .map((skill) => {
+        const resolvedStatus = this.resolveProceduralSkillStatusAsOf(
+          skill,
+          statusEvents.get(skill.id) || [],
+          query.asOf as string
+        );
+        if (!resolvedStatus) {
+          return null;
+        }
+
+        const shouldInclude = statuses
+          ? statuses.includes(resolvedStatus)
+          : resolvedStatus !== 'retired';
+        if (!shouldInclude) {
+          return null;
+        }
+
+        return {
+          ...skill,
+          status: resolvedStatus,
+          retired_at: resolvedStatus === 'retired'
+            ? skill.retired_at || (query.asOf as string)
+            : null,
+        };
+      })
+      .filter((skill): skill is ProceduralSkill => Boolean(skill))
+      .sort((left, right) => compareProceduralSkillsByRecency(left, right))
+      .slice(0, limit);
+  }
+
+  public async setProceduralSkillStatus(id: string, status: ProceduralSkillStatus): Promise<ProceduralSkill> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const existing = await this.getProceduralSkillById(id);
+    if (!existing) {
+      throw new Error(`Procedural skill not found: ${id}`);
+    }
+
+    const normalizedStatus = normalizeProceduralSkillStatus(status);
+    if (
+      existing.status === normalizedStatus &&
+      ((normalizedStatus === 'retired' && existing.retired_at) || normalizedStatus !== 'retired')
+    ) {
+      return existing;
+    }
+
+    const statusChangedAt = new Date().toISOString();
+    const retiredAt = normalizedStatus === 'retired' ? statusChangedAt : null;
+    this.db.run(
+      `UPDATE procedural_skills
+       SET status = ?,
+           retired_at = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      [normalizedStatus, retiredAt, statusChangedAt, id]
+    );
+    this.recordProceduralSkillStatusEvent(id, existing.project_path, normalizedStatus, statusChangedAt);
+
+    const skill = await this.getProceduralSkillById(id);
+    if (!skill) {
+      throw new Error(`Procedural skill not found: ${id}`);
+    }
+    return skill;
+  }
+
+  public async recordProceduralSkillFeedback(
+    input: ProceduralSkillFeedbackInput
+  ): Promise<ProceduralSkillFeedback> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const skill = await this.getProceduralSkillById(input.skill_id);
+    if (!skill) {
+      throw new Error(`Procedural skill not found: ${input.skill_id}`);
+    }
+
+    const id = randomUUID();
+    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+    if (this.normalizeProjectPath(skill.project_path) !== normalizedProjectPath) {
+      throw new Error(
+        `Procedural skill ${skill.id} belongs to ${skill.project_path}, not ${normalizedProjectPath}.`
+      );
+    }
+
+    const outcome = normalizeProceduralSkillFeedbackOutcome(input.outcome);
+    const feedbackCreatedAt = new Date().toISOString();
+    this.db.run(
+      `INSERT INTO procedural_skill_feedback (
+        id,
+        skill_id,
+        project_path,
+        outcome,
+        task_text,
+        notes,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        input.skill_id,
+        normalizedProjectPath,
+        outcome,
+        input.task_text || '',
+        input.notes || '',
+        feedbackCreatedAt,
+      ]
+    );
+
+    const countField = outcome === 'success' ? 'success_count' : outcome === 'failure' ? 'failure_count' : null;
+    if (countField) {
+      this.db.run(
+        `UPDATE procedural_skills
+         SET ${countField} = ${countField} + 1,
+             last_used_at = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [feedbackCreatedAt, feedbackCreatedAt, input.skill_id]
+      );
+    } else {
+      this.db.run(
+        `UPDATE procedural_skills
+         SET last_used_at = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [feedbackCreatedAt, feedbackCreatedAt, input.skill_id]
+      );
+    }
+
+    const row = this.db.get(`SELECT * FROM procedural_skill_feedback WHERE id = ?`, [id]) as any;
+    return this.parseProceduralSkillFeedback(row);
+  }
+
+  public async searchProceduralSkills(
+    projectPath: string,
+    queryText: string,
+    queryVector?: number[],
+    limit: number = 5,
+    options: { asOf?: string; statuses?: ProceduralSkillStatus[] } = {}
+  ): Promise<ProceduralSkillSearchResult[]> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const rows = await this.listProceduralSkills({
+      projectPath,
+      statuses: options.statuses,
+      limit: Math.max(limit * 3, limit),
+      asOf: options.asOf,
+    });
+
+    const queryTokens = tokenizeForOverlap(queryText);
+    return rows
+      .map((skill) => {
+        const lexicalScore = calculateTokenOverlapScore(
+          queryTokens,
+          tokenizeForOverlap([skill.title, skill.summary, skill.trigger_text, ...skill.tags].join(' '))
+        );
+        const vectorScore = queryVector && skill.embedding.length > 0
+          ? this.calculateCosineSimilarity(queryVector, skill.embedding)
+          : 0;
+        const hybridScore = queryVector
+          ? lexicalScore * 0.35 + vectorScore * 0.65
+          : lexicalScore;
+
+        return {
+          id: skill.id,
+          title: skill.title,
+          summary: skill.summary,
+          trigger_text: skill.trigger_text,
+          steps: skill.steps,
+          tags: skill.tags,
+          status: skill.status,
+          confidence: skill.confidence,
+          success_count: skill.success_count,
+          failure_count: skill.failure_count,
+          last_used_at: skill.last_used_at,
+          created_at: skill.created_at,
+          lexical_score: lexicalScore,
+          vector_score: vectorScore,
+          hybrid_score: hybridScore,
+        };
+      })
+      .filter((skill) => skill.hybrid_score > 0 || rows.length <= limit)
+      .sort((left, right) => right.hybrid_score - left.hybrid_score)
+      .slice(0, Math.max(1, Math.min(20, Math.trunc(limit))));
+  }
+
+  public async countProceduralSkills(projectPath?: string): Promise<number> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    if (projectPath) {
+      const row = this.db.get(
+        `SELECT COUNT(*) as total
+         FROM procedural_skills
+         WHERE LOWER(project_path) = LOWER(?)`,
+        [this.normalizeProjectPath(projectPath)]
+      ) as any;
+      return Number(row?.total || 0);
+    }
+
+    const row = this.db.get(`SELECT COUNT(*) as total FROM procedural_skills`) as any;
     return Number(row?.total || 0);
   }
 
@@ -869,7 +1319,15 @@ export class DatabaseManager {
     if (!this.db) throw new Error('Database not initialized');
     const rows = this.db.all(
       `SELECT DISTINCT project_path
-       FROM observations
+       FROM (
+         SELECT project_path FROM observations
+         UNION
+         SELECT project_path FROM state_facts
+         UNION
+         SELECT project_path FROM daily_memory_digests
+         UNION
+         SELECT project_path FROM procedural_skills
+       )
        WHERE project_path != ''
        ORDER BY project_path COLLATE NOCASE ASC`
     ) as any[];
@@ -907,26 +1365,27 @@ export class DatabaseManager {
     projectPath: string,
     queryText: string,
     queryVector?: number[],
-    limit: number = 10
+    limit: number = 10,
+    options: { asOf?: string } = {}
   ): Promise<SearchResult[]> {
     if (!this.db) throw new Error('Database not initialized');
 
     const normalizedPath = this.normalizeProjectPath(projectPath);
     const cleanQuery = queryText.replace(/[^a-zA-Z0-9\s_\-\.]/g, ' ');
+    const asOf = options.asOf;
 
     let ftsRows: any[] = [];
     try {
-      ftsRows = this.db.all(
-        `SELECT o.*, fts.bm25Score
+      const ftsQuery = `SELECT o.*, fts.bm25Score
          FROM observations o
          INNER JOIN (
            SELECT observation_id, bm25(observations_fts) as bm25Score
            FROM observations_fts
            WHERE observations_fts MATCH ?
          ) fts ON o.id = fts.observation_id
-         WHERE LOWER(o.project_path) = LOWER(?)`,
-        [cleanQuery ? `${cleanQuery}*` : '*', normalizedPath]
-      ) as any[];
+         WHERE LOWER(o.project_path) = LOWER(?)`;
+      const ftsParams = [cleanQuery ? `${cleanQuery}*` : '*', normalizedPath];
+      ftsRows = this.db.all(ftsQuery, ftsParams) as any[];
     } catch (e) {
       // Fallback if FTS search fails or has syntax errors
     }
@@ -936,7 +1395,14 @@ export class DatabaseManager {
       [normalizedPath]
     ) as any[];
 
-    return this.scoreResults(allRows, ftsRows, queryVector, limit);
+    const filteredRows = asOf
+      ? allRows.filter((row) => isTimestampOnOrBefore(row.created_at, asOf))
+      : allRows;
+    const filteredFtsRows = asOf
+      ? ftsRows.filter((row) => isTimestampOnOrBefore(row.created_at, asOf))
+      : ftsRows;
+
+    return this.scoreResults(filteredRows, filteredFtsRows, queryVector, limit);
   }
 
   private scoreResults(
@@ -1131,6 +1597,119 @@ export class DatabaseManager {
     };
   }
 
+  private parseProceduralSkill(row: any): ProceduralSkill {
+    return {
+      id: row.id,
+      project_path: row.project_path,
+      title: row.title,
+      summary: row.summary,
+      trigger_text: row.trigger_text,
+      steps: JSON.parse(row.steps_json),
+      tags: JSON.parse(row.tags_json),
+      status: normalizeProceduralSkillStatus(row.status),
+      confidence: normalizeConfidence(row.confidence),
+      source_digest_id: row.source_digest_id,
+      source_observation_ids: JSON.parse(row.source_observation_ids),
+      success_count: Number(row.success_count || 0),
+      failure_count: Number(row.failure_count || 0),
+      last_used_at: row.last_used_at,
+      embedding: JSON.parse(row.embedding),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      retired_at: row.retired_at,
+    };
+  }
+
+  private parseProceduralSkillFeedback(row: any): ProceduralSkillFeedback {
+    return {
+      id: row.id,
+      skill_id: row.skill_id,
+      project_path: row.project_path,
+      outcome: normalizeProceduralSkillFeedbackOutcome(row.outcome),
+      task_text: row.task_text,
+      notes: row.notes,
+      created_at: row.created_at,
+    };
+  }
+
+  private recordProceduralSkillStatusEvent(
+    skillId: string,
+    projectPath: string,
+    status: ProceduralSkillStatus,
+    effectiveAt: string
+  ): void {
+    if (!this.db) throw new Error('Database not initialized');
+
+    this.db.run(
+      `INSERT INTO procedural_skill_status_events (
+        id,
+        skill_id,
+        project_path,
+        status,
+        effective_at
+      ) VALUES (?, ?, ?, ?, ?)`,
+      [randomUUID(), skillId, projectPath, status, effectiveAt]
+    );
+  }
+
+  private getProceduralSkillStatusEventMap(skillIds: string[]): Map<string, ProceduralSkillStatusEvent[]> {
+    if (!this.db) throw new Error('Database not initialized');
+    if (skillIds.length === 0) {
+      return new Map();
+    }
+
+    const placeholders = skillIds.map(() => '?').join(', ');
+    const rows = this.db.all(
+      `SELECT skill_id, status, effective_at
+       FROM procedural_skill_status_events
+       WHERE skill_id IN (${placeholders})
+       ORDER BY effective_at ASC`,
+      skillIds
+    ) as any[];
+
+    const events = new Map<string, ProceduralSkillStatusEvent[]>();
+    for (const row of rows) {
+      const skillEvents = events.get(row.skill_id) || [];
+      skillEvents.push({
+        effective_at: row.effective_at,
+        status: normalizeProceduralSkillStatus(row.status),
+      });
+      events.set(row.skill_id, skillEvents);
+    }
+    return events;
+  }
+
+  private resolveProceduralSkillStatusAsOf(
+    skill: ProceduralSkill,
+    events: ProceduralSkillStatusEvent[],
+    asOf: string
+  ): ProceduralSkillStatus | null {
+    if (!isTimestampOnOrBefore(skill.created_at, asOf)) {
+      return null;
+    }
+
+    let resolvedStatus: ProceduralSkillStatus | null = null;
+    for (const event of events) {
+      if (isTimestampOnOrBefore(event.effective_at, asOf)) {
+        resolvedStatus = event.status;
+      }
+    }
+
+    if (resolvedStatus) {
+      return resolvedStatus;
+    }
+
+    return this.canTrustProceduralSkillWithoutStatusHistory(skill) ? skill.status : null;
+  }
+
+  private canTrustProceduralSkillWithoutStatusHistory(skill: ProceduralSkill): boolean {
+    return (
+      timestampsEqual(skill.created_at, skill.updated_at) &&
+      skill.last_used_at === null &&
+      skill.retired_at === null
+    );
+  }
+
   private normalizeProjectPath(projectPath: string): string {
     return path.resolve(projectPath).replace(/\\/g, '/');
   }
@@ -1138,4 +1717,67 @@ export class DatabaseManager {
   private escapeLike(input: string): string {
     return input.replace(/[\\%_]/g, '\\$&');
   }
+}
+
+function normalizeConfidence(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function normalizeProceduralSkillStatus(value: unknown): ProceduralSkillStatus {
+  const normalized = String(value || 'draft').toLowerCase();
+  switch (normalized) {
+    case 'enabled':
+    case 'disabled':
+    case 'retired':
+      return normalized;
+    default:
+      return 'draft';
+  }
+}
+
+function normalizeProceduralSkillFeedbackOutcome(value: unknown): ProceduralSkillFeedbackOutcome {
+  const normalized = String(value || 'skipped').toLowerCase();
+  switch (normalized) {
+    case 'success':
+    case 'failure':
+    case 'rejected':
+      return normalized;
+    default:
+      return 'skipped';
+  }
+}
+
+function tokenizeForOverlap(text: string): string[] {
+  return String(text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/i)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function calculateTokenOverlapScore(queryTokens: string[], candidateTokens: string[]): number {
+  if (queryTokens.length === 0 || candidateTokens.length === 0) {
+    return 0;
+  }
+
+  const candidateSet = new Set(candidateTokens);
+  let matches = 0;
+  for (const token of queryTokens) {
+    if (candidateSet.has(token)) {
+      matches += 1;
+    }
+  }
+  return matches / queryTokens.length;
+}
+
+function compareProceduralSkillsByRecency(left: ProceduralSkill, right: ProceduralSkill): number {
+  const updatedComparison = compareTimestamps(right.updated_at, left.updated_at);
+  if (updatedComparison !== 0) {
+    return updatedComparison;
+  }
+  return compareTimestamps(right.created_at, left.created_at);
 }

@@ -224,19 +224,24 @@ test('worker context endpoint returns ProjectContextView and hooks render it', a
     assert.equal(payload.project_path, projectPath);
     assert.ok(Array.isArray(payload.current_state));
     assert.ok(Array.isArray(payload.daily_digests));
+    assert.ok(Array.isArray(payload.procedural_skills));
     assert.ok(Array.isArray(payload.summary_blocks));
     assert.ok(Array.isArray(payload.recent_observations));
+    assert.ok(payload.memory_layers);
+    assert.ok(payload.sliding_window);
     assert.ok(payload.current_state.some((entry) => entry.fact_key === 'user_budget' && entry.value === 80000));
     assert.equal(payload.daily_digests[0].summary, 'Daily digest service was implemented.');
     assert.ok(payload.summary_blocks.length > 0);
     assert.equal(payload.recent_observations[0].title, 'Alpha memory');
     assert.equal(payload.recent_observations[0].embedding, undefined);
+    assert.ok(Array.isArray(payload.sliding_window.window_entries));
     assert.ok(payload.summary_blocks.every((entry) => entry.title !== 'Read README.md file'));
     assert.ok(payload.summary_blocks.every((entry) => entry.title !== 'Checked git status'));
 
     for (const scriptName of ['claude-session-start.js', 'codex-session-start.js', 'opencode-session-start.js']) {
       const output = await runHook(scriptName, projectPath, port);
       assert.match(output, /Current structured state/i);
+      assert.match(output, /Memory layers/i);
       assert.match(output, /Recent daily digests/i);
       assert.match(output, /user_budget/);
       assert.match(output, /Daily digest service was implemented/);

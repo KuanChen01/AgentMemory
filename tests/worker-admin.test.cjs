@@ -664,6 +664,136 @@ test('worker admin daily digest APIs expose status and manual run', async () => 
   }
 });
 
+test('worker admin exposes policy-driven memory query and procedural skill lifecycle APIs', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  await seedDatabase(dbPath);
+  const previousDbPath = process.env.AGENTMEM_DB_PATH;
+  process.env.AGENTMEM_DB_PATH = dbPath;
+  const db = new DatabaseManager();
+  await db.initialize();
+  await db.saveDailyMemoryDigest({
+    project_path: 'E:/Repo/A',
+    local_date: '2026-06-09',
+    status: 'success',
+    digest: {
+      summary: 'Digest with one procedural candidate.',
+      facts: ['A reusable workbench skill should be reviewable.'],
+      decisions: [],
+      verified_commands: [],
+      open_questions: [],
+      next_actions: [],
+      state_fact_candidates: [],
+      skill_candidates: [
+        {
+          title: 'Bootstrap workbench',
+          summary: 'Reusable steps for starting the local workbench.',
+          trigger: 'when the user asks how to bootstrap the workbench',
+          steps: ['Run npm run build', 'Run npm run workbench -- --no-open'],
+          confidence: 0.81,
+        },
+      ],
+      low_signal_patterns: [],
+      confidence: 0.9,
+    },
+    source_observation_ids: ['obs-skill'],
+    source_count: 1,
+    model: 'mock',
+    prompt_version: 'daily-digest-v1',
+    generated_at: '2026-06-09T23:50:00.000Z',
+  });
+  db.close();
+  if (previousDbPath === undefined) {
+    delete process.env.AGENTMEM_DB_PATH;
+  } else {
+    process.env.AGENTMEM_DB_PATH = previousDbPath;
+  }
+
+  const child = await startWorker(dbPath, port);
+
+  try {
+    const promoteResponse = await fetch(`http://127.0.0.1:${port}/admin/api/skills/promote-candidate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_path: 'E:/Repo/A',
+        local_date: '2026-06-09',
+        candidate_index: 0,
+      }),
+    });
+    assert.equal(promoteResponse.status, 200);
+    const promotePayload = await promoteResponse.json();
+    assert.equal(promotePayload.success, true);
+    assert.equal(promotePayload.skill.status, 'draft');
+
+    const skillsResponse = await fetch(`http://127.0.0.1:${port}/admin/api/skills?project_path=${encodeURIComponent('E:/Repo/A')}`);
+    assert.equal(skillsResponse.status, 200);
+    const skillsPayload = await skillsResponse.json();
+    assert.equal(skillsPayload.skills.length, 1);
+    assert.equal(skillsPayload.skills[0].title, 'Bootstrap workbench');
+
+    const statusResponse = await fetch(`http://127.0.0.1:${port}/admin/api/skills/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        skill_id: promotePayload.skill.id,
+        status: 'enabled',
+      }),
+    });
+    assert.equal(statusResponse.status, 200);
+    const statusPayload = await statusResponse.json();
+    assert.equal(statusPayload.skill.status, 'enabled');
+
+    const wrongProjectFeedbackResponse = await fetch(`http://127.0.0.1:${port}/admin/api/skills/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        skill_id: promotePayload.skill.id,
+        project_path: 'E:/Repo/B',
+        outcome: 'success',
+        task_text: 'Start the workbench from the wrong repo',
+      }),
+    });
+    assert.equal(wrongProjectFeedbackResponse.status, 500);
+
+    const feedbackResponse = await fetch(`http://127.0.0.1:${port}/admin/api/skills/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        skill_id: promotePayload.skill.id,
+        project_path: 'E:/Repo/A',
+        outcome: 'success',
+        task_text: 'Start the workbench on this machine',
+      }),
+    });
+    assert.equal(feedbackResponse.status, 200);
+    const feedbackPayload = await feedbackResponse.json();
+    assert.equal(feedbackPayload.feedback.outcome, 'success');
+
+    const queryResponse = await fetch(`http://127.0.0.1:${port}/admin/api/memory/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_path: 'E:/Repo/A',
+        query: 'How do I bootstrap the workbench and inspect the latest state?',
+        skill_limit: 3,
+        limit: 5,
+      }),
+    });
+    assert.equal(queryResponse.status, 200);
+    const queryPayload = await queryResponse.json();
+    assert.equal(queryPayload.policy.action, 'read');
+    assert.ok(queryPayload.policy.layers.includes('procedural_memory'));
+    assert.ok(queryPayload.procedural_skills.length >= 1);
+    assert.match(queryPayload.rendered, /Policy Resolution/);
+    assert.match(queryPayload.rendered, /Bootstrap workbench/);
+    assert.ok(queryPayload.project_context.sliding_window.window_entries.length > 0);
+  } finally {
+    await stopWorker(child, port);
+    cleanupDb(dbPath);
+  }
+});
+
 test('worker admin settings toggle read and write gates immediately', async () => {
   const dbPath = makeDbPath();
   const port = makePort();

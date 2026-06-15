@@ -18,11 +18,18 @@ import {
   parseProjectContextLimit,
 } from '../services/project-context';
 import {
+  createDisabledProjectContextView,
   formatStateFactValue,
   hasProjectContextData,
   renderProjectContextView,
 } from '../services/context-view';
-import { resolveEmbeddingConfig } from '../services/embedding-config';
+import { getEmbedding } from '../services/embedding';
+import { resolveMemoryQuery } from '../services/memory-query';
+import {
+  promoteProceduralSkillCandidate,
+  recordProceduralSkillFeedback,
+  renderProceduralSkillForAgent,
+} from '../services/procedural-memory';
 import { buildReleaseManifest } from '../services/release';
 
 // Load environment variables
@@ -69,6 +76,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'number',
               description: 'Optional. Max number of curated summary/recent observation entries to include. Defaults to 10.',
             },
+            as_of: {
+              type: 'string',
+              description: 'Optional. ISO timestamp for historical context reconstruction.',
+            },
           },
         },
       },
@@ -89,6 +100,48 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             limit: {
               type: 'number',
               description: 'Optional. Max number of memory records to return. Defaults to 5.',
+            },
+            as_of: {
+              type: 'string',
+              description: 'Optional. ISO timestamp for historical search.',
+            },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'query_memory',
+        description: 'Runs the policy-driven memory query path and returns the layered context, matched observations, matched procedural skills, and sliding-window contract for a task.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Task or question used to decide which memory layers to consult.',
+            },
+            project_path: {
+              type: 'string',
+              description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            mode: {
+              type: 'string',
+              description: 'Optional. One of startup, task_query, or drill_down.',
+            },
+            limit: {
+              type: 'number',
+              description: 'Optional. Max observation results to retrieve.',
+            },
+            skill_limit: {
+              type: 'number',
+              description: 'Optional. Max procedural skills to retrieve.',
+            },
+            window_char_budget: {
+              type: 'number',
+              description: 'Optional. Suggested sliding-window character budget.',
+            },
+            as_of: {
+              type: 'string',
+              description: 'Optional. ISO timestamp for historical reconstruction.',
             },
           },
           required: ['query'],
@@ -232,6 +285,101 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['fact_key', 'value'],
         },
       },
+      {
+        name: 'list_procedural_skills',
+        description: 'Lists current procedural skills for this project, optionally filtered by status or as_of time slice.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: {
+              type: 'string',
+              description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            status: {
+              type: 'string',
+              description: 'Optional. Comma-separated statuses such as enabled,draft.',
+            },
+            limit: {
+              type: 'number',
+              description: 'Optional. Max number of skills to return. Defaults to 10.',
+            },
+            as_of: {
+              type: 'string',
+              description: 'Optional. ISO timestamp for historical filtering.',
+            },
+          },
+        },
+      },
+      {
+        name: 'promote_skill_candidate',
+        description: 'Promotes a daily-digest skill candidate into a reviewable draft procedural skill.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_path: {
+              type: 'string',
+              description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            local_date: {
+              type: 'string',
+              description: 'Local digest date in YYYY-MM-DD format.',
+            },
+            candidate_index: {
+              type: 'number',
+              description: 'Zero-based skill candidate index inside the selected digest.',
+            },
+          },
+          required: ['local_date', 'candidate_index'],
+        },
+      },
+      {
+        name: 'set_procedural_skill_status',
+        description: 'Changes a procedural skill status to enabled, disabled, draft, or retired.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            skill_id: {
+              type: 'string',
+              description: 'Procedural skill ID.',
+            },
+            status: {
+              type: 'string',
+              description: 'Target status: draft, enabled, disabled, or retired.',
+            },
+          },
+          required: ['skill_id', 'status'],
+        },
+      },
+      {
+        name: 'record_procedural_skill_feedback',
+        description: 'Records success, failure, rejection, or skip feedback for a procedural skill.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            skill_id: {
+              type: 'string',
+              description: 'Procedural skill ID.',
+            },
+            project_path: {
+              type: 'string',
+              description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            outcome: {
+              type: 'string',
+              description: 'One of success, failure, rejected, or skipped.',
+            },
+            task_text: {
+              type: 'string',
+              description: 'Optional. Task or request that triggered the skill.',
+            },
+            notes: {
+              type: 'string',
+              description: 'Optional. Outcome notes for later review.',
+            },
+          },
+          required: ['skill_id', 'outcome'],
+        },
+      },
     ],
   };
 });
@@ -247,16 +395,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         case 'get_project_context': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {
-          const text = renderProjectContextView({
-            project_path: String(args?.project_path || currentPath).replace(/\\/g, '/'),
-            current_state: [],
-            daily_digests: [],
-            summary_blocks: [],
-            recent_observations: [],
-            generated_at: new Date().toISOString(),
-            disabled: true,
-            message: READ_DISABLED_MESSAGE,
-          });
+          const text = renderProjectContextView(
+            createDisabledProjectContextView(
+              String(args?.project_path || currentPath).replace(/\\/g, '/'),
+              READ_DISABLED_MESSAGE
+            )
+          );
           return { content: [{ type: 'text', text }] };
         }
 
@@ -264,7 +408,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const limit = parseProjectContextLimit(
           args?.limit === undefined ? undefined : Number(args.limit)
         );
-        const view = await loadProjectContextView(dbManager, projectPath, limit);
+        const view = await loadProjectContextView(dbManager, projectPath, limit, {
+          asOf: args?.as_of ? String(args.as_of) : undefined,
+        });
 
         if (!hasProjectContextData(view)) {
           return {
@@ -293,10 +439,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const query = String(args?.query);
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
         const limit = Number(args?.limit || 5);
+        const asOf = args?.as_of ? String(args.as_of) : undefined;
 
         // Fetch query vector representation
         const queryVector = await getEmbedding(query);
-        const results = await dbManager.searchHybrid(projectPath, query, queryVector, limit);
+        const results = await dbManager.searchHybrid(projectPath, query, queryVector, limit, {
+          asOf,
+        });
 
         // Return formatted search response (progressive disclosure: summary list)
         if (results.length === 0) {
@@ -311,6 +460,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const output = `Found ${results.length} memories:\n\n${lines.join('\n')}\n\nUse get_memory_details with the relevant IDs to retrieve full facts, concepts, and files modified.`;
 
         return { content: [{ type: 'text', text: output }] };
+        }
+
+        case 'query_memory': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.readEnabled) {
+          return {
+            content: [{ type: 'text', text: `${READ_DISABLED_MESSAGE} Memory resolution is unavailable.` }],
+          };
+        }
+
+        const result = await resolveMemoryQuery(dbManager, {
+          projectPath: String(args?.project_path || currentPath).replace(/\\/g, '/'),
+          query: String(args?.query || ''),
+          asOf: args?.as_of ? String(args.as_of) : undefined,
+          mode: args?.mode ? String(args.mode) as any : undefined,
+          limit: args?.limit === undefined ? undefined : Number(args.limit),
+          skillLimit: args?.skill_limit === undefined ? undefined : Number(args.skill_limit),
+          windowCharBudget: args?.window_char_budget === undefined ? undefined : Number(args.window_char_budget),
+        });
+
+        return {
+          content: [{ type: 'text', text: result.rendered }],
+        };
         }
 
         case 'memory_timeline': {
@@ -516,6 +688,130 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
         };
         }
 
+        case 'list_procedural_skills': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.readEnabled) {
+          return {
+            content: [{ type: 'text', text: `${READ_DISABLED_MESSAGE} Procedural skills are unavailable.` }],
+          };
+        }
+
+        const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
+        const statusFilter = args?.status
+          ? String(args.status).split(',').map((entry) => entry.trim()).filter(Boolean)
+          : undefined;
+        const skills = await dbManager.listProceduralSkills({
+          projectPath,
+          statuses: statusFilter as any,
+          limit: args?.limit === undefined ? undefined : Number(args.limit),
+          asOf: args?.as_of ? String(args.as_of) : undefined,
+        });
+
+        if (skills.length === 0) {
+          return {
+            content: [{ type: 'text', text: 'No procedural skills recorded for this project.' }],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: skills.map((skill) => renderProceduralSkillForAgent(skill)).join('\n\n'),
+            },
+          ],
+        };
+        }
+
+        case 'promote_skill_candidate': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.writeEnabled) {
+          return {
+            content: [{ type: 'text', text: `${WRITE_DISABLED_MESSAGE} Skill promotion is blocked.` }],
+          };
+        }
+
+        const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
+        const localDate = String(args?.local_date || '');
+        const candidateIndex = Number(args?.candidate_index);
+        if (!localDate || !Number.isInteger(candidateIndex) || candidateIndex < 0) {
+          throw new Error('local_date and candidate_index are required.');
+        }
+
+        const digest = await dbManager.getDailyMemoryDigest({
+          projectPath,
+          localDate,
+        });
+        const candidate = digest?.digest?.skill_candidates?.[candidateIndex];
+        if (!candidate) {
+          throw new Error('Skill candidate not found in the requested digest.');
+        }
+
+        const skill = await promoteProceduralSkillCandidate({
+          candidate,
+          dbManager,
+          digest,
+          projectPath,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Procedural skill promoted as draft: ${skill.title} (${skill.id}).`,
+            },
+          ],
+        };
+        }
+
+        case 'set_procedural_skill_status': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.writeEnabled) {
+          return {
+            content: [{ type: 'text', text: `${WRITE_DISABLED_MESSAGE} Skill status was not updated.` }],
+          };
+        }
+
+        const skill = await dbManager.setProceduralSkillStatus(
+          String(args?.skill_id || ''),
+          String(args?.status || '') as any
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Procedural skill ${skill.title} is now ${skill.status}.`,
+            },
+          ],
+        };
+        }
+
+        case 'record_procedural_skill_feedback': {
+        const policy = await dbManager.getRuntimePolicy();
+        if (!policy.writeEnabled) {
+          return {
+            content: [{ type: 'text', text: `${WRITE_DISABLED_MESSAGE} Skill feedback was not recorded.` }],
+          };
+        }
+
+        const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
+        const feedback = await recordProceduralSkillFeedback(dbManager, {
+          skill_id: String(args?.skill_id || ''),
+          project_path: projectPath,
+          outcome: String(args?.outcome || 'skipped') as any,
+          task_text: args?.task_text ? String(args.task_text) : undefined,
+          notes: args?.notes ? String(args.notes) : undefined,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Recorded ${feedback.outcome} feedback for procedural skill ${feedback.skill_id}.`,
+            },
+          ],
+        };
+        }
+
         default:
           throw new Error(`Tool not found: ${name}`);
       }
@@ -528,63 +824,6 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
     };
   }
 });
-
-// Setup fallback vector generator
-async function getEmbedding(text: string): Promise<number[]> {
-  const { apiKey, embeddingUrl, shouldUseExternalEmbedding } = resolveEmbeddingConfig();
-
-  if (shouldUseExternalEmbedding && apiKey && embeddingUrl) {
-    try {
-      const response = await fetch(embeddingUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          input: text,
-          model: 'text-embedding-3-small',
-        }),
-      });
-
-      if (response.ok) {
-        const data: any = await response.json();
-        const vector = data.data?.[0]?.embedding;
-        if (vector) return vector;
-      }
-    } catch (e: any) {
-      // Fallback silently to hashing
-    }
-  }
-
-  // Fallback: Pure JS Feature Hashing Vectorizer (1024 dimensions)
-  return getLocalHashingEmbedding(text);
-}
-
-function getLocalHashingEmbedding(text: string): number[] {
-  const words = text.toLowerCase().match(/\b\w+\b/g) || [];
-  const vector = new Array(1024).fill(0);
-
-  for (const word of words) {
-    let hash = 5381;
-    for (let i = 0; i < word.length; i++) {
-      hash = (hash * 33) ^ word.charCodeAt(i);
-    }
-    const index = Math.abs(hash) % 1024;
-    vector[index] += 1.0;
-  }
-
-  let sumSq = 0;
-  for (const val of vector) sumSq += val * val;
-  if (sumSq > 0) {
-    const magnitude = Math.sqrt(sumSq);
-    for (let i = 0; i < 1024; i++) {
-      vector[i] /= magnitude;
-    }
-  }
-
-  return vector;
-}
 
 // Start STDIO transport listener
 async function main() {

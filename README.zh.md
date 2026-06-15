@@ -202,28 +202,40 @@ Windows 下现在有两个本机控制入口：
 
 #### Structured state 与 context view
 
-AgentMemory 现在把记忆拆成两层：
+AgentMemory 现在把记忆拆成显式层次：
 
 *   **Observations** 继续作为 append-only 的历史账本，用于 hybrid search 和细节回溯。
 *   **State facts** 用来存储显式的当前/历史真相，并带有 `effective_at`、`recorded_at` 和 `superseded_at` 时间语义。
 *   **Daily digests** 保存按计划或手动触发的项目级每日总结，包含事实、决策、命令、开放问题和下一步；digest 输出不会自动晋升为 state fact。
+*   **Procedural skills** 现在已经成为一等可审阅记忆对象，具备 `draft / enabled / disabled / retired` 生命周期和 success/failure 反馈账本。
+
+现在的 policy brain 已经显式化，不再把策略分散在 hooks 和临时调用点里：
+
+*   `memory-policy.ts` 集中承载读取决策、低信号 ledger 写入决策，以及 procedural skill candidate 的 draft promotion gate。
+*   `memory-query.ts` 是新的任务级记忆解析路径，用来决定该读哪些 layers、何时查 procedural memory，以及如何为宿主 agent 拼出一个有界的 sliding-window contract。
 
 这一阶段新增的接口：
 
-*   `GET /context?project_path=&limit=`：返回 `ProjectContextView` 对象，不再直接返回 observation 数组
+*   `GET /context?project_path=&limit=&as_of=`：返回 `ProjectContextView` 对象，不再直接返回 observation 数组
 *   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：读取当前或历史结构化状态
 *   `POST /state`：显式写入结构化状态
-*   MCP 工具：`get_project_context`、`get_memory_state`、`set_memory_state`
+*   `POST /memory/query`：返回 task query 的 policy 决策、分层上下文、匹配 observation、匹配 procedural skills，以及 sliding-window contract
+*   `POST /search` 和 `POST /admin/api/search`：现在都支持可选 `as_of`，用于历史时间切片
+*   MCP 工具：`get_project_context`、`query_memory`、`get_memory_state`、`set_memory_state`、`list_procedural_skills`、`promote_skill_candidate`、`set_procedural_skill_status`、`record_procedural_skill_feedback`
 
 `ProjectContextView` 当前包含：
 
+*   `as_of`：时间切片下的重建边界
 *   `current_state`
 *   `daily_digests`：最近成功的每日总结，已裁剪为 startup 可用的紧凑结构
+*   `procedural_skills`：来自一等 procedural memory 的 `enabled` / `draft` 技能
 *   `summary_blocks`：基于最近 observation 生成，但会过滤低信号标题并合并重复标题
 *   `recent_observations`：面向 startup 的精简元数据列表，只保留 `id`、`title`、`created_at`、`agent_id`，不再附带完整 narrative 或 embedding
+*   `sliding_window`：面向宿主 agent 的有界近期上下文契约
+*   `memory_layers`：显式区分 metadata / profile / recent-summary / ledger / procedural / window
 *   `generated_at`
 
-这一阶段的 structured state 仍然是 **explicit-write only**：observation、hook 日志和 LLM 摘要不会自动晋升为 state。
+这一阶段的 structured state 仍然是 **explicit-write only**：observation、hook 日志和 LLM 摘要不会自动晋升为 state。Procedural skill candidate 同样保持 **reviewable before promotion**：可以显式提升成 draft skill，但不会自动启用。
 
 #### Workbench 专用诊断 API
 
@@ -235,7 +247,12 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
     *   `metrics`：`payloadBytes`、`summaryCount`、`lowSignalCount`、`duplicateTitleCount`
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：供 workbench 读取 structured state
 *   `POST /admin/api/state`：供 workbench 显式写入 structured state fact
-*   `POST /admin/api/search`：返回当前 project 的 hybrid search 原始诊断分数，但不在这一步修改排序算法
+*   `POST /admin/api/search`：返回当前 project 的 hybrid search 原始诊断分数，但不在这一步修改排序算法；同时支持可选 `as_of`
+*   `POST /admin/api/memory/query`：暴露 policy-driven 的任务级记忆解析路径
+*   `GET /admin/api/skills?project_path=&status=&as_of=&limit=`：读取当前 procedural skills
+*   `POST /admin/api/skills/promote-candidate`：把 digest 里的 `skill_candidate` 显式提升成 draft procedural skill
+*   `POST /admin/api/skills/status`：把 procedural skill 切到 `draft`、`enabled`、`disabled` 或 `retired`
+*   `POST /admin/api/skills/feedback`：为 procedural skill 记录 success / failure / rejected / skipped 反馈
 *   `GET /admin/api/digests?project_path=&limit=`：读取某个项目最近保存的每日记忆总结
 *   `POST /admin/api/digests/run`：为所选项目和可选 `local_date` 手动运行一次每日记忆总结任务
 *   `GET /admin/api/digest-scheduler`：返回已持久化的每日总结 scheduler 配置和当前运行态
@@ -248,12 +265,12 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 #### 运行时策略语义
 
 *   `readEnabled=false` 时，会阻断记忆恢复和显式读取接口：
-    *   HTTP：`/context`、`/search`、`/state`
-    *   MCP：`get_project_context`、`search_memory`、`memory_timeline`、`get_memory_details`、`get_memory_state`
+    *   HTTP：`/context`、`/search`、`/state`、`/memory/query`
+    *   MCP：`get_project_context`、`query_memory`、`search_memory`、`memory_timeline`、`get_memory_details`、`get_memory_state`、`list_procedural_skills`
     *   SessionStart hook 不再向 agent 启动上下文注入历史记忆
 *   `writeEnabled=false` 时，会阻断新记忆写入：
-    *   HTTP：`/tools`、`/sessions`、`/sessions/close`、`/state`
-    *   MCP：`record_memory`、`set_memory_state`
+    *   HTTP：`/tools`、`/sessions`、`/sessions/close`、`/state`、`/admin/api/skills/*`
+    *   MCP：`record_memory`、`set_memory_state`、`promote_skill_candidate`、`set_procedural_skill_status`、`record_procedural_skill_feedback`
     *   PostToolUse hook 不再生成新的 observation
 
 这两个开关都保存在 SQLite `app_settings` 中，因此 worker 重启后会保留上次选中的策略。
