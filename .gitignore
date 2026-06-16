@@ -15,6 +15,7 @@ scratch/
 .env.test.local
 .env.production.local
 obsiguide.md
+taskgoal*.md
 
 # Databases and locks
 *.db
