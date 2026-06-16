@@ -72,6 +72,7 @@
 - 本地 `master` 已从 `d792d9e` fast-forward 到 `8ace9d1 Add daily digest workflow and harden MCP setup`，并已提交 release bump `abd843e chore: release v1.2.0`。
 - `package.json`、`package-lock.json` 和 lockfile root package 版本已从 `1.1.0` bump 到 `1.2.0`；tag `v1.2.0` 已推送到 GitHub。
 - GitHub Release `v1.2.0` 已创建：`https://github.com/KuanChen01/AgentMemory/releases/tag/v1.2.0`。
+- 已完成 `v1.3.0` minor release：当前 `package.json` / `package-lock.json` 版本为 `1.3.0`，release commit 为 `916e13a chore: release v1.3.0`，tag `v1.3.0` 已推送到 `origin/master`，GitHub Release 已发布到 `https://github.com/KuanChen01/AgentMemory/releases/tag/v1.3.0`。
 - `npm run build` 与 `node --test tests/*.test.cjs` 已在当前源码与分发产物上通过；全量回归现为 88 项测试通过。
 - 已修复本机 Antigravity CLI 配置中的旧 `agentvault` / `AgentVault` 路径：当前 `C:\Users\Admin\.gemini\antigravity-cli\mcp_config.json` 注册 `mcpServers.agentmem` 并指向 `E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js`。
 - 安装器的 Antigravity resolver 现在优先检查 direct registries（`antigravity-cli`、`antigravity-ide`、`antigravity`、`config\mcp_config.json`），再回退到 plugin registries；写入时会删除遗留 `agentvault`。
@@ -218,6 +219,7 @@
 - `/admin` Stage 2 diagnostics 已补齐并完成 live smoke：context metrics 现在包含 bounded context budget/used/trimmed、procedural skill count、temporal diagnostic layer count、decision trace step count；memory query validation 也会回显同一套 bounded context / temporal / decision data。
 - worker `/tools` 真实写路径现已自动生成 reviewable `post_task_reviews` artifacts：新增 `src/services/post-task-review.ts`、SQLite `post_task_reviews` 表、`GET /admin/api/post-task-reviews` 与 `Procedural Skills` 面板区块，使 procedural recommendation、bounded context、temporal diagnostics 和 decision trace 进入写后闭环，但仍保持 reviewable-before-promotion。
 - 双语 README 已同步提升到 Stage 2 语义，明确记录共享 orchestrator、bounded context package、temporal diagnostics、decision trace，以及 enriched procedural skill diagnostics。
+- 已按仓库版本纪律完成正式 minor 发布：执行 `npm run release:bump -- --next minor`、`npm run build`、`node --test tests/*.test.cjs`、`git tag v1.3.0`、`git push origin master --follow-tags`，并创建 GitHub Release `v1.3.0`。
 - 已在 `/admin` Admin Workbench 中落地 `Procedural Skills` MVP：新增独立 top-level tab、共享筛选 toolbar、candidate review、skills library、skill detail、feedback 表单和 query validation，且全部复用既有 admin API。
 - 已为新 workbench 补齐双语 UI 文案、README / README.zh 的产品说明，以及 `tests/worker-admin.test.cjs` 对新 tab、panel ID 与关键 action hooks 的 HTML smoke 覆盖。
 - 已在真实本地 worker 上完成 `Procedural Skills` live browser smoke，并确认 promote -> enabled -> feedback -> query validation 全链路可用；为避免污染 active 集合，smoke 过程中创建的重复技能已退役清理。
@@ -276,9 +278,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- 下一步从“补 Stage 2 骨架”转为“观察与硬化 Stage 2 的真实使用效果”：重点继续验证 recommendation threshold、`Raw Execution:*` 低信号过滤边界、较宽泛 query 的排序质量，以及是否需要在保持 reviewable-before-promotion 的前提下把当前自动 `post_task` review loop 继续推进到更自动的 adoption/recommendation loop。
+- 下一步在 `v1.3.0` 发布后继续观察 Stage 2 的真实使用效果：重点验证 recommendation threshold、`Raw Execution:*` 低信号过滤边界、较宽泛 query 的排序质量，以及是否需要在保持 reviewable-before-promotion 的前提下把当前自动 `post_task` review loop 继续推进到更自动的 adoption/recommendation loop。
 
 ## Last Sync
 - date: 2026-06-16
-- status: 已将 Stage 2 的共享 read orchestrator、bounded context / temporal / decision diagnostics、procedural recommendation 闭环、自动 `post_task` review loop、`npm run build` + `node --test tests/*.test.cjs`（90/90）+ 真实 `/tools -> /admin/api/post-task-reviews` host-path smoke 结果同步到 vault 项目笔记；`taskgoal_stage2.md` 仍属于 repo-local 当前目标，不单独提升到 vault。
+- status: 已将 `v1.3.0` minor release、Stage 2 的共享 read orchestrator、bounded context / temporal / decision diagnostics、procedural recommendation 闭环、自动 `post_task` review loop，以及 `npm run build` + `node --test tests/*.test.cjs`（90/90）+ 真实 `/tools -> /admin/api/post-task-reviews` host-path smoke 结果同步到 vault 项目笔记；`taskgoal_stage2.md` 仍属于 repo-local 当前目标，不单独提升到 vault。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md
