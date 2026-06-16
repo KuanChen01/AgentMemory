@@ -1,16 +1,21 @@
-import { ProjectContextView, renderProjectContextView } from './context-view';
+import {
+  BoundedContextPackage,
+  MemoryDecisionTrace,
+  ProjectContextView,
+  renderProjectContextView,
+  TemporalSliceDiagnostics,
+} from './context-view';
 import {
   DatabaseManager,
   ProceduralSkillSearchResult,
   SearchResult,
 } from './db';
-import { getEmbedding } from './embedding';
 import {
   decideMemoryReadPolicy,
   MemoryReadMode,
   MemoryReadPolicyDecision,
 } from './memory-policy';
-import { loadProjectContextView } from './project-context';
+import { orchestrateMemoryRead } from './memory-orchestrator';
 import { renderProceduralSkillSearchResults } from './procedural-memory';
 
 export interface MemoryQueryRequest {
@@ -25,6 +30,8 @@ export interface MemoryQueryRequest {
 
 export interface MemoryQueryResult {
   as_of: string | null;
+  bounded_context: BoundedContextPackage | null;
+  decision_trace: MemoryDecisionTrace | null;
   generated_at: string;
   policy: MemoryReadPolicyDecision;
   procedural_skills: ProceduralSkillSearchResult[];
@@ -33,6 +40,7 @@ export interface MemoryQueryResult {
   query: string;
   rendered: string;
   search_results: SearchResult[];
+  temporal_diagnostics: TemporalSliceDiagnostics | null;
 }
 
 export async function resolveMemoryQuery(
@@ -51,6 +59,8 @@ export async function resolveMemoryQuery(
   if (policy.action === 'skip') {
     return {
       as_of: request.asOf || null,
+      bounded_context: null,
+      decision_trace: null,
       generated_at: new Date().toISOString(),
       policy,
       procedural_skills: [],
@@ -59,50 +69,32 @@ export async function resolveMemoryQuery(
       query: request.query,
       rendered: renderSkippedMemoryQuery(request.projectPath, request.query, policy),
       search_results: [],
+      temporal_diagnostics: null,
     };
   }
 
-  const queryVector = policy.shouldUseObservationSearch || policy.shouldUseProceduralSkills
-    ? await getEmbedding(request.query)
-    : undefined;
+  const orchestrated = await orchestrateMemoryRead(dbManager, {
+    asOf: request.asOf,
+    limit: request.limit,
+    mode: request.mode,
+    projectPath: request.projectPath,
+    queryText: request.query,
+    skillLimit: request.skillLimit,
+    windowCharBudget: request.windowCharBudget,
+  });
 
-  const [projectContext, searchResults, proceduralSkills] = await Promise.all([
-    loadProjectContextView(dbManager, request.projectPath, policy.observationLimit, {
-      asOf: request.asOf,
-      includeProceduralSkills: true,
-      proceduralSkillLimit: policy.skillLimit,
-      windowCharBudget: policy.windowCharBudget,
-    }),
-    policy.shouldUseObservationSearch
-      ? dbManager.searchHybrid(
-          request.projectPath,
-          request.query,
-          queryVector,
-          policy.observationLimit,
-          { asOf: request.asOf }
-        )
-      : Promise.resolve([]),
-    policy.shouldUseProceduralSkills
-      ? dbManager.searchProceduralSkills(
-          request.projectPath,
-          request.query,
-          queryVector,
-          policy.skillLimit,
-          { asOf: request.asOf, statuses: ['enabled', 'draft'] }
-        )
-      : Promise.resolve([]),
-  ]);
-
-  const generatedAt = new Date().toISOString();
   const baseResult = {
     as_of: request.asOf || null,
-    generated_at: generatedAt,
-    policy,
-    procedural_skills: proceduralSkills,
-    project_context: projectContext,
+    bounded_context: orchestrated.bounded_context,
+    decision_trace: orchestrated.decision_trace,
+    generated_at: orchestrated.generated_at,
+    policy: orchestrated.policy,
+    procedural_skills: orchestrated.procedural_skills,
+    project_context: orchestrated.project_context,
     project_path: request.projectPath,
     query: request.query,
-    search_results: searchResults,
+    search_results: orchestrated.search_results,
+    temporal_diagnostics: orchestrated.temporal_diagnostics,
   };
   return {
     ...baseResult,
@@ -131,6 +123,12 @@ export function renderMemoryQueryResult(result: MemoryQueryResult): string {
     `Observation limit=${result.policy.observationLimit}; skill limit=${result.policy.skillLimit}; window budget=${result.policy.windowCharBudget}`
   );
 
+  if (result.temporal_diagnostics) {
+    lines.push(
+      `Temporal: mode=${result.temporal_diagnostics.mode}; future_protection=${result.temporal_diagnostics.future_protection}`
+    );
+  }
+
   if (result.procedural_skills.length > 0) {
     lines.push('\nMatched procedural skills:');
     lines.push(renderProceduralSkillSearchResults(result.procedural_skills));
@@ -143,6 +141,16 @@ export function renderMemoryQueryResult(result: MemoryQueryResult): string {
         `- ${record.title} [score=${record.hybrid_score.toFixed(2)}] (${record.created_at})`
       );
       lines.push(`  Facts: ${record.facts.slice(0, 2).join('; ') || trimText(record.narrative, 120)}`);
+    }
+  }
+
+  if (result.decision_trace?.steps.length) {
+    lines.push('\nDecision trace:');
+    for (const step of result.decision_trace.steps) {
+      lines.push(`- ${step.step}: ${step.decision}`);
+      for (const reason of step.reasons) {
+        lines.push(`  Reason: ${reason}`);
+      }
     }
   }
 

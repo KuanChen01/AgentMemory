@@ -389,6 +389,16 @@ export function renderAdminWorkbenchMarkup(): string {
                 <div class="emptyState" data-i18n="procedural.queryEmpty">No validation query has been run yet.</div>
               </div>
             </div>
+
+            <div class="card">
+              <div class="metaLabel" data-i18n="procedural.postTaskReviewSection">Automatic Post-task Reviews</div>
+              <p class="panelLead" style="margin-top: 10px;" data-i18n="procedural.postTaskReviewLead">
+                Inspect the latest hook-driven post-task review artifacts that were generated automatically after observation writes.
+              </p>
+              <div id="proceduralPostTaskReviewList" class="listBlock" style="margin-top: 14px;">
+                <div class="emptyState" data-i18n="procedural.noPostTaskReviews">No automatic post-task reviews have been recorded yet.</div>
+              </div>
+            </div>
           </div>
         </div>
       </section>

@@ -194,9 +194,9 @@ Windows local control now has two entrypoints:
 The page provides:
 
 *   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, daily digest status / manual run / scheduler settings, workbench posture, and a read-only GitHub Release update check with manual upgrade guidance
-*   **Procedural Skills** for reviewing digest `skill_candidates`, promoting them to draft, flipping lifecycle status, recording success/failure/rejected/skipped feedback, and validating task-level memory queries against the current `rollout_stage`
+*   **Procedural Skills** for reviewing digest `skill_candidates`, promoting them to draft, flipping lifecycle status, recording success/failure/rejected/skipped feedback, inspecting feedback history, evidence, lifecycle, recommendation signals, and the latest automatic post-task review artifacts next to task-level query validation
 *   **LLM Settings** for switching `AGENTMEM_LLM_MODEL`, updating the OpenAI-compatible API base URL, preserving or replacing the API key, and running a live connection test
-*   **Project Context** for the current `ProjectContextView`, recent daily digests, rendered startup text, and payload / summary health metrics
+*   **Project Context** for the current `ProjectContextView`, recent daily digests, rendered startup text, bounded context package metrics, temporal slice diagnostics, and policy decision trace
 *   **State Lab** for explicit structured state reads and writes
 *   **Search Diagnostics** for raw hybrid search scores (`hybrid_score`, `fts_score`, `vector_score`) and low-signal title visibility
 *   **Observation Ledger** for filterable observation browsing and detailed drill-down
@@ -213,14 +213,15 @@ AgentMemory now separates memory into explicit layers:
 The policy brain is now explicit instead of being scattered across hooks and ad-hoc call sites:
 
 *   `memory-policy.ts` centralizes read decisions, low-signal ledger writes, and draft promotion gates for procedural skill candidates.
-*   `memory-query.ts` is the new task-oriented resolution path that decides which layers to read, when to consult procedural memory, and how to assemble a bounded sliding-window contract for host agents.
+*   `memory-orchestrator.ts` is the shared Stage 2 read orchestrator used by worker startup context, MCP `get_project_context`, and task-level query resolution.
+*   `memory-query.ts` is the task-oriented resolution path that now reuses the shared orchestrator to decide which layers to read, when to consult procedural memory, and how to attach bounded context, temporal diagnostics, and decision trace output.
 
 New interfaces in this first cut:
 
 *   `GET /context?project_path=&limit=&as_of=` returns a `ProjectContextView` object instead of a raw observation array.
 *   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads current or historical structured state.
 *   `POST /state` explicitly writes a structured state fact.
-*   `POST /memory/query` returns the policy decision, layered context, matching observations, matching procedural skills, and a sliding-window contract for a task query.
+*   `POST /memory/query` returns the policy decision, layered context, matching observations, matching procedural skills, a bounded context package, temporal slice diagnostics, and a decision trace for a task query.
 *   `POST /search` and `POST /admin/api/search` now accept optional `as_of` filtering for historical replay.
 *   MCP tools: `get_project_context`, `query_memory`, `get_memory_state`, `set_memory_state`, `list_procedural_skills`, `promote_skill_candidate`, `set_procedural_skill_status`, `record_procedural_skill_feedback`
 
@@ -229,10 +230,13 @@ New interfaces in this first cut:
 *   `as_of` for time-sliced reconstruction
 *   `current_state`
 *   `daily_digests` from recent successful daily summaries, trimmed for startup use
-*   `procedural_skills` from enabled or draft first-class procedural memory
+*   `procedural_skills` from enabled or draft first-class procedural memory, enriched with feedback summary/history, lifecycle signal, and recommendation state when relevant
 *   `summary_blocks` built from curated recent observations with low-signal titles filtered out and duplicate titles collapsed
 *   `recent_observations` as a slim startup-oriented metadata list (`id`, `title`, `created_at`, `agent_id`) without full narratives or embeddings
-*   `sliding_window` as a host-facing bounded recent-context contract
+*   `sliding_window` as the compatibility alias for the Stage 2 bounded context package
+*   `bounded_context` as the host-facing bounded recent-context package with layer budgets, trimming order, rendered package text, and host responsibilities
+*   `temporal_diagnostics` for per-layer `as_of` / latest slice behavior
+*   `decision_trace` for why the policy and recommendation path produced the current package
 *   `memory_layers` for explicit metadata/profile/recent-summary/ledger/procedural/window separation
 *   `generated_at`
 
@@ -245,12 +249,13 @@ The workbench also exposes loopback-only admin APIs for the UI:
 *   `GET /admin/api/context?project_path=&limit=` returns:
     *   `view`: raw `ProjectContextView`
     *   `rendered`: the same text block produced by `renderProjectContextView(view)`
-    *   `metrics`: `payloadBytes`, `summaryCount`, `lowSignalCount`, `duplicateTitleCount`
+    *   `metrics`: `payloadBytes`, `summaryCount`, `lowSignalCount`, `duplicateTitleCount`, `proceduralSkillCount`, `slidingWindowEntryCount`, `boundedContextBudget`, `boundedContextCharsUsed`, `boundedContextTrimmedEntries`, `temporalDiagnosticLayerCount`, `decisionTraceStepCount`
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads structured state for the workbench
 *   `POST /admin/api/state` explicitly writes a structured state fact from the workbench
 *   `POST /admin/api/search` returns raw hybrid search diagnostics for the current project without changing the ranking algorithm, and accepts optional `as_of`
-*   `POST /admin/api/memory/query` exposes the policy-driven task resolution path used to assemble layered memory context
-*   `GET /admin/api/skills?project_path=&status=&as_of=&limit=` lists current procedural skills
+*   `POST /admin/api/memory/query` exposes the policy-driven task resolution path used to assemble layered memory context, bounded context packaging, temporal diagnostics, and decision trace output
+*   `GET /admin/api/skills?project_path=&status=&as_of=&limit=` lists current procedural skills with feedback history, evidence summary, lifecycle signal, and recommendation metadata
+*   `GET /admin/api/post-task-reviews?project_path=&limit=` lists automatic post-task review artifacts generated from the real observation write path, including matched skills, recommendation states, bounded context, temporal diagnostics, and decision trace data
 *   `POST /admin/api/skills/promote-candidate` explicitly promotes a digest `skill_candidate` into a draft procedural skill
 *   `POST /admin/api/skills/status` flips a procedural skill between `draft`, `enabled`, `disabled`, and `retired`
 *   `POST /admin/api/skills/feedback` records success/failure/rejected/skipped feedback for a procedural skill
@@ -285,7 +290,7 @@ Daily digest reads use the same read gate as startup context, and manual digest 
 3. Use the `Read Memory` and `Write Memory` switches to change runtime policy
 4. Use the Runtime release card to compare the current checkout with the latest GitHub Release and choose the recommended manual upgrade path
 5. Use Runtime daily digest controls to inspect the latest per-project digest, manually run one for a selected local date, or change the automatic scheduler's enabled state, run time, time zone, and catch-up window
-6. Use `Procedural Skills` to review digest candidates, promote the reusable ones to draft, flip `enabled/disabled/retired`, record operator feedback, and run a validation query that shows matched skill titles plus the current `rollout_stage`
+6. Use `Procedural Skills` to review digest candidates, promote the reusable ones to draft, flip `enabled/disabled/retired`, record operator feedback, inspect automatic post-task reviews, and run a validation query that shows matched skill titles plus the current `rollout_stage`
 7. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
 8. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
 9. Use `Observation Ledger` to drill into the raw observation history when needed

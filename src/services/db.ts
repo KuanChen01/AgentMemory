@@ -194,6 +194,25 @@ export interface ProceduralSkill {
   created_at: string;
   updated_at: string;
   retired_at: string | null;
+  status_effective_at?: string | null;
+  feedback_summary?: {
+    failure: number;
+    last_feedback_at: string | null;
+    last_outcome: string | null;
+    rejected: number;
+    skipped: number;
+    success: number;
+    total: number;
+  };
+  feedback_history?: ProceduralSkillFeedback[];
+  lifecycle_signal?: {
+    reasons: string[];
+    score: number;
+    state: 'stable' | 'watch' | 'suppressed' | 'retire_candidate';
+  } | null;
+  recommendation_state?: string | null;
+  recommendation_score?: number | null;
+  recommendation_reasons?: string[];
 }
 
 export interface ProceduralSkillInput {
@@ -237,8 +256,57 @@ export interface ProceduralSkillFeedbackInput {
   notes?: string;
 }
 
+export interface ProceduralSkillFeedbackQuery {
+  asOf?: string;
+  limit?: number;
+  projectPath?: string;
+  skillId: string;
+}
+
+export interface PostTaskReview {
+  id: string;
+  project_path: string;
+  source_observation_id: string;
+  source_session_id: string;
+  source_agent_id: string;
+  source_title: string;
+  query_text: string;
+  status: 'open';
+  matched_skill_titles: string[];
+  recommendation_states: string[];
+  bounded_context: unknown;
+  decision_trace: unknown;
+  temporal_diagnostics: unknown;
+  generated_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PostTaskReviewInput {
+  project_path: string;
+  source_observation_id: string;
+  source_session_id: string;
+  source_agent_id: string;
+  source_title: string;
+  query_text: string;
+  matched_skill_titles: string[];
+  recommendation_states: string[];
+  bounded_context: unknown;
+  decision_trace: unknown;
+  temporal_diagnostics: unknown;
+  generated_at?: string;
+}
+
+export interface PostTaskReviewQuery {
+  limit?: number;
+  projectPath: string;
+  sourceObservationId?: string;
+  status?: 'open';
+}
+
 export interface ProceduralSkillSearchResult {
   id: string;
+  project_path: string;
   title: string;
   summary: string;
   trigger_text: string;
@@ -250,9 +318,17 @@ export interface ProceduralSkillSearchResult {
   failure_count: number;
   last_used_at: string | null;
   created_at: string;
+  source_observation_count?: number;
   lexical_score: number;
   vector_score: number;
   hybrid_score: number;
+  status_effective_at?: string | null;
+  feedback_summary?: ProceduralSkill['feedback_summary'];
+  feedback_history?: ProceduralSkillFeedback[];
+  lifecycle_signal?: ProceduralSkill['lifecycle_signal'];
+  recommendation_state?: string | null;
+  recommendation_score?: number | null;
+  recommendation_reasons?: string[];
 }
 
 interface ProceduralSkillStatusEvent {
@@ -517,6 +593,33 @@ export class DatabaseManager {
     this.db.run(`
       CREATE INDEX IF NOT EXISTS idx_procedural_skill_status_events_skill_time
       ON procedural_skill_status_events (skill_id, effective_at DESC)
+    `);
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS post_task_reviews (
+        id TEXT PRIMARY KEY,
+        project_path TEXT NOT NULL,
+        source_observation_id TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        source_agent_id TEXT NOT NULL,
+        source_title TEXT NOT NULL,
+        query_text TEXT NOT NULL,
+        status TEXT NOT NULL,
+        matched_skill_titles_json TEXT NOT NULL,
+        recommendation_states_json TEXT NOT NULL,
+        bounded_context_json TEXT NOT NULL,
+        decision_trace_json TEXT NOT NULL,
+        temporal_diagnostics_json TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(source_observation_id)
+      )
+    `);
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_post_task_reviews_project_generated
+      ON post_task_reviews (project_path, generated_at DESC)
     `);
   }
 
@@ -967,43 +1070,64 @@ export class DatabaseManager {
     ) as any[];
 
     const skills = rows.map((row) => this.parseProceduralSkill(row));
+    const statusEvents = this.getProceduralSkillStatusEventMap(skills.map((skill) => skill.id));
     if (!query.asOf) {
-      return skills
+      const currentSkills = skills
         .sort((left, right) => compareProceduralSkillsByRecency(left, right))
         .slice(0, limit);
+      return Promise.all(
+        currentSkills.map((skill) =>
+          this.hydrateProceduralSkillFeedbackState(
+            {
+              ...skill,
+              status_effective_at: this.getLatestProceduralSkillStatusEffectiveAt(
+                statusEvents.get(skill.id) || [],
+                skill
+              ),
+            },
+            undefined
+          )
+        )
+      );
     }
 
     const statuses = query.statuses?.map((status) => normalizeProceduralSkillStatus(status)) || null;
-    const statusEvents = this.getProceduralSkillStatusEventMap(skills.map((skill) => skill.id));
-    return skills
-      .map((skill) => {
-        const resolvedStatus = this.resolveProceduralSkillStatusAsOf(
-          skill,
-          statusEvents.get(skill.id) || [],
-          query.asOf as string
-        );
-        if (!resolvedStatus) {
-          return null;
-        }
+    const historicalSkills: ProceduralSkill[] = [];
+    for (const skill of skills) {
+      const resolvedStatus = this.resolveProceduralSkillStatusAsOf(
+        skill,
+        statusEvents.get(skill.id) || [],
+        query.asOf as string
+      );
+      if (!resolvedStatus) {
+        continue;
+      }
 
-        const shouldInclude = statuses
-          ? statuses.includes(resolvedStatus)
-          : resolvedStatus !== 'retired';
-        if (!shouldInclude) {
-          return null;
-        }
+      const shouldInclude = statuses
+        ? statuses.includes(resolvedStatus.status)
+        : resolvedStatus.status !== 'retired';
+      if (!shouldInclude) {
+        continue;
+      }
 
-        return {
-          ...skill,
-          status: resolvedStatus,
-          retired_at: resolvedStatus === 'retired'
-            ? skill.retired_at || (query.asOf as string)
-            : null,
-        };
-      })
-      .filter((skill): skill is ProceduralSkill => Boolean(skill))
-      .sort((left, right) => compareProceduralSkillsByRecency(left, right))
-      .slice(0, limit);
+      historicalSkills.push({
+        ...skill,
+        status: resolvedStatus.status,
+        status_effective_at: resolvedStatus.effective_at,
+        retired_at: resolvedStatus.status === 'retired'
+          ? skill.retired_at || (query.asOf as string)
+          : null,
+      });
+    }
+
+    historicalSkills
+      .sort((left, right) => compareProceduralSkillsByRecency(left, right));
+
+    const limitedHistoricalSkills = historicalSkills.slice(0, limit);
+
+    return Promise.all(
+      limitedHistoricalSkills.map((skill) => this.hydrateProceduralSkillFeedbackState(skill, query.asOf))
+    );
   }
 
   public async setProceduralSkillStatus(id: string, status: ProceduralSkillStatus): Promise<ProceduralSkill> {
@@ -1106,6 +1230,39 @@ export class DatabaseManager {
     return this.parseProceduralSkillFeedback(row);
   }
 
+  public async listProceduralSkillFeedback(
+    query: ProceduralSkillFeedbackQuery
+  ): Promise<ProceduralSkillFeedback[]> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const whereParts = ['skill_id = ?'];
+    const params: any[] = [query.skillId];
+
+    if (query.projectPath) {
+      whereParts.push('LOWER(project_path) = LOWER(?)');
+      params.push(this.normalizeProjectPath(query.projectPath));
+    }
+
+    if (query.asOf) {
+      whereParts.push('created_at <= ?');
+      params.push(query.asOf);
+    }
+
+    const limit = query.limit
+      ? Math.max(1, Math.min(200, Math.trunc(Number(query.limit))))
+      : null;
+
+    const rows = this.db.all(
+      `SELECT *
+       FROM procedural_skill_feedback
+       WHERE ${whereParts.join(' AND ')}
+       ORDER BY created_at DESC${limit ? ' LIMIT ?' : ''}`,
+      limit ? [...params, limit] : params
+    ) as any[];
+
+    return rows.map((row) => this.parseProceduralSkillFeedback(row));
+  }
+
   public async searchProceduralSkills(
     projectPath: string,
     queryText: string,
@@ -1138,6 +1295,7 @@ export class DatabaseManager {
 
         return {
           id: skill.id,
+          project_path: skill.project_path,
           title: skill.title,
           summary: skill.summary,
           trigger_text: skill.trigger_text,
@@ -1149,6 +1307,17 @@ export class DatabaseManager {
           failure_count: skill.failure_count,
           last_used_at: skill.last_used_at,
           created_at: skill.created_at,
+          source_observation_count: Array.isArray(skill.source_observation_ids)
+            ? skill.source_observation_ids.length
+            : 0,
+          status_effective_at: skill.status_effective_at || null,
+          feedback_summary: skill.feedback_summary,
+          feedback_history: skill.feedback_history,
+          lifecycle_signal: skill.lifecycle_signal || null,
+          recommendation_state: skill.recommendation_state || null,
+          recommendation_score:
+            typeof skill.recommendation_score === 'number' ? skill.recommendation_score : null,
+          recommendation_reasons: skill.recommendation_reasons || [],
           lexical_score: lexicalScore,
           vector_score: vectorScore,
           hybrid_score: hybridScore,
@@ -1173,6 +1342,116 @@ export class DatabaseManager {
     }
 
     const row = this.db.get(`SELECT COUNT(*) as total FROM procedural_skills`) as any;
+    return Number(row?.total || 0);
+  }
+
+  public async savePostTaskReview(input: PostTaskReviewInput): Promise<PostTaskReview> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+    const generatedAt = input.generated_at || new Date().toISOString();
+
+    this.db.run(
+      `INSERT INTO post_task_reviews (
+        id,
+        project_path,
+        source_observation_id,
+        source_session_id,
+        source_agent_id,
+        source_title,
+        query_text,
+        status,
+        matched_skill_titles_json,
+        recommendation_states_json,
+        bounded_context_json,
+        decision_trace_json,
+        temporal_diagnostics_json,
+        generated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_observation_id) DO UPDATE SET
+        query_text = excluded.query_text,
+        matched_skill_titles_json = excluded.matched_skill_titles_json,
+        recommendation_states_json = excluded.recommendation_states_json,
+        bounded_context_json = excluded.bounded_context_json,
+        decision_trace_json = excluded.decision_trace_json,
+        temporal_diagnostics_json = excluded.temporal_diagnostics_json,
+        generated_at = excluded.generated_at,
+        updated_at = CURRENT_TIMESTAMP`,
+      [
+        randomUUID(),
+        normalizedProjectPath,
+        input.source_observation_id,
+        input.source_session_id,
+        input.source_agent_id,
+        input.source_title,
+        input.query_text,
+        'open',
+        JSON.stringify(input.matched_skill_titles || []),
+        JSON.stringify(input.recommendation_states || []),
+        JSON.stringify(input.bounded_context ?? null),
+        JSON.stringify(input.decision_trace ?? null),
+        JSON.stringify(input.temporal_diagnostics ?? null),
+        generatedAt,
+      ]
+    );
+
+    const row = this.db.get(
+      `SELECT *
+       FROM post_task_reviews
+       WHERE source_observation_id = ?
+       LIMIT 1`,
+      [input.source_observation_id]
+    ) as any;
+
+    if (!row) {
+      throw new Error('Post-task review was not saved');
+    }
+
+    return this.parsePostTaskReview(row);
+  }
+
+  public async listPostTaskReviews(query: PostTaskReviewQuery): Promise<PostTaskReview[]> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const whereParts = [`LOWER(project_path) = LOWER(?)`];
+    const params: any[] = [this.normalizeProjectPath(query.projectPath)];
+
+    if (query.status) {
+      whereParts.push(`status = ?`);
+      params.push(query.status);
+    }
+
+    if (query.sourceObservationId) {
+      whereParts.push(`source_observation_id = ?`);
+      params.push(query.sourceObservationId);
+    }
+
+    const rows = this.db.all(
+      `SELECT *
+       FROM post_task_reviews
+       WHERE ${whereParts.join(' AND ')}
+       ORDER BY generated_at DESC, updated_at DESC
+       LIMIT ?`,
+      [...params, Math.max(1, Math.min(50, Math.trunc(Number(query.limit || 10))))]
+    ) as any[];
+
+    return rows.map((row) => this.parsePostTaskReview(row));
+  }
+
+  public async countPostTaskReviews(projectPath?: string): Promise<number> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    if (projectPath) {
+      const row = this.db.get(
+        `SELECT COUNT(*) as total
+         FROM post_task_reviews
+         WHERE LOWER(project_path) = LOWER(?)`,
+        [this.normalizeProjectPath(projectPath)]
+      ) as any;
+      return Number(row?.total || 0);
+    }
+
+    const row = this.db.get(`SELECT COUNT(*) as total FROM post_task_reviews`) as any;
     return Number(row?.total || 0);
   }
 
@@ -1632,6 +1911,66 @@ export class DatabaseManager {
     };
   }
 
+  private parsePostTaskReview(row: any): PostTaskReview {
+    return {
+      id: row.id,
+      project_path: row.project_path,
+      source_observation_id: row.source_observation_id,
+      source_session_id: row.source_session_id,
+      source_agent_id: row.source_agent_id,
+      source_title: row.source_title,
+      query_text: row.query_text,
+      status: 'open',
+      matched_skill_titles: JSON.parse(row.matched_skill_titles_json),
+      recommendation_states: JSON.parse(row.recommendation_states_json),
+      bounded_context: JSON.parse(row.bounded_context_json),
+      decision_trace: JSON.parse(row.decision_trace_json),
+      temporal_diagnostics: JSON.parse(row.temporal_diagnostics_json),
+      generated_at: row.generated_at,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private async hydrateProceduralSkillFeedbackState(
+    skill: ProceduralSkill,
+    asOf?: string
+  ): Promise<ProceduralSkill> {
+    const feedbackRows = await this.listProceduralSkillFeedback({
+      skillId: skill.id,
+      projectPath: skill.project_path,
+      asOf,
+    });
+    const feedbackSummary = this.summarizeProceduralSkillFeedback(feedbackRows);
+
+    return {
+      ...skill,
+      success_count: feedbackSummary.success,
+      failure_count: feedbackSummary.failure,
+      last_used_at: feedbackSummary.last_feedback_at,
+      feedback_summary: feedbackSummary,
+      feedback_history: feedbackRows.slice(0, 5),
+    };
+  }
+
+  private summarizeProceduralSkillFeedback(feedbackRows: ProceduralSkillFeedback[]) {
+    const summary = {
+      success: 0,
+      failure: 0,
+      rejected: 0,
+      skipped: 0,
+      total: feedbackRows.length,
+      last_feedback_at: feedbackRows[0]?.created_at || null,
+      last_outcome: feedbackRows[0]?.outcome || null,
+    };
+
+    for (const row of feedbackRows) {
+      summary[row.outcome] += 1;
+    }
+
+    return summary;
+  }
+
   private recordProceduralSkillStatusEvent(
     skillId: string,
     projectPath: string,
@@ -1683,23 +2022,43 @@ export class DatabaseManager {
     skill: ProceduralSkill,
     events: ProceduralSkillStatusEvent[],
     asOf: string
-  ): ProceduralSkillStatus | null {
+  ): { effective_at: string | null; status: ProceduralSkillStatus } | null {
     if (!isTimestampOnOrBefore(skill.created_at, asOf)) {
       return null;
     }
 
     let resolvedStatus: ProceduralSkillStatus | null = null;
+    let resolvedEffectiveAt: string | null = null;
     for (const event of events) {
       if (isTimestampOnOrBefore(event.effective_at, asOf)) {
         resolvedStatus = event.status;
+        resolvedEffectiveAt = event.effective_at;
       }
     }
 
     if (resolvedStatus) {
-      return resolvedStatus;
+      return {
+        status: resolvedStatus,
+        effective_at: resolvedEffectiveAt,
+      };
     }
 
-    return this.canTrustProceduralSkillWithoutStatusHistory(skill) ? skill.status : null;
+    return this.canTrustProceduralSkillWithoutStatusHistory(skill)
+      ? {
+          status: skill.status,
+          effective_at: skill.created_at,
+        }
+      : null;
+  }
+
+  private getLatestProceduralSkillStatusEffectiveAt(
+    events: ProceduralSkillStatusEvent[],
+    skill: ProceduralSkill
+  ): string {
+    if (events.length === 0) {
+      return skill.created_at;
+    }
+    return events[events.length - 1].effective_at;
   }
 
   private canTrustProceduralSkillWithoutStatusHistory(skill: ProceduralSkill): boolean {

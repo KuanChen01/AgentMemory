@@ -194,9 +194,9 @@ Windows 下现在有两个本机控制入口：
 管理页提供：
 
 *   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，展示 project / agent 覆盖面，查看/手动运行每日总结并调整 scheduler 设置，同时提供只读的 GitHub Release 更新检查与手动升级指引
-*   **Procedural Skills**：查看 digest `skill_candidates`，将可复用条目提升为 draft，切换 `enabled / disabled / retired` 生命周期状态，记录 success / failure / rejected / skipped 反馈，并用任务级 query 校验当前 `rollout_stage`
+*   **Procedural Skills**：查看 digest `skill_candidates`，将可复用条目提升为 draft，切换 `enabled / disabled / retired` 生命周期状态，记录 success / failure / rejected / skipped 反馈，并在任务级 query 校验旁直接查看 feedback history、evidence、lifecycle、recommendation signals，以及最新自动生成的 post-task review artifacts
 *   **LLM Settings**：切换 `AGENTMEM_LLM_MODEL`，更新 OpenAI-compatible API base URL，保留或替换 API key，并运行实时连接测试
-*   **Project Context**：查看当前 `ProjectContextView`、最近每日总结、渲染后的 startup 文本，以及 payload / summary 健康度指标
+*   **Project Context**：查看当前 `ProjectContextView`、最近每日总结、渲染后的 startup 文本，以及 bounded context package、temporal slice diagnostics 与 policy decision trace 指标
 *   **State Lab**：显式读取和写入 structured state
 *   **Search Diagnostics**：直接查看 hybrid search 的 `hybrid_score`、`fts_score`、`vector_score` 和低信号标题标记
 *   **Observation Ledger**：保留全库台账浏览和 observation 细节 drill-down
@@ -213,14 +213,15 @@ AgentMemory 现在把记忆拆成显式层次：
 现在的 policy brain 已经显式化，不再把策略分散在 hooks 和临时调用点里：
 
 *   `memory-policy.ts` 集中承载读取决策、低信号 ledger 写入决策，以及 procedural skill candidate 的 draft promotion gate。
-*   `memory-query.ts` 是新的任务级记忆解析路径，用来决定该读哪些 layers、何时查 procedural memory，以及如何为宿主 agent 拼出一个有界的 sliding-window contract。
+*   `memory-orchestrator.ts` 是共享的 Stage 2 读取编排层，worker startup context、MCP `get_project_context` 和任务级 query 都复用它。
+*   `memory-query.ts` 现在复用这条共享 orchestrator 路径，决定该读哪些 layers、何时查 procedural memory，并附带 bounded context、temporal diagnostics 和 decision trace。
 
 这一阶段新增的接口：
 
 *   `GET /context?project_path=&limit=&as_of=`：返回 `ProjectContextView` 对象，不再直接返回 observation 数组
 *   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：读取当前或历史结构化状态
 *   `POST /state`：显式写入结构化状态
-*   `POST /memory/query`：返回 task query 的 policy 决策、分层上下文、匹配 observation、匹配 procedural skills，以及 sliding-window contract
+*   `POST /memory/query`：返回 task query 的 policy 决策、分层上下文、匹配 observation、匹配 procedural skills，以及 bounded context package、temporal slice diagnostics 和 decision trace
 *   `POST /search` 和 `POST /admin/api/search`：现在都支持可选 `as_of`，用于历史时间切片
 *   MCP 工具：`get_project_context`、`query_memory`、`get_memory_state`、`set_memory_state`、`list_procedural_skills`、`promote_skill_candidate`、`set_procedural_skill_status`、`record_procedural_skill_feedback`
 
@@ -229,10 +230,13 @@ AgentMemory 现在把记忆拆成显式层次：
 *   `as_of`：时间切片下的重建边界
 *   `current_state`
 *   `daily_digests`：最近成功的每日总结，已裁剪为 startup 可用的紧凑结构
-*   `procedural_skills`：来自一等 procedural memory 的 `enabled` / `draft` 技能
+*   `procedural_skills`：来自一等 procedural memory 的 `enabled` / `draft` 技能，并在相关路径上带出 feedback summary/history、lifecycle signal 和 recommendation state
 *   `summary_blocks`：基于最近 observation 生成，但会过滤低信号标题并合并重复标题
 *   `recent_observations`：面向 startup 的精简元数据列表，只保留 `id`、`title`、`created_at`、`agent_id`，不再附带完整 narrative 或 embedding
-*   `sliding_window`：面向宿主 agent 的有界近期上下文契约
+*   `sliding_window`：作为 Stage 2 bounded context package 的兼容别名继续保留
+*   `bounded_context`：面向宿主 agent 的 bounded context package，包含 layer budgets、trimming order、rendered package 和 host responsibilities
+*   `temporal_diagnostics`：逐层说明 `as_of` / latest 时间切片语义
+*   `decision_trace`：解释当前 policy、procedural recommendation 和 bounded context 为什么这样形成
 *   `memory_layers`：显式区分 metadata / profile / recent-summary / ledger / procedural / window
 *   `generated_at`
 
@@ -245,12 +249,13 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 *   `GET /admin/api/context?project_path=&limit=`：返回
     *   `view`：原始 `ProjectContextView`
     *   `rendered`：与 `renderProjectContextView(view)` 一致的启动文本
-    *   `metrics`：`payloadBytes`、`summaryCount`、`lowSignalCount`、`duplicateTitleCount`
+    *   `metrics`：`payloadBytes`、`summaryCount`、`lowSignalCount`、`duplicateTitleCount`、`proceduralSkillCount`、`slidingWindowEntryCount`、`boundedContextBudget`、`boundedContextCharsUsed`、`boundedContextTrimmedEntries`、`temporalDiagnosticLayerCount`、`decisionTraceStepCount`
 *   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=`：供 workbench 读取 structured state
 *   `POST /admin/api/state`：供 workbench 显式写入 structured state fact
 *   `POST /admin/api/search`：返回当前 project 的 hybrid search 原始诊断分数，但不在这一步修改排序算法；同时支持可选 `as_of`
-*   `POST /admin/api/memory/query`：暴露 policy-driven 的任务级记忆解析路径
-*   `GET /admin/api/skills?project_path=&status=&as_of=&limit=`：读取当前 procedural skills
+*   `POST /admin/api/memory/query`：暴露 policy-driven 的任务级记忆解析路径，并返回 bounded context packaging、temporal diagnostics 与 decision trace
+*   `GET /admin/api/skills?project_path=&status=&as_of=&limit=`：读取当前 procedural skills，并附带 feedback history、evidence summary、lifecycle signal 和 recommendation metadata
+*   `GET /admin/api/post-task-reviews?project_path=&limit=`：读取真实 observation 写路径自动生成的 post-task review artifacts，其中包含 matched skills、recommendation states、bounded context、temporal diagnostics 和 decision trace
 *   `POST /admin/api/skills/promote-candidate`：把 digest 里的 `skill_candidate` 显式提升成 draft procedural skill
 *   `POST /admin/api/skills/status`：把 procedural skill 切到 `draft`、`enabled`、`disabled` 或 `retired`
 *   `POST /admin/api/skills/feedback`：为 procedural skill 记录 success / failure / rejected / skipped 反馈
@@ -285,7 +290,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 3. 通过 `Read Memory` / `Write Memory` 开关切换运行时策略
 4. 在 Runtime 面板的 release 卡片中对比当前 checkout 与最新正式 GitHub Release，并选择推荐的手动升级路径
 5. 在 Runtime 面板的每日总结卡片中查看最近项目 digest、为指定本地日期手动运行一次总结，或调整自动 scheduler 的启停、运行时间、时区和 catch-up 窗口
-6. 在 `Procedural Skills` 中评审 digest 候选技能，把可复用条目提升为 draft，切换 `enabled / disabled / retired`，记录操作反馈，并运行验证查询以确认命中的 skill titles 与当前 `rollout_stage`
+6. 在 `Procedural Skills` 中评审 digest 候选技能，把可复用条目提升为 draft，切换 `enabled / disabled / retired`，记录操作反馈，检查自动生成的 post-task reviews，并运行验证查询以确认命中的 skill titles 与当前 `rollout_stage`
 7. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
 8. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
 9. 如需深挖原始 observation，再切到 `Observation Ledger`

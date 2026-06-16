@@ -23,7 +23,7 @@ export interface DigestObservationSelectionOptions {
   limit?: number;
 }
 
-export type MemoryReadMode = 'startup' | 'task_query' | 'drill_down';
+export type MemoryReadMode = 'startup' | 'task_query' | 'drill_down' | 'post_task';
 
 export type MemoryLayerName =
   | 'metadata'
@@ -67,6 +67,21 @@ export interface ObservationWritePolicyInput {
 export interface ObservationWritePolicyDecision {
   action: 'record' | 'record_low_signal' | 'skip';
   reasons: string[];
+}
+
+export interface PostTaskReviewPolicyInput {
+  observation: Pick<Observation, 'facts' | 'files_modified' | 'narrative' | 'title'>;
+  source: 'tool_log';
+}
+
+export interface PostTaskReviewPolicyDecision {
+  action: 'review' | 'skip';
+  mode: 'post_task';
+  observationLimit: number;
+  reasons: string[];
+  skillLimit: number;
+  queryText: string;
+  windowCharBudget: number;
 }
 
 export interface ProceduralSkillCandidate {
@@ -177,9 +192,9 @@ export function decideMemoryReadPolicy(
   }
 
   const layers = new Set<MemoryLayerName>(['metadata', 'structured_profile']);
-  let shouldUseDailyDigests = mode === 'startup';
-  let shouldUseObservationSearch = mode !== 'startup';
-  let shouldUseProceduralSkills = mode === 'startup';
+  let shouldUseDailyDigests = mode === 'startup' || mode === 'post_task';
+  let shouldUseObservationSearch = mode === 'task_query' || mode === 'drill_down';
+  let shouldUseProceduralSkills = mode === 'startup' || mode === 'post_task';
   let shouldUseSlidingWindow = true;
 
   if (mode === 'startup') {
@@ -187,6 +202,13 @@ export function decideMemoryReadPolicy(
     layers.add('observation_ledger');
     layers.add('sliding_window');
     reasons.push('Startup mode always hydrates layered context for host agents.');
+  }
+
+  if (mode === 'post_task') {
+    layers.add('recent_summary');
+    layers.add('procedural_memory');
+    layers.add('sliding_window');
+    reasons.push('Post-task mode prepares reviewable follow-up context without forcing a new observation search.');
   }
 
   if (STATE_KEYWORDS.test(queryText)) {
@@ -282,6 +304,106 @@ export function decideObservationWritePolicy(
   return {
     action: 'skip',
     reasons: ['Observation has no durable signal after summarization.'],
+  };
+}
+
+export function decidePostTaskReviewPolicy(
+  input: PostTaskReviewPolicyInput
+): PostTaskReviewPolicyDecision {
+  const observation = input.observation;
+  const title = String(observation.title || '').trim();
+  const facts = Array.isArray(observation.facts)
+    ? observation.facts.map((fact) => String(fact).trim()).filter(Boolean)
+    : [];
+  const filesModified = Array.isArray(observation.files_modified)
+    ? observation.files_modified.map((file) => String(file).trim()).filter(Boolean)
+    : [];
+  const narrative = String(observation.narrative || '').trim();
+  const reasons: string[] = [];
+  const hasFiles = filesModified.length > 0;
+  const hasFacts = facts.length > 0;
+  const hasNarrative = narrative.length >= 48;
+  const lowSignalTitle = isLowSignalTitle(title);
+  const rawExecutionTitle = /^raw execution:/i.test(title);
+
+  if (!title) {
+    return {
+      action: 'skip',
+      mode: 'post_task',
+      observationLimit: 0,
+      reasons: ['Post-task review needs a source title to produce a traceable follow-up artifact.'],
+      skillLimit: 0,
+      queryText: '',
+      windowCharBudget: 0,
+    };
+  }
+
+  if (rawExecutionTitle && !hasFiles) {
+    return {
+      action: 'skip',
+      mode: 'post_task',
+      observationLimit: 0,
+      reasons: ['Fallback raw execution entries stay in the ledger but do not automatically create review artifacts.'],
+      skillLimit: 0,
+      queryText: '',
+      windowCharBudget: 0,
+    };
+  }
+
+  if (lowSignalTitle && !hasFiles && !hasFacts) {
+    return {
+      action: 'skip',
+      mode: 'post_task',
+      observationLimit: 0,
+      reasons: ['Low-signal observations without durable evidence do not trigger automatic post-task review.'],
+      skillLimit: 0,
+      queryText: '',
+      windowCharBudget: 0,
+    };
+  }
+
+  if (!hasFiles && !hasFacts && !hasNarrative) {
+    return {
+      action: 'skip',
+      mode: 'post_task',
+      observationLimit: 0,
+      reasons: ['Post-task review runs only when the observation contains durable task evidence.'],
+      skillLimit: 0,
+      queryText: '',
+      windowCharBudget: 0,
+    };
+  }
+
+  if (hasFiles) {
+    reasons.push('Modified files imply durable task output worth a reviewable post-task package.');
+  }
+  if (hasFacts) {
+    reasons.push('Structured facts provide enough signal to drive procedural recommendation and context packaging.');
+  }
+  if (hasNarrative) {
+    reasons.push('Narrative context is long enough to justify automatic post-task review.');
+  }
+
+  const queryParts = [
+    `After finishing "${title}", what procedures, rollout state, and bounded context should be reviewed next?`,
+  ];
+
+  if (facts.length > 0) {
+    queryParts.push(`Facts: ${facts.slice(0, 3).join('; ')}`);
+  }
+
+  if (filesModified.length > 0) {
+    queryParts.push(`Files modified: ${filesModified.slice(0, 4).join(', ')}`);
+  }
+
+  return {
+    action: 'review',
+    mode: 'post_task',
+    observationLimit: 4,
+    reasons,
+    skillLimit: 4,
+    queryText: queryParts.join(' '),
+    windowCharBudget: 1500,
   };
 }
 

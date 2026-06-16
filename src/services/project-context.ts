@@ -1,5 +1,6 @@
 import { DatabaseManager } from './db';
 import { createProjectContextView, ProjectContextView } from './context-view';
+import { enrichProceduralSkillForOps } from './procedural-memory';
 import { isTimestampOnOrBefore } from './timestamps';
 
 export const DEFAULT_PROJECT_CONTEXT_LIMIT = 10;
@@ -8,7 +9,9 @@ export const MAX_PROJECT_CONTEXT_LIMIT = 50;
 export interface LoadProjectContextViewOptions {
   asOf?: string;
   includeProceduralSkills?: boolean;
+  mode?: string;
   proceduralSkillLimit?: number;
+  queryText?: string | null;
   windowCharBudget?: number;
 }
 
@@ -36,7 +39,7 @@ export async function loadProjectContextView(
 ): Promise<ProjectContextView> {
   const normalizedLimit = parseProjectContextLimit(limit);
   const asOf = options.asOf;
-  const [stateFacts, timeline, dailyDigests, proceduralSkills] = await Promise.all([
+  const [stateFacts, timeline, dailyDigests, proceduralSkillRows] = await Promise.all([
     dbManager.getProjectStateFacts(projectPath, asOf),
     dbManager.getTimeline(projectPath),
     dbManager.listDailyMemoryDigests({
@@ -54,6 +57,9 @@ export async function loadProjectContextView(
           asOf,
         }),
   ]);
+  const proceduralSkills = await Promise.all(
+    proceduralSkillRows.map((skill) => enrichProceduralSkillForOps(dbManager, skill, { asOf }))
+  );
 
   const filteredTimeline = asOf
     ? timeline.filter((observation) => {
@@ -72,7 +78,9 @@ export async function loadProjectContextView(
     dailyDigests,
     {
       asOf,
+      mode: options.mode,
       proceduralSkills,
+      queryText: options.queryText,
       windowCharBudget: options.windowCharBudget,
     }
   );

@@ -2,12 +2,17 @@ import { ProjectContextView, isLowSignalTitle, normalizeTitleKey, renderProjectC
 import { SearchResult } from './db';
 
 export interface ProjectContextMetrics {
+  boundedContextBudget: number;
+  boundedContextCharsUsed: number;
+  boundedContextTrimmedEntries: number;
+  decisionTraceStepCount: number;
   duplicateTitleCount: number;
   lowSignalCount: number;
   payloadBytes: number;
   proceduralSkillCount: number;
   slidingWindowEntryCount: number;
   summaryCount: number;
+  temporalDiagnosticLayerCount: number;
 }
 
 export interface AdminProjectContextPayload {
@@ -46,11 +51,16 @@ export function getProjectContextMetrics(view: ProjectContextView): ProjectConte
 
   return {
     payloadBytes: Buffer.byteLength(JSON.stringify(view), 'utf8'),
+    boundedContextBudget: view.bounded_context.recommended_char_budget,
+    boundedContextCharsUsed: view.bounded_context.char_budget_used,
+    boundedContextTrimmedEntries: view.bounded_context.trimmed_entry_count,
+    decisionTraceStepCount: view.decision_trace?.steps.length || 0,
     summaryCount: view.summary_blocks.length,
     lowSignalCount,
     duplicateTitleCount,
     proceduralSkillCount: view.procedural_skills.length,
     slidingWindowEntryCount: view.sliding_window.window_entries.length,
+    temporalDiagnosticLayerCount: view.temporal_diagnostics?.layer_diagnostics.length || 0,
   };
 }
 

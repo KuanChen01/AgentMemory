@@ -21,15 +21,17 @@ import {
 } from './context-view';
 import { getEmbedding } from './embedding';
 import { resolveMemoryQuery } from './memory-query';
+import { orchestrateMemoryRead } from './memory-orchestrator';
 import { decideObservationWritePolicy } from './memory-policy';
 import {
-  loadProjectContextView,
   parseProjectContextLimit,
 } from './project-context';
 import {
+  enrichProceduralSkillForOps,
   promoteProceduralSkillCandidate,
   recordProceduralSkillFeedback,
 } from './procedural-memory';
+import { runAutomaticPostTaskReview } from './post-task-review';
 import {
   normalizeRuntimePolicy,
   READ_DISABLED_MESSAGE,
@@ -145,9 +147,15 @@ function normalizeOptionalString(value: unknown): string | undefined {
 }
 
 async function buildProjectContext(projectPath: string, limit: number, asOf?: string) {
-  return loadProjectContextView(dbManager, projectPath, limit, {
+  const orchestrated = await orchestrateMemoryRead(dbManager, {
     asOf,
+    limit,
+    mode: 'startup',
+    projectPath,
+    queryText: '',
+    skillLimit: Math.max(3, Math.min(limit, 6)),
   });
+  return orchestrated.project_context;
 }
 
 function sendContextReadDisabled(res: Response, projectPath: string) {
@@ -270,7 +278,7 @@ app.get('/admin', adminOnlyGuard, async (_req, res) => {
 
 app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
   try {
-    const [policy, observations, sessions, projects, agents, currentStateFacts, dailyDigests, proceduralSkills] = await Promise.all([
+    const [policy, observations, sessions, projects, agents, currentStateFacts, dailyDigests, proceduralSkills, postTaskReviews] = await Promise.all([
       dbManager.getRuntimePolicy(),
       dbManager.countObservations(),
       dbManager.countSessions(),
@@ -279,6 +287,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
       dbManager.countCurrentStateFacts(),
       dbManager.countDailyMemoryDigests(),
       dbManager.countProceduralSkills(),
+      dbManager.countPostTaskReviews(),
     ]);
 
     res.json({
@@ -291,6 +300,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
         currentStateFacts,
         dailyDigests,
         proceduralSkills,
+        postTaskReviews,
       },
       release: buildReleaseManifest(),
       projects,
@@ -517,12 +527,19 @@ app.get('/admin/api/skills', adminOnlyGuard, async (req, res) => {
       return sendReadDisabled(res, 'skills');
     }
 
-    const skills = await dbManager.listProceduralSkills({
+    const skillRows = await dbManager.listProceduralSkills({
       projectPath: normalizeProjectPath(projectPath),
       statuses: normalizeSkillStatuses(req.query.status) as any,
       limit: parseSearchLimit(req.query.limit, 10),
       asOf: normalizeOptionalString(req.query.as_of),
     });
+    const skills = await Promise.all(
+      skillRows.map((skill) =>
+        enrichProceduralSkillForOps(dbManager, skill, {
+          asOf: normalizeOptionalString(req.query.as_of),
+        })
+      )
+    );
     res.json({
       project_path: normalizeProjectPath(projectPath),
       skills,
@@ -530,6 +547,32 @@ app.get('/admin/api/skills', adminOnlyGuard, async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error listing admin procedural skills:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/post-task-reviews', adminOnlyGuard, async (req, res) => {
+  const projectPath = req.query.project_path as string;
+  if (!projectPath) {
+    return res.status(400).json({ error: 'Missing project_path parameter' });
+  }
+
+  try {
+    if (!(await isReadEnabled())) {
+      return sendReadDisabled(res, 'reviews');
+    }
+
+    const reviews = await dbManager.listPostTaskReviews({
+      projectPath: normalizeProjectPath(projectPath),
+      limit: parseSearchLimit(req.query.limit, 8),
+    });
+    res.json({
+      project_path: normalizeProjectPath(projectPath),
+      reviews,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('Error listing admin post-task reviews:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1169,9 +1212,19 @@ ${log.output.substring(0, 20000)}
     }
 
     await dbManager.saveObservation(observation);
+    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation);
     console.log(
       `[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}" (${writeDecision.action})`
     );
+    if (postTaskResult.review) {
+      console.log(
+        `[Memory] Saved post-task review for observation ${observation.id}: "${observation.title}"`
+      );
+    } else {
+      console.log(
+        `[Memory] Skipped post-task review for observation ${observation.id}: ${postTaskResult.decision.reasons.join(' | ')}`
+      );
+    }
 
   } catch (err: any) {
     console.error(`[Error] Failed LLM summarization: ${err.message}. Falling back to raw save.`);
@@ -1204,6 +1257,12 @@ async function saveMockObservation(log: QueuedToolLog, reason: string) {
   });
   if (writeDecision.action !== 'skip') {
     await dbManager.saveObservation(observation);
+    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation);
+    if (postTaskResult.review) {
+      console.log(
+        `[Memory] Saved fallback post-task review for observation ${observation.id}: "${observation.title}"`
+      );
+    }
   }
 }
 

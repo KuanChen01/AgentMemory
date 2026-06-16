@@ -126,7 +126,7 @@ test('resolveMemoryQuery applies policy, time slicing, layered context, and proc
       generated_at: '2026-06-16T23:50:00.000Z',
     });
 
-    await db.saveProceduralSkill({
+    const skill = await db.saveProceduralSkill({
       project_path: 'E:/Repo/A',
       title: 'Bootstrap workbench',
       summary: 'Reusable workbench startup steps.',
@@ -137,6 +137,14 @@ test('resolveMemoryQuery applies policy, time slicing, layered context, and proc
       confidence: 0.85,
       embedding: [1, 1, 0],
     });
+    db.db.run(
+      'UPDATE procedural_skills SET created_at = ?, updated_at = ? WHERE id = ?',
+      ['2026-06-15T05:00:00.000Z', '2026-06-15T05:00:00.000Z', skill.id]
+    );
+    db.db.run(
+      'UPDATE procedural_skill_status_events SET effective_at = ? WHERE skill_id = ?',
+      ['2026-06-15T05:00:00.000Z', skill.id]
+    );
 
     const result = await resolveMemoryQuery(db, {
       projectPath: 'E:/Repo/A',

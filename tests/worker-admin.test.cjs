@@ -174,6 +174,41 @@ async function startMockLlmServer() {
   };
 }
 
+async function startMockObservationSummaryServer(observationPayload) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      requests.push({
+        body: body ? JSON.parse(body) : {},
+        headers: req.headers,
+        url: req.url,
+      });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(observationPayload),
+            },
+          },
+        ],
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  return {
+    close: () => new Promise((resolve) => server.close(resolve)),
+    requests,
+    url: `http://127.0.0.1:${address.port}/v1`,
+  };
+}
+
 async function startMockReleaseServer(payload, statusCode = 200) {
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -282,6 +317,24 @@ function cleanupDb(dbPath) {
   }
 }
 
+async function waitForPostTaskReviews(port, projectPath, expectedCount = 1) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 15000) {
+    const response = await fetch(
+      `http://127.0.0.1:${port}/admin/api/post-task-reviews?project_path=${encodeURIComponent(projectPath)}&limit=10`
+    );
+    if (response.ok) {
+      const payload = await response.json();
+      if (Array.isArray(payload.reviews) && payload.reviews.length >= expectedCount) {
+        return payload;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error('Timed out waiting for post-task reviews.');
+}
+
 test('worker serves admin UI and admin APIs', async () => {
   const dbPath = makeDbPath();
   const port = makePort();
@@ -322,6 +375,7 @@ test('worker serves admin UI and admin APIs', async () => {
     assert.match(adminHtml, /id="proceduralFeedbackButton"/);
     assert.match(adminHtml, /id="proceduralQueryButton"/);
     assert.match(adminHtml, /id="proceduralQueryResult"/);
+    assert.match(adminHtml, /id="proceduralPostTaskReviewList"/);
     assert.match(adminHtml, /llmSettingsPanel/);
     assert.match(adminHtml, /id="llmModelInput"/);
     assert.match(adminHtml, /id="llmTestButton"/);
@@ -784,6 +838,13 @@ test('worker admin exposes policy-driven memory query and procedural skill lifec
     const feedbackPayload = await feedbackResponse.json();
     assert.equal(feedbackPayload.feedback.outcome, 'success');
 
+    const refreshedSkillsResponse = await fetch(`http://127.0.0.1:${port}/admin/api/skills?project_path=${encodeURIComponent('E:/Repo/A')}`);
+    assert.equal(refreshedSkillsResponse.status, 200);
+    const refreshedSkillsPayload = await refreshedSkillsResponse.json();
+    assert.equal(refreshedSkillsPayload.skills[0].feedback_summary.success, 1);
+    assert.equal(refreshedSkillsPayload.skills[0].feedback_history.length, 1);
+    assert.equal(refreshedSkillsPayload.skills[0].lifecycle_signal.state, 'stable');
+
     const queryResponse = await fetch(`http://127.0.0.1:${port}/admin/api/memory/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -802,9 +863,103 @@ test('worker admin exposes policy-driven memory query and procedural skill lifec
     assert.match(queryPayload.rendered, /Policy Resolution/);
     assert.match(queryPayload.rendered, /Bootstrap workbench/);
     assert.ok(queryPayload.project_context.sliding_window.window_entries.length > 0);
+    assert.ok(queryPayload.decision_trace.steps.length >= 3);
+    assert.equal(queryPayload.temporal_diagnostics.future_protection, true);
+    assert.ok(queryPayload.bounded_context.char_budget_used > 0);
+    assert.ok(queryPayload.procedural_skills[0].recommendation_reasons.length > 0);
   } finally {
     await stopWorker(child, port);
     cleanupDb(dbPath);
+  }
+});
+
+test('worker tool ingestion creates automatic post-task reviews visible in admin', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  const envPath = path.join(os.tmpdir(), `agentmemory-worker-post-task-${randomUUID()}.env`);
+  await seedDatabase(dbPath);
+
+  const previousDbPath = process.env.AGENTMEM_DB_PATH;
+  process.env.AGENTMEM_DB_PATH = dbPath;
+  const db = new DatabaseManager();
+  await db.initialize();
+  await db.saveProceduralSkill({
+    project_path: 'E:/Repo/A',
+    title: 'Bootstrap workbench',
+    summary: 'Reusable steps for starting the local workbench and checking rollout state.',
+    trigger_text: 'when the task is to bootstrap the local workbench',
+    steps: ['Run npm run build', 'Run npm run workbench -- --no-open'],
+    tags: ['workbench', 'bootstrap'],
+    status: 'enabled',
+    confidence: 0.85,
+    embedding: [1, 0, 0],
+  });
+  db.close();
+  if (previousDbPath === undefined) {
+    delete process.env.AGENTMEM_DB_PATH;
+  } else {
+    process.env.AGENTMEM_DB_PATH = previousDbPath;
+  }
+
+  const mockObservationLlm = await startMockObservationSummaryServer({
+    title: 'Bootstrap workbench and verify rollout stage',
+    narrative: 'Completed the local workbench bootstrap flow and verified the rollout stage for the current repo.',
+    facts: ['Ran npm run build successfully.', 'Ran npm run workbench -- --no-open.', 'Verified the current rollout stage.'],
+    concepts: ['workbench', 'rollout'],
+    files_read: ['README.md'],
+    files_modified: ['obsiguide.md'],
+  });
+  fs.writeFileSync(envPath, [
+    'AGENTMEM_LLM_API_KEY=post-task-token-1234',
+    `AGENTMEM_LLM_API_URL=${mockObservationLlm.url}`,
+    'AGENTMEM_LLM_MODEL=mock-post-task-model',
+    'AGENTMEM_LLM_DISABLE_JSON_MODE=false',
+    '',
+  ].join('\n'));
+
+  const child = await startWorkerWithEnv(dbPath, port, {
+    AGENTMEM_ENV_PATH: envPath,
+  });
+
+  try {
+    const toolResponse = await fetch(`http://127.0.0.1:${port}/tools`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: randomUUID(),
+        project_path: 'E:/Repo/A',
+        agent_id: 'codex',
+        tool_name: 'shell',
+        input: 'npm run build && npm run workbench -- --no-open',
+        output: 'Build and workbench bootstrap completed successfully.',
+        success: true,
+      }),
+    });
+    assert.equal(toolResponse.status, 200);
+    const toolPayload = await toolResponse.json();
+    assert.equal(toolPayload.success, true);
+
+    const reviewsPayload = await waitForPostTaskReviews(port, 'E:/Repo/A', 1);
+    assert.equal(reviewsPayload.project_path, 'E:/Repo/A');
+    assert.ok(Array.isArray(reviewsPayload.reviews));
+    assert.ok(reviewsPayload.reviews.length >= 1);
+    assert.equal(reviewsPayload.reviews[0].source_title, 'Bootstrap workbench and verify rollout stage');
+    assert.match(reviewsPayload.reviews[0].query_text, /procedures, rollout state, and bounded context/i);
+    assert.ok(reviewsPayload.reviews[0].matched_skill_titles.includes('Bootstrap workbench'));
+    assert.ok(Array.isArray(reviewsPayload.reviews[0].decision_trace.steps));
+    assert.ok(reviewsPayload.reviews[0].decision_trace.steps.some((step) => step.step === 'bounded_context'));
+    assert.equal(reviewsPayload.reviews[0].temporal_diagnostics.future_protection, true);
+    assert.ok(reviewsPayload.reviews[0].bounded_context.char_budget_used > 0);
+    assert.ok(mockObservationLlm.requests.some((request) => request.url === '/v1/chat/completions'));
+
+    const overviewResponse = await fetch(`http://127.0.0.1:${port}/admin/api/overview`);
+    const overviewPayload = await overviewResponse.json();
+    assert.ok(overviewPayload.stats.postTaskReviews >= 1);
+  } finally {
+    await stopWorker(child, port);
+    await mockObservationLlm.close();
+    cleanupDb(dbPath);
+    fs.rmSync(envPath, { force: true });
   }
 });
 

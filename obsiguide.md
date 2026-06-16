@@ -46,9 +46,17 @@
   - 按需提升 durable Issue、Decision、Knowledge 或 Experiment 笔记
 
 ## Current Goal
-- 当前目标已切换为围绕 repo 根目录 `taskgoal.md` 定义的五项差距推进下一阶段 AgentMemory 优化：补强显式 `policy brain`、落地第一版 `procedural memory`、把 `temporal memory` 扩展到统一查询路径、显式化 memory layers，并补上 sliding-window contract；本次先完成 repo-local goal artifact，下一步交给 Codex `/goal` 模式执行。
+- 当前目标仍以 repo 根目录 `taskgoal_stage2.md` 为准；当前已把 Stage 2 的共享 read orchestrator、feedback-aware procedural recommendation、temporal invariant、bounded context package 与 `/admin` diagnostics 推进成真实可运行实现，后续重点转为在不破坏四端集成与 reviewable-before-promotion 原则的前提下继续硬化阈值、排序和 operator workflow。该 goal artifact 保持 repo-local，不同步进 vault。
 
 ## Current State
+- Stage 2 共享读取编排已落地：新增 `src/services/memory-orchestrator.ts`，worker `/context`、MCP `get_project_context` 与 `POST /memory/query` / MCP `query_memory` 现在复用同一条 policy-driven orchestration path，而不是各自手工拼装 layer 读取。
+- `ProjectContextView` 已升级为 Stage 2 语义：除兼容保留的 `sliding_window` 外，现在显式返回 `bounded_context`、`temporal_diagnostics` 与 `decision_trace`；bounded context package 会给出 layer budgets、trimming order、rendered package 与 host responsibilities。
+- procedural memory 的历史语义已补成系统级 invariant：`as_of` 读取会重建 skill status event 与 feedback history，不再把未来 feedback/status 泄漏回过去；同一路径也会产出 feedback-aware recommendation / lifecycle signals（`recommended` / `watch` / `suppressed` / `retire_candidate`）。
+- `/admin` 的 Stage 2 diagnostics 已在真实 UI 可见：`Procedural Skills` 会显示 feedback history、source evidence、lifecycle、recommendation；`Project Context` / query validation 会显示 bounded context metrics、temporal slice diagnostics 与 policy decision trace。
+- 真实写路径现在也进入 Stage 2 闭环：worker `/tools` 在 observation 落库后会自动运行 `post_task` policy，生成可审阅的 `post_task_reviews` artifact，并通过 `/admin/api/post-task-reviews` 与 `Procedural Skills` 面板展示 query text、matched skill titles / recommendation states、bounded context、temporal diagnostics 和 decision trace。
+- 已完成两条真实路径 smoke：真实 `http://127.0.0.1:38888/admin` browser smoke 确认 Stage 2 diagnostics 可见，`$env:AGENTMEM_PORT='38888'; node .\dist\hooks\codex-session-start.js` 也确认 Codex hook startup path 会输出 bounded context package、temporal slice diagnostics 与 decision trace。
+- 当前源码与分发产物验证已通过 `npm run build`、`node --test tests/*.test.cjs`（90/90 通过）、以及真实 `/tools -> /admin/api/post-task-reviews` host-path smoke，说明 Stage 2 已具备至少一条自动 policy-driven memory loop，而不是只停在测试或手工 MCP 调用。
+- 已新增 repo 根目录 `taskgoal_stage2.md`，将下一个阶段的目标从“补齐视频里的核心架构组件”推进到“成熟生产级 agentic memory 闭环”，并把差距聚焦到 Stage 2 的 orchestrator、procedural learning loop、temporal invariant、bounded context package 与 host integration / ops visibility。
 - `/admin` 现已新增独立 `Procedural Skills` 顶层工作区，采用共享 toolbar（`project`、`local_date`、`status`、`as_of`、`limit`）+ 双栏布局，把 digest candidate review、skills library、skill detail、feedback submission 和 memory query validation 收敛到同一条 operator 流程里；v1 全程复用既有 admin API，没有新增 HTTP 或 MCP endpoint。
 - `Procedural Skills` workbench 的 live browser smoke 已在真实 `http://127.0.0.1:38888/admin` 上完成：成功切换到新 tab、选择 `E:/Kuan/Projects/Codex/AgentMemory`、从 candidate 卡片 promote draft、在详情区切到 `enabled`、提交 success feedback、运行 validation query，并确认 UI 返回的 `rollout_stage` 仍是 `phase2-antigravity-startup-helper`。
 - 为避免把本次 UI smoke 留成额外的启用态重复技能，smoke 里新 promote 的重复 `Procedural skill lifecycle management` 已在验证完 promote -> enabled -> feedback 后切到 `retired`；当前 validation query 再次返回的命中技能标题已收敛回 `Procedural skill lifecycle management` 与 `Policy-driven procedural memory query` 两条。
@@ -141,8 +149,11 @@
 
 ## Verified Commands
 - `npm run build`
+- `node --test tests/*.test.cjs`
+- `$env:AGENTMEM_PORT='38888'; node .\dist\hooks\codex-session-start.js`
 - `cmd /c start-workbench.cmd restart --no-open`
 - focused browser smoke on `http://127.0.0.1:38888/admin` for `Procedural Skills` tab: candidate promote -> status enable -> feedback submit -> query validation -> smoke skill retire cleanup
+- focused browser smoke on `http://127.0.0.1:38888/admin` for Stage 2 diagnostics: query validation -> matched skill evidence -> bounded context package -> temporal slice diagnostics -> decision trace
 - `npm run workbench -- --no-open`
 - `node dist/bin/cli.js install`
 - `node dist/bin/cli.js start`
@@ -159,6 +170,7 @@
 - `node --test tests\embedding-config.test.cjs`
 - `node --test tests\mcp-state.test.cjs`
 - `node --test tests\worker-admin.test.cjs`
+- real host-path smoke: start `dist/services/worker.js` on a temp port with a mock summarization endpoint, `POST /tools`, then `GET /admin/api/post-task-reviews?project_path=E:/Repo/Stage2Smoke&limit=10`
 - `node --test tests/db-daily-digest.test.cjs tests/memory-policy.test.cjs tests/daily-digest.test.cjs tests/daily-digest-scheduler.test.cjs tests/context-view.test.cjs tests/context-worker.test.cjs tests/mcp-context.test.cjs tests/worker-admin.test.cjs`
 - `node --test tests/db-daily-digest-scheduler-config.test.cjs tests/daily-digest-scheduler.test.cjs tests/worker-admin.test.cjs`
 - `node --test tests\mcp-policy.test.cjs`
@@ -200,6 +212,12 @@
 - `Procedural Skills` MVP 现已落地，但 v1 仍没有 feedback history drill-down、candidate/source timeline、或 query/result score 明细；是否继续做二期纵深面板仍待决定。
 
 ## Latest Durable Changes
+- 已新增共享 `src/services/memory-orchestrator.ts`，把 worker `/context`、MCP `get_project_context`、HTTP `/memory/query` 与 MCP `query_memory` 收敛到同一条 Stage 2 policy/orchestration path，并让至少一条真实 host startup path 不再只是测试内模拟。
+- `ProjectContextView` 已升级为 bounded context package contract：在保留 `sliding_window` 兼容别名的同时，新增 `bounded_context`、`temporal_diagnostics` 与 `decision_trace`，使 host 与 `/admin` 都能看到“当前为何返回这些内容”。
+- procedural memory 现在具备 feedback-aware recommendation / evidence / retirement 闭环的一套可运行实现：historical `as_of` 读取会重建 feedback summary/history，query 结果会带 recommendation state，`/admin` 也能直接查看 skill evidence、feedback 与 lifecycle signal。
+- `/admin` Stage 2 diagnostics 已补齐并完成 live smoke：context metrics 现在包含 bounded context budget/used/trimmed、procedural skill count、temporal diagnostic layer count、decision trace step count；memory query validation 也会回显同一套 bounded context / temporal / decision data。
+- worker `/tools` 真实写路径现已自动生成 reviewable `post_task_reviews` artifacts：新增 `src/services/post-task-review.ts`、SQLite `post_task_reviews` 表、`GET /admin/api/post-task-reviews` 与 `Procedural Skills` 面板区块，使 procedural recommendation、bounded context、temporal diagnostics 和 decision trace 进入写后闭环，但仍保持 reviewable-before-promotion。
+- 双语 README 已同步提升到 Stage 2 语义，明确记录共享 orchestrator、bounded context package、temporal diagnostics、decision trace，以及 enriched procedural skill diagnostics。
 - 已在 `/admin` Admin Workbench 中落地 `Procedural Skills` MVP：新增独立 top-level tab、共享筛选 toolbar、candidate review、skills library、skill detail、feedback 表单和 query validation，且全部复用既有 admin API。
 - 已为新 workbench 补齐双语 UI 文案、README / README.zh 的产品说明，以及 `tests/worker-admin.test.cjs` 对新 tab、panel ID 与关键 action hooks 的 HTML smoke 覆盖。
 - 已在真实本地 worker 上完成 `Procedural Skills` live browser smoke，并确认 promote -> enabled -> feedback -> query validation 全链路可用；为避免污染 active 集合，smoke 过程中创建的重复技能已退役清理。
@@ -258,9 +276,9 @@
 - `docs/Release Process.md` 已把版本升级规则、发布检查清单、release notes 模版和 maintainer 命令落成仓库内文档。
 
 ## Next Action
-- `Procedural Skills` MVP 已落地；下一步应决定是继续做 v2 操作深度（feedback history / candidate timeline / drill-down），还是转回更高信号的 skill candidate 与 workbench/bootstrap 查询命中质量优化。
+- 下一步从“补 Stage 2 骨架”转为“观察与硬化 Stage 2 的真实使用效果”：重点继续验证 recommendation threshold、`Raw Execution:*` 低信号过滤边界、较宽泛 query 的排序质量，以及是否需要在保持 reviewable-before-promotion 的前提下把当前自动 `post_task` review loop 继续推进到更自动的 adoption/recommendation loop。
 
 ## Last Sync
-- date: 2026-06-15
-- status: 已将 `Procedural Skills` workbench MVP、focused tests、真实 `/admin` browser smoke 结果，以及 smoke duplicate skill 的 retire cleanup 同步到 vault 项目笔记；`taskgoal.md` 仍属于 repo-local 当前目标，不单独提升到 vault。
+- date: 2026-06-16
+- status: 已将 Stage 2 的共享 read orchestrator、bounded context / temporal / decision diagnostics、procedural recommendation 闭环、自动 `post_task` review loop、`npm run build` + `node --test tests/*.test.cjs`（90/90）+ 真实 `/tools -> /admin/api/post-task-reviews` host-path smoke 结果同步到 vault 项目笔记；`taskgoal_stage2.md` 仍属于 repo-local 当前目标，不单独提升到 vault。
 - linked_project_note: E:\Kuan\Vault\02_Projects\AgentMemory.md

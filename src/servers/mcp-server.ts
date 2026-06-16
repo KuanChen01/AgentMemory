@@ -14,7 +14,6 @@ import {
   WRITE_DISABLED_MESSAGE,
 } from '../services/runtime-policy';
 import {
-  loadProjectContextView,
   parseProjectContextLimit,
 } from '../services/project-context';
 import {
@@ -25,6 +24,7 @@ import {
 } from '../services/context-view';
 import { getEmbedding } from '../services/embedding';
 import { resolveMemoryQuery } from '../services/memory-query';
+import { orchestrateMemoryRead } from '../services/memory-orchestrator';
 import {
   promoteProceduralSkillCandidate,
   recordProceduralSkillFeedback,
@@ -408,9 +408,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const limit = parseProjectContextLimit(
           args?.limit === undefined ? undefined : Number(args.limit)
         );
-        const view = await loadProjectContextView(dbManager, projectPath, limit, {
+        const orchestrated = await orchestrateMemoryRead(dbManager, {
           asOf: args?.as_of ? String(args.as_of) : undefined,
+          limit,
+          mode: 'startup',
+          projectPath,
+          queryText: '',
+          skillLimit: Math.max(3, Math.min(limit, 6)),
         });
+        const view = orchestrated.project_context;
 
         if (!hasProjectContextData(view)) {
           return {

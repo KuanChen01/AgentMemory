@@ -36,6 +36,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     digestPayload: null,
     proceduralDigestPayload: null,
     proceduralSkillsPayload: null,
+    proceduralPostTaskReviewsPayload: null,
     proceduralQueryPayload: null,
     statePayload: null,
     searchPayload: null,
@@ -112,6 +113,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     proceduralQueryStatus: document.getElementById("proceduralQueryStatus"),
     proceduralQueryButton: document.getElementById("proceduralQueryButton"),
     proceduralQueryResult: document.getElementById("proceduralQueryResult"),
+    proceduralPostTaskReviewList: document.getElementById("proceduralPostTaskReviewList"),
     llmStatusLine: document.getElementById("llmStatusLine"),
     llmCurrentModel: document.getElementById("llmCurrentModel"),
     llmCurrentEndpoint: document.getElementById("llmCurrentEndpoint"),
@@ -847,6 +849,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return Array.isArray(payload && payload.skills) ? payload.skills : [];
   }
 
+  function getProceduralPostTaskReviews() {
+    const payload = state.proceduralPostTaskReviewsPayload;
+    return Array.isArray(payload && payload.reviews) ? payload.reviews : [];
+  }
+
   function syncSelectedProceduralSkill() {
     const skills = getProceduralSkills();
     if (!skills.length) {
@@ -1036,6 +1043,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
     const statusPresentation = getProceduralSkillStatusPresentation(skill.status);
     const steps = Array.isArray(skill.steps) ? skill.steps : [];
+    const feedbackSummary = skill.feedback_summary || {};
+    const feedbackHistory = Array.isArray(skill.feedback_history) ? skill.feedback_history : [];
+    const lifecycleSignal = skill.lifecycle_signal || null;
     els.proceduralSkillDetail.innerHTML = '<div class="summaryCard">' +
       '<div class="policyTitleRow">' +
         '<div style="font-weight: 700;">' + escapeHtml(skill.title) + '</div>' +
@@ -1045,6 +1055,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(skill.confidence)) + '</span>' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.successFailureLabel")) + '</strong> ' + escapeHtml(String(skill.success_count || 0) + "/" + String(skill.failure_count || 0)) + '</span>' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at) : t("procedural.neverUsed")) + '</span>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.feedbackCountLabel")) + '</strong> ' + escapeHtml(String(feedbackSummary.total || 0)) + '</span>' +
       '</div>' +
       '<div class="detailCard">' +
         '<div class="metaLabel">' + escapeHtml(t("procedural.triggerLabel")) + '</div>' +
@@ -1059,6 +1070,30 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         (steps.length
           ? '<ol class="proceduralSteps">' + steps.map((step) => '<li>' + escapeHtml(step) + '</li>').join("") + '</ol>'
           : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("procedural.noSteps")) + '</div>') +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.evidenceLabel")) + '</div>' +
+        '<div class="chipsRow" style="margin-top: 10px;">' +
+          '<span class="tag">' + escapeHtml(t("procedural.sourceDigestLabel")) + ': ' + escapeHtml(String(skill.source_digest_id || t("common.none"))) + '</span>' +
+          '<span class="tag">' + escapeHtml(t("procedural.sourceObservationsLabel")) + ': ' + escapeHtml(String(skill.source_observation_count || 0)) + '</span>' +
+          '<span class="tag">' + escapeHtml(t("procedural.statusEffectiveLabel")) + ': ' + escapeHtml(skill.status_effective_at ? formatDate(skill.status_effective_at) : t("common.none")) + '</span>' +
+        '</div>' +
+        (lifecycleSignal
+          ? '<div class="recordSummary" style="margin-top: 10px;">' + escapeHtml(t("procedural.lifecycleSignalLabel")) + ': ' + escapeHtml(lifecycleSignal.state) + ' (' + escapeHtml(String(Number(lifecycleSignal.score || 0).toFixed ? Number(lifecycleSignal.score || 0).toFixed(2) : lifecycleSignal.score)) + ')</div>' +
+            '<ul class="listDetails" style="margin-top: 10px;">' + lifecycleSignal.reasons.map((reason) => '<li>' + escapeHtml(String(reason)) + '</li>').join("") + '</ul>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("common.none")) + '</div>') +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.feedbackHistoryLabel")) + '</div>' +
+        (feedbackHistory.length
+          ? '<ul class="listDetails" style="margin-top: 10px;">' + feedbackHistory.map((feedback) =>
+              '<li><strong>' + escapeHtml(formatProceduralOutcomeLabel(feedback.outcome)) + '</strong> · ' +
+              escapeHtml(feedback.created_at ? formatDate(feedback.created_at) : t("common.none")) +
+              (feedback.task_text ? ' · ' + escapeHtml(feedback.task_text) : '') +
+              (feedback.notes ? ' · ' + escapeHtml(feedback.notes) : '') +
+              '</li>'
+            ).join("") + '</ul>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("procedural.noFeedbackHistory")) + '</div>') +
       '</div>' +
       '<div class="toolbarFooter" style="margin-top: 14px;">' +
         '<div class="finePrint">' + escapeHtml(t("procedural.statusActionsHint")) + '</div>' +
@@ -1084,6 +1119,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const rolloutStage = getRolloutStageFromCurrentState(payload.project_context && payload.project_context.current_state);
     const reasons = Array.isArray(policy.reasons) ? policy.reasons : [];
     const layers = Array.isArray(policy.layers) ? policy.layers : [];
+    const boundedContext = payload.bounded_context || (payload.project_context && payload.project_context.bounded_context) || null;
+    const temporalDiagnostics = payload.temporal_diagnostics || (payload.project_context && payload.project_context.temporal_diagnostics) || null;
+    const decisionTrace = payload.decision_trace || (payload.project_context && payload.project_context.decision_trace) || null;
     els.proceduralQueryResult.innerHTML = '<div class="summaryCard">' +
       '<div class="policyTitleRow">' +
         '<div style="font-weight: 700;">' + escapeHtml(t("procedural.queryResultTitle")) + '</div>' +
@@ -1111,11 +1149,133 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '<div class="detailCard">' +
         '<div class="metaLabel">' + escapeHtml(t("procedural.matchedTitlesLabel")) + '</div>' +
         (matchedSkills.length
-          ? '<div class="chipsRow" style="margin-top: 10px;">' + matchedSkills.map((skill) => '<span class="tag">' + escapeHtml(String(skill.title || "")) + '</span>').join("") + '</div>'
+          ? '<ul class="listDetails" style="margin-top: 10px;">' + matchedSkills.map((skill) =>
+              '<li><strong>' + escapeHtml(String(skill.title || "")) + '</strong> · ' +
+              escapeHtml(String(skill.recommendation_state || t("common.none"))) +
+              ' · ' + escapeHtml(String(typeof skill.recommendation_score === "number" ? skill.recommendation_score.toFixed(2) : t("common.none"))) +
+              (Array.isArray(skill.recommendation_reasons) && skill.recommendation_reasons[0]
+                ? ' · ' + escapeHtml(String(skill.recommendation_reasons[0]))
+                : '') +
+              '</li>'
+            ).join("") + '</ul>'
           : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("procedural.noMatchedSkills")) + '</div>') +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.boundedContextLabel")) + '</div>' +
+        (boundedContext
+          ? '<div class="chipsRow" style="margin-top: 10px;">' +
+              '<span class="tag">' + escapeHtml(t("procedural.contextBudgetLabel")) + ': ' + escapeHtml(String(boundedContext.recommended_char_budget || 0)) + '</span>' +
+              '<span class="tag">' + escapeHtml(t("procedural.contextUsedLabel")) + ': ' + escapeHtml(String(boundedContext.char_budget_used || 0)) + '</span>' +
+              '<span class="tag">' + escapeHtml(t("procedural.contextTrimmedLabel")) + ': ' + escapeHtml(String(boundedContext.trimmed_entry_count || 0)) + '</span>' +
+            '</div>' +
+            '<div class="recordSummary" style="margin-top: 10px;">' + escapeHtml((boundedContext.rendered_package || "").trim() || t("common.none")) + '</div>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("common.none")) + '</div>') +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.temporalDiagnosticsLabel")) + '</div>' +
+        (temporalDiagnostics && Array.isArray(temporalDiagnostics.layer_diagnostics) && temporalDiagnostics.layer_diagnostics.length
+          ? '<ul class="listDetails" style="margin-top: 10px;">' + temporalDiagnostics.layer_diagnostics.map((layer) =>
+              '<li><strong>' + escapeHtml(String(layer.layer)) + '</strong> · ' +
+              escapeHtml(String(layer.effective_time_field || "n/a")) +
+              ' / ' + escapeHtml(String(layer.recorded_time_field || "")) +
+              ' · ' + escapeHtml(String(layer.included_count || 0)) +
+              (Array.isArray(layer.notes) && layer.notes[0] ? ' · ' + escapeHtml(String(layer.notes[0])) : '') +
+              '</li>'
+            ).join("") + '</ul>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("common.none")) + '</div>') +
+      '</div>' +
+      '<div class="detailCard">' +
+        '<div class="metaLabel">' + escapeHtml(t("procedural.decisionTraceLabel")) + '</div>' +
+        (decisionTrace && Array.isArray(decisionTrace.steps) && decisionTrace.steps.length
+          ? '<ul class="listDetails" style="margin-top: 10px;">' + decisionTrace.steps.map((step) =>
+              '<li><strong>' + escapeHtml(String(step.step || "")) + '</strong> · ' +
+              escapeHtml(String(step.decision || "")) +
+              (Array.isArray(step.reasons) && step.reasons[0] ? ' · ' + escapeHtml(String(step.reasons[0])) : '') +
+              '</li>'
+            ).join("") + '</ul>'
+          : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("common.none")) + '</div>') +
       '</div>' +
       '<div class="finePrint" style="margin-top: 14px;">' + escapeHtml(t("procedural.generatedAt", { timestamp: formatDate(payload.generated_at) })) + '</div>' +
     '</div>';
+  }
+
+  function renderProceduralPostTaskReviews() {
+    const projectPath = els.proceduralProjectSelect.value;
+    const payload = state.proceduralPostTaskReviewsPayload;
+
+    if (!projectPath) {
+      els.proceduralPostTaskReviewList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.noPostTaskReviewsPrompt")) + '</div>';
+      return;
+    }
+
+    if (!payload) {
+      els.proceduralPostTaskReviewList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.loadingPostTaskReviews")) + '</div>';
+      return;
+    }
+
+    if (payload.disabled) {
+      els.proceduralPostTaskReviewList.innerHTML = '<div class="emptyState">' + escapeHtml(String(payload.message || t("procedural.readDisabled"))) + '</div>';
+      return;
+    }
+
+    const reviews = getProceduralPostTaskReviews();
+    if (!reviews.length) {
+      els.proceduralPostTaskReviewList.innerHTML = '<div class="emptyState">' + escapeHtml(t("procedural.noPostTaskReviews")) + '</div>';
+      return;
+    }
+
+    els.proceduralPostTaskReviewList.innerHTML = reviews.map((review) => {
+      const matchedTitles = Array.isArray(review.matched_skill_titles) ? review.matched_skill_titles : [];
+      const recommendationStates = Array.isArray(review.recommendation_states) ? review.recommendation_states : [];
+      const decisionTrace = review.decision_trace && Array.isArray(review.decision_trace.steps)
+        ? review.decision_trace.steps
+        : [];
+      const boundedContext = review.bounded_context || null;
+      return '<div class="summaryCard">' +
+        '<div class="policyTitleRow">' +
+          '<div style="font-weight: 700;">' + escapeHtml(String(review.source_title || t("common.none"))) + '</div>' +
+          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.actionLabel")) + '</strong> ' + escapeHtml(String(review.status || "open")) + '</span>' +
+        '</div>' +
+        '<div class="finePrint" style="margin-top: 6px;">' +
+          escapeHtml(t("procedural.generatedAt", { timestamp: formatDate(review.generated_at) })) +
+        '</div>' +
+        '<div class="detailCard">' +
+          '<div class="metaLabel">' + escapeHtml(t("procedural.postTaskReviewQueryLabel")) + '</div>' +
+          '<div class="recordSummary" style="margin-top: 8px;">' + escapeHtml(String(review.query_text || t("common.none"))) + '</div>' +
+        '</div>' +
+        '<div class="detailCard">' +
+          '<div class="metaLabel">' + escapeHtml(t("procedural.matchedTitlesLabel")) + '</div>' +
+          (matchedTitles.length
+            ? '<ul class="listDetails" style="margin-top: 10px;">' + matchedTitles.map((title, index) =>
+                '<li><strong>' + escapeHtml(String(title)) + '</strong>' +
+                (recommendationStates[index] ? ' · ' + escapeHtml(String(recommendationStates[index])) : '') +
+                '</li>'
+              ).join("") + '</ul>'
+            : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("procedural.noMatchedSkills")) + '</div>') +
+        '</div>' +
+        '<div class="detailCard">' +
+          '<div class="metaLabel">' + escapeHtml(t("procedural.boundedContextLabel")) + '</div>' +
+          (boundedContext
+            ? '<div class="chipsRow" style="margin-top: 10px;">' +
+                '<span class="tag">' + escapeHtml(t("procedural.contextBudgetLabel")) + ': ' + escapeHtml(String(boundedContext.recommended_char_budget || 0)) + '</span>' +
+                '<span class="tag">' + escapeHtml(t("procedural.contextUsedLabel")) + ': ' + escapeHtml(String(boundedContext.char_budget_used || 0)) + '</span>' +
+                '<span class="tag">' + escapeHtml(t("procedural.contextTrimmedLabel")) + ': ' + escapeHtml(String(boundedContext.trimmed_entry_count || 0)) + '</span>' +
+              '</div>'
+            : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("common.none")) + '</div>') +
+        '</div>' +
+        '<div class="detailCard">' +
+          '<div class="metaLabel">' + escapeHtml(t("procedural.decisionTraceLabel")) + '</div>' +
+          (decisionTrace.length
+            ? '<ul class="listDetails" style="margin-top: 10px;">' + decisionTrace.map((step) =>
+                '<li><strong>' + escapeHtml(String(step.step || "")) + '</strong> · ' +
+                escapeHtml(String(step.decision || "")) +
+                (Array.isArray(step.reasons) && step.reasons[0] ? ' · ' + escapeHtml(String(step.reasons[0])) : '') +
+                '</li>'
+              ).join("") + '</ul>'
+            : '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("common.none")) + '</div>') +
+        '</div>' +
+      '</div>';
+    }).join("");
   }
 
   function renderProceduralWorkspace() {
@@ -1186,6 +1346,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderProceduralSkillsList();
     renderProceduralSkillDetail();
     renderProceduralQueryResult();
+    renderProceduralPostTaskReviews();
   }
 
   function showProceduralError(error) {
@@ -1268,6 +1429,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.summary")) + '</strong> ' + escapeHtml(String(metrics.summaryCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.proceduralSkills")) + '</strong> ' + escapeHtml(String(metrics.proceduralSkillCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.windowEntries")) + '</strong> ' + escapeHtml(String(metrics.slidingWindowEntryCount || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.contextBudget")) + '</strong> ' + escapeHtml(String(metrics.boundedContextBudget || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.contextUsed")) + '</strong> ' + escapeHtml(String(metrics.boundedContextCharsUsed || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.contextTrimmed")) + '</strong> ' + escapeHtml(String(metrics.boundedContextTrimmedEntries || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.temporalLayers")) + '</strong> ' + escapeHtml(String(metrics.temporalDiagnosticLayerCount || 0)) + '</span>',
+      '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.decisionTrace")) + '</strong> ' + escapeHtml(String(metrics.decisionTraceStepCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.lowSignal")) + '</strong> ' + escapeHtml(String(metrics.lowSignalCount || 0)) + '</span>',
       '<span class="metricBadge"><strong>' + escapeHtml(t("metrics.duplicateTitles")) + '</strong> ' + escapeHtml(String(metrics.duplicateTitleCount || 0)) + '</span>'
     ].join("");
@@ -1614,6 +1780,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!projectPath) {
       state.proceduralDigestPayload = null;
       state.proceduralSkillsPayload = null;
+      state.proceduralPostTaskReviewsPayload = null;
       state.selectedProceduralSkillId = null;
       renderProceduralWorkspace();
       return;
@@ -1633,14 +1800,19 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         project_path: projectPath,
         limit: String(limit),
       });
+      const reviewParams = new URLSearchParams({
+        project_path: projectPath,
+        limit: String(limit),
+      });
       const status = String(els.proceduralStatusFilter.value || "").trim();
       const asOf = els.proceduralAsOfInput.value.trim();
       if (status) skillParams.set("status", status);
       if (asOf) skillParams.set("as_of", asOf);
 
-      const [digestPayload, skillsPayload] = await Promise.all([
+      const [digestPayload, skillsPayload, postTaskReviewsPayload] = await Promise.all([
         fetchJson("/admin/api/digests?" + digestParams.toString()),
         fetchJson("/admin/api/skills?" + skillParams.toString()),
+        fetchJson("/admin/api/post-task-reviews?" + reviewParams.toString()),
       ]);
 
       state.proceduralDigestPayload = digestPayload;
@@ -1652,14 +1824,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }
 
       state.proceduralSkillsPayload = skillsPayload;
+      state.proceduralPostTaskReviewsPayload = postTaskReviewsPayload;
       syncSelectedProceduralSkill();
       renderProceduralWorkspace();
 
-      if (digestPayload.disabled || skillsPayload.disabled) {
+      if (digestPayload.disabled || skillsPayload.disabled || postTaskReviewsPayload.disabled) {
         setRawStatusLine(
           "proceduralSkills",
           els.proceduralSkillsStatus,
-          String(digestPayload.message || skillsPayload.message || t("procedural.readDisabled")),
+          String(digestPayload.message || skillsPayload.message || postTaskReviewsPayload.message || t("procedural.readDisabled")),
           "warning"
         );
       } else {

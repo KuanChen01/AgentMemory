@@ -9,6 +9,7 @@ const { DatabaseManager } = require('../dist/services/db.js');
 const {
   decideMemoryReadPolicy,
   decideObservationWritePolicy,
+  decidePostTaskReviewPolicy,
   decideProceduralSkillPromotion,
 } = require('../dist/services/memory-policy.js');
 const {
@@ -77,6 +78,31 @@ test('memory policy brain centralizes read, write, and promotion decisions', () 
     confidence: 0.8,
   });
   assert.equal(promotionDecision.action, 'promote_draft');
+
+  const postTaskDecision = decidePostTaskReviewPolicy({
+    observation: {
+      title: 'Bootstrap workbench and verify rollout stage',
+      narrative: 'Completed the local workbench bootstrap flow and verified the rollout stage.',
+      facts: ['Ran npm run build', 'Ran npm run workbench -- --no-open'],
+      files_modified: ['obsiguide.md'],
+    },
+    source: 'tool_log',
+  });
+  assert.equal(postTaskDecision.action, 'review');
+  assert.equal(postTaskDecision.mode, 'post_task');
+  assert.match(postTaskDecision.queryText, /Bootstrap workbench/);
+  assert.ok(postTaskDecision.reasons.length > 0);
+
+  const skippedPostTaskDecision = decidePostTaskReviewPolicy({
+    observation: {
+      title: 'Raw Execution: Bash',
+      narrative: 'Background processing details.',
+      facts: ['Executed Bash'],
+      files_modified: [],
+    },
+    source: 'tool_log',
+  });
+  assert.equal(skippedPostTaskDecision.action, 'skip');
 });
 
 test('procedural skills can be promoted from digest candidates and track feedback', async () => {
@@ -225,6 +251,85 @@ test('procedural skill as_of reads honor explicit status history transitions', a
     assert.equal(beforeEnable.length, 0);
     assert.equal(afterEnable.length, 1);
     assert.equal(afterEnable[0].status, 'enabled');
+  });
+});
+
+test('procedural skill as_of reads rebuild feedback counts without future leakage', async () => {
+  await withDatabase(async (db) => {
+    const skill = await db.saveProceduralSkill({
+      project_path: 'E:/Repo/A',
+      title: 'Bootstrap workbench',
+      summary: 'Reusable steps for the local workbench bootstrap path.',
+      trigger_text: 'when the user asks how to bootstrap the workbench',
+      steps: ['Run npm run build', 'Run npm run workbench -- --no-open'],
+      tags: ['workbench', 'bootstrap'],
+      status: 'enabled',
+      confidence: 0.8,
+      embedding: [],
+    });
+    db.db.run(
+      'UPDATE procedural_skills SET created_at = ?, updated_at = ? WHERE id = ?',
+      ['2026-06-15T05:00:00.000Z', '2026-06-15T05:00:00.000Z', skill.id]
+    );
+    db.db.run(
+      'UPDATE procedural_skill_status_events SET effective_at = ? WHERE skill_id = ?',
+      ['2026-06-15T05:00:00.000Z', skill.id]
+    );
+
+    const successFeedback = await recordProceduralSkillFeedback(db, {
+      skill_id: skill.id,
+      project_path: 'E:/Repo/A',
+      outcome: 'success',
+      task_text: 'Bootstrap the workbench',
+    });
+    db.db.run(
+      'UPDATE procedural_skill_feedback SET created_at = ? WHERE id = ?',
+      ['2026-06-15T06:00:00.000Z', successFeedback.id]
+    );
+    db.db.run(
+      'UPDATE procedural_skills SET success_count = 1, failure_count = 0, last_used_at = ?, updated_at = ? WHERE id = ?',
+      ['2026-06-15T06:00:00.000Z', '2026-06-15T06:00:00.000Z', skill.id]
+    );
+
+    const failureFeedback = await recordProceduralSkillFeedback(db, {
+      skill_id: skill.id,
+      project_path: 'E:/Repo/A',
+      outcome: 'failure',
+      task_text: 'Bootstrap the workbench after a breaking change',
+    });
+    db.db.run(
+      'UPDATE procedural_skill_feedback SET created_at = ? WHERE id = ?',
+      ['2026-06-16T06:00:00.000Z', failureFeedback.id]
+    );
+    db.db.run(
+      'UPDATE procedural_skills SET success_count = 1, failure_count = 1, last_used_at = ?, updated_at = ? WHERE id = ?',
+      ['2026-06-16T06:00:00.000Z', '2026-06-16T06:00:00.000Z', skill.id]
+    );
+
+    const beforeFailure = await db.listProceduralSkills({
+      projectPath: 'E:/Repo/A',
+      statuses: ['enabled'],
+      asOf: '2026-06-15T23:59:59.000Z',
+      limit: 10,
+    });
+    const afterFailure = await db.listProceduralSkills({
+      projectPath: 'E:/Repo/A',
+      statuses: ['enabled'],
+      asOf: '2026-06-16T23:59:59.000Z',
+      limit: 10,
+    });
+
+    assert.equal(beforeFailure.length, 1);
+    assert.equal(beforeFailure[0].success_count, 1);
+    assert.equal(beforeFailure[0].failure_count, 0);
+    assert.equal(beforeFailure[0].feedback_summary.success, 1);
+    assert.equal(beforeFailure[0].feedback_summary.failure, 0);
+
+    assert.equal(afterFailure.length, 1);
+    assert.equal(afterFailure[0].success_count, 1);
+    assert.equal(afterFailure[0].failure_count, 1);
+    assert.equal(afterFailure[0].feedback_summary.success, 1);
+    assert.equal(afterFailure[0].feedback_summary.failure, 1);
   });
 });
 
