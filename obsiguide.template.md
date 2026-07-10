@@ -16,6 +16,12 @@
 - project_contract:
   - `obsiguide.md` is the only project-level Obsidian sync contract for this workspace.
   - Do not create or rely on repo-root `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` as project sync contracts.
+- memory_boundary:
+  - `agentmem` is working memory for session recovery across agents and threads.
+  - `vault_path` is the durable Obsidian knowledge base, not a raw session-log sink.
+  - Treat `agentmem` search, timeline, and startup context results as unverified until checked against current repo evidence, this `obsiguide.md`, or existing vault notes.
+  - Do not copy raw `agentmem` summaries or session recaps directly into vault notes.
+  - Record concise session outcomes to `agentmem` at finish; promote durable knowledge to the vault only when this contract says to do so.
 - note_language_contract:
   - Filenames, H1 titles, section titles, frontmatter keys, controlled values, tags, and Dataview syntax stay in English.
   - Narrative body content in vault notes stays in Chinese.

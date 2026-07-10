@@ -7,7 +7,7 @@
 目标覆盖的四个 agent：
 
 - `Claude Code`
-- `Codex`
+- `ChatGPT desktop（Codex runtime）`
 - `OpenCode`
 - `Antigravity`
 
@@ -16,7 +16,7 @@
 - 会复制的内容：
   - 仓库代码
   - `agentmem` CLI
-  - `Claude Code` / `Codex` / `OpenCode` / `Antigravity` 的本机配置
+  - `Claude Code` / `ChatGPT desktop（Codex runtime）` / `OpenCode` / `Antigravity` 的本机配置
   - `OpenCode` 的桥接插件 `agentmem-plugin.mjs`
   - `~/.agentmem/.env` 配置骨架
   - Windows 一键 bootstrap 与 `/admin` workbench 入口
@@ -119,6 +119,7 @@ bootstrap 成功后，关键落点应为：
 
 - `%USERPROFILE%\.agentmem\.env`
 - `%USERPROFILE%\.agentmem\install-state.json`
+- `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`
 - `%USERPROFILE%\.agentmem\backups\`
 - `%USERPROFILE%\.claude.json`
 - `%USERPROFILE%\.claude\settings.json`
@@ -154,15 +155,21 @@ agentmem uninstall --strict --purge-all
 bootstrap 成功后，再做这四项 live acceptance：
 
 1. `Claude Code` 新开一个会话，确认能看到 `SessionStart` 恢复内容
-2. `Codex` 新开一个会话，确认能看到 `SessionStart` 恢复内容
+2. `ChatGPT desktop（Codex runtime）` 新开一个会话，确认能看到 `SessionStart` 恢复内容；配置仍位于 `%USERPROFILE%\.codex\config.toml` 与 `%USERPROFILE%\.codex\hooks.json`
 3. `OpenCode` 新开一个会话并执行一次工具，确认插件桥接仍能恢复并写入
-4. `Antigravity` 对当前项目调用 `get_project_context`，确认能一次取回启动上下文
+4. `Antigravity` 读取 `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` 作为 rule / prompt surface，再对当前项目调用 `get_project_context`，确认能一次取回启动上下文
+5. 对任意受管理 repo，确认 Antigravity 会先读或 bootstrap 根目录 `obsiguide.md`，把 `agentmem` search/timeline 结果视为未验证工作记忆，且写入 `E:\Kuan\Vault` 前先按 `obsiguide.md` 和现有 vault notes 验证
 
 ## Troubleshooting
 
 - `Antigravity MCP registry was not found`
   - 说明 `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`、`antigravity-ide`、`antigravity`、`.gemini\config\mcp_config.json` 和 `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json` 都没找到
   - 先确认 Antigravity 已创建 MCP registry，或显式传 `-AntigravityConfig`
+
+- `AGENTMEM_ANTIGRAVITY.md` 不存在
+  - 先重新运行 `agentmem install --strict`
+  - 如果 Antigravity registry 路径不标准，带上 `--antigravity-config`
+  - 这个文件是 AgentMemory 为 Antigravity 生成的规则面，用来区分 `obsiguide.md`、Obsidian Vault 和 `agentmem` working memory 的边界
 
 - `Bootstrap scaffolded ...\.agentmem\.env`
   - 说明 `.env` 只是模板，还没有真实凭证

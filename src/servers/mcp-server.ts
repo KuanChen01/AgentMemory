@@ -23,6 +23,7 @@ import {
   renderProjectContextView,
 } from '../services/context-view';
 import { getEmbedding } from '../services/embedding';
+import { normalizeAgentId } from '../services/agent-id';
 import { resolveMemoryQuery } from '../services/memory-query';
 import { orchestrateMemoryRead } from '../services/memory-orchestrator';
 import {
@@ -64,7 +65,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_project_context',
-        description: 'Returns the curated structured startup context for this project as a single rendered block, equivalent to the hook-backed startup view.',
+        description: 'Returns curated AgentMemory working context for this project as a single rendered block, equivalent to the hook-backed startup view. This does not replace reading workspace obsiguide.md or verifying facts before Obsidian vault writes.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -85,7 +86,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'search_memory',
-        description: 'Performs a hybrid search (keyword + vector semantic) over the agent memory database for the current workspace.',
+        description: 'Performs a hybrid search (keyword + vector semantic) over AgentMemory working memory for the current workspace. Treat results as unverified context until checked against repo evidence, obsiguide.md, or existing vault notes.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -111,7 +112,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'query_memory',
-        description: 'Runs the policy-driven memory query path and returns the layered context, matched observations, matched procedural skills, and sliding-window contract for a task.',
+        description: 'Runs the policy-driven AgentMemory working-memory query path and returns layered context, matched observations, matched procedural skills, and the sliding-window contract. Results are recovery hints, not durable vault truth.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -149,7 +150,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'memory_timeline',
-        description: 'Retrieves a chronological list of observations recorded for this project.',
+        description: 'Retrieves a chronological list of AgentMemory working-memory observations for this project. Verify relevant entries before using them as repo facts or Obsidian vault material.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -179,7 +180,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'record_memory',
-        description: 'Directly saves a memory entry (observation) to the shared database. Use this when you resolve a bug, make an architectural decision, or complete a major feature.',
+        description: 'Directly saves a concise working-memory observation to AgentMemory. Use this for session outcomes after meaningful work; durable Obsidian knowledge must still be promoted separately according to obsiguide.md.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -576,7 +577,7 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
         const filesModified = (args?.files_modified as string[]) || [];
         const filesRead = (args?.files_read as string[]) || [];
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
-        const agentId = String(args?.agent_id || 'mcp-client');
+        const agentId = normalizeAgentId(String(args?.agent_id || 'mcp-client'));
 
         // Generate embedding vector
         const textToEmbed = `${title} ${narrative} ${facts.join(' ')} ${concepts.join(' ')}`;

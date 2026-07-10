@@ -20,6 +20,8 @@ import {
 
 type ManagedAgent = 'claude' | 'opencode' | 'codex' | 'antigravity' | 'runtime' | 'cli';
 
+const CODEX_DISPLAY_NAME = 'ChatGPT desktop (Codex runtime)';
+
 export interface InstallOptions {
   antigravityConfigPath?: string;
   homeDir?: string;
@@ -42,6 +44,7 @@ export interface InstallPaths {
   opencodePostHook: string;
   codexStartHook: string;
   codexPostHook: string;
+  antigravityGuidancePath: string;
 }
 
 export interface InstallResult {
@@ -208,6 +211,33 @@ export default async function AgentMemoryPlugin({ directory }) {
 `;
 }
 
+export function renderAntigravityGuidance(): string {
+  return `# AgentMemory Antigravity Rules
+
+These rules are managed by AgentMemory. Use them as the Antigravity CLI rule surface whenever AgentMemory is installed.
+
+## Startup
+- Before normal repo work, read the current workspace root \`obsiguide.md\`.
+- If root \`obsiguide.md\` is missing and \`obsiguide.template.md\` exists in the workspace, create root \`obsiguide.md\` from the template and fill critical fields from verified repo evidence before feature work.
+- If neither root \`obsiguide.md\` nor \`obsiguide.template.md\` exists, report that the workspace is not bootstrap-ready instead of inventing an ad-hoc sync contract.
+- At session start, use AgentMemory \`get_project_context\`, \`search_memory\`, or \`memory_timeline\` to recover working context for the current \`project_path\`.
+- Treat all AgentMemory results as unverified working memory until checked against current repo evidence, \`obsiguide.md\`, or existing vault notes.
+
+## Obsidian and AgentMemory Boundary
+- \`agentmem\` is working memory for session recovery across agents.
+- \`E:\\Kuan\\Vault\` is the durable Obsidian knowledge base.
+- Never copy raw AgentMemory summaries, search results, timelines, or session recaps directly into Obsidian vault notes.
+- Before writing to \`E:\\Kuan\\Vault\`, verify the claim against current workspace evidence, root \`obsiguide.md\`, and existing vault notes.
+- Promote durable knowledge into the vault only when root \`obsiguide.md\` says the information should be promoted.
+
+## Finish
+- Before finishing, update root \`obsiguide.md\` only when the repo working state, verified commands, constraints, open questions, durable changes, or next action changed.
+- Root \`obsiguide.md\` is machine-private and local-only by default; do not push it to GitHub.
+- Record a concise session outcome with AgentMemory \`record_memory\` after meaningful work, including files read, files modified, decisions, and tests.
+- Keep durable Obsidian updates separate from AgentMemory session outcomes.
+`;
+}
+
 export function ensureAntigravityMcpServer(jsonText: string, mcpServerPath: string): string {
   const parsed = JSON.parse(stripComments(jsonText || '{}') || '{}');
   if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
@@ -237,6 +267,7 @@ export function resolveInstallPaths(repoRoot: string, homeDir: string = os.homed
     opencodePostHook: `${normalizedRepoRoot}/dist/hooks/opencode-post-tool.js`,
     codexStartHook: `${normalizedRepoRoot}/dist/hooks/codex-session-start.js`,
     codexPostHook: `${normalizedRepoRoot}/dist/hooks/codex-post-tool.js`,
+    antigravityGuidancePath: path.join(homeDir, '.agentmem', 'AGENTMEM_ANTIGRAVITY.md'),
   };
 }
 
@@ -900,7 +931,7 @@ function installCodex(context: InstallContext): InstallResult {
     agent: 'codex',
     ok: true,
     targetPath: codexConfigPath,
-    message: `Registered hooks and MCP server in Codex (${codexConfigPath}, ${codexHooksPath})`,
+    message: `Registered hooks and MCP server in ${CODEX_DISPLAY_NAME} (${codexConfigPath}, ${codexHooksPath})`,
     warnings,
   };
 }
@@ -916,20 +947,29 @@ function installAntigravity(context: InstallContext, overridePath?: string): Ins
 
   ensureDir(path.dirname(configPath));
   const existingJson = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}';
-  const warnings = applyManagedTextWrite(
-    context,
-    'antigravity-config',
-    configPath,
-    ensureAntigravityMcpServer(existingJson, context.paths.mcpServerPath),
-    detectAntigravityLegacy(readJsonFile(configPath, true))
-  );
+  const warnings = [
+    ...applyManagedTextWrite(
+      context,
+      'antigravity-config',
+      configPath,
+      ensureAntigravityMcpServer(existingJson, context.paths.mcpServerPath),
+      detectAntigravityLegacy(readJsonFile(configPath, true))
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'antigravity-guidance',
+      context.paths.antigravityGuidancePath,
+      renderAntigravityGuidance(),
+      false
+    ),
+  ];
 
   return {
     action: 'merged-managed-entries',
     agent: 'antigravity',
     ok: true,
     targetPath: configPath,
-    message: `Registered MCP server in Antigravity (${configPath})`,
+    message: `Registered MCP server in Antigravity (${configPath}) and wrote guidance (${context.paths.antigravityGuidancePath})`,
     warnings,
   };
 }
@@ -1025,20 +1065,29 @@ function uninstallCodex(context: InstallContext): UninstallResult {
     agent: 'codex',
     ok: true,
     targetPath: codexConfigPath,
-    message: `Uninstalled AgentMemory from Codex (${codexConfigPath}, ${codexHooksPath})`,
+    message: `Uninstalled AgentMemory from ${CODEX_DISPLAY_NAME} (${codexConfigPath}, ${codexHooksPath})`,
     warnings: [...configCleanup.warnings, ...hooksCleanup.warnings],
   };
 }
 
 function uninstallAntigravity(context: InstallContext, overridePath?: string): UninstallResult {
   const configPath = resolveAntigravityConfigPath(context.homeDir, overridePath);
+  const guidanceCleanup = uninstallDedicatedArtifact(
+    context,
+    'antigravity-guidance',
+    context.paths.antigravityGuidancePath,
+    fs.existsSync(context.paths.antigravityGuidancePath) &&
+      fs.readFileSync(context.paths.antigravityGuidancePath, 'utf8').includes('AgentMemory Antigravity Rules')
+  );
+
   if (!configPath) {
     return {
-      action: 'no-op',
+      action: guidanceCleanup.action,
       agent: 'antigravity',
       ok: true,
-      message: 'Antigravity MCP registry was not found during uninstall; nothing to remove.',
-      warnings: [],
+      targetPath: context.paths.antigravityGuidancePath,
+      message: 'Antigravity MCP registry was not found during uninstall; removed generated guidance if present.',
+      warnings: guidanceCleanup.warnings,
     };
   }
 
@@ -1051,12 +1100,12 @@ function uninstallAntigravity(context: InstallContext, overridePath?: string): U
   });
 
   return {
-    action: cleanup.action,
+    action: `${cleanup.action}+${guidanceCleanup.action}`,
     agent: 'antigravity',
     ok: true,
     targetPath: configPath,
-    message: `Uninstalled AgentMemory from Antigravity (${configPath})`,
-    warnings: cleanup.warnings,
+    message: `Uninstalled AgentMemory from Antigravity (${configPath}, ${context.paths.antigravityGuidancePath})`,
+    warnings: [...cleanup.warnings, ...guidanceCleanup.warnings],
   };
 }
 
@@ -1128,15 +1177,15 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
 
   const codexToml = fs.existsSync(codexConfigPath) ? fs.readFileSync(codexConfigPath, 'utf8') : '';
   if (!codexToml.includes(paths.mcpServerPath) || !/^\s*hooks\s*=\s*true$/m.test(codexToml)) {
-    issues.push(`Codex config.toml is missing hooks=true or the agentmem MCP server (${codexConfigPath}).`);
+    issues.push(`${CODEX_DISPLAY_NAME} config.toml is missing hooks=true or the agentmem MCP server (${codexConfigPath}).`);
   }
 
   const codexHooks = readJsonFile(codexHooksPath);
   if (!JSON.stringify(codexHooks).includes(paths.codexStartHook)) {
-    issues.push(`Codex SessionStart hook is missing (${codexHooksPath}).`);
+    issues.push(`${CODEX_DISPLAY_NAME} SessionStart hook is missing (${codexHooksPath}).`);
   }
   if (!JSON.stringify(codexHooks).includes(paths.codexPostHook)) {
-    issues.push(`Codex PostToolUse hook is missing (${codexHooksPath}).`);
+    issues.push(`${CODEX_DISPLAY_NAME} PostToolUse hook is missing (${codexHooksPath}).`);
   }
 
   const opencodeConfig = readJsonFile(
@@ -1159,6 +1208,20 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
     const antigravityConfig = readJsonFile(antigravityConfigPath, true);
     if (antigravityConfig?.mcpServers?.agentmem?.args?.[0] !== paths.mcpServerPath) {
       issues.push(`Antigravity MCP registry is missing the agentmem server (${antigravityConfigPath}).`);
+    }
+    if (!fs.existsSync(paths.antigravityGuidancePath)) {
+      issues.push(`Antigravity AgentMemory guidance is missing (${paths.antigravityGuidancePath}).`);
+    } else {
+      const guidanceText = fs.readFileSync(paths.antigravityGuidancePath, 'utf8');
+      if (
+        !guidanceText.includes('obsiguide.md') ||
+        !guidanceText.includes('unverified working memory') ||
+        !guidanceText.includes('E:\\Kuan\\Vault') ||
+        !guidanceText.includes('record_memory') ||
+        !guidanceText.includes('local-only')
+      ) {
+        issues.push(`Antigravity AgentMemory guidance is missing the obsiguide/vault/agentmem boundary rules (${paths.antigravityGuidancePath}).`);
+      }
     }
   }
 

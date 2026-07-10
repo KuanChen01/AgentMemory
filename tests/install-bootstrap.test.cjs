@@ -10,6 +10,7 @@ const projectRoot = path.resolve(__dirname, '..');
 const cliPath = path.join(projectRoot, 'dist', 'bin', 'cli.js');
 const {
   ensureAntigravityMcpServer,
+  renderAntigravityGuidance,
   renderOpenCodePlugin,
   resolveAntigravityConfigPath,
 } = require('../dist/services/agent-installer.js');
@@ -125,6 +126,18 @@ test('ensureAntigravityMcpServer upserts a single mcpServers.agentmem entry', ()
   });
 });
 
+test('renderAntigravityGuidance separates obsiguide, vault, and agentmem boundaries', () => {
+  const guidance = renderAntigravityGuidance();
+
+  assert.match(guidance, /obsiguide\.md/);
+  assert.match(guidance, /obsiguide\.template\.md/);
+  assert.match(guidance, /unverified working memory/);
+  assert.match(guidance, /E:\\Kuan\\Vault/);
+  assert.match(guidance, /record_memory/);
+  assert.match(guidance, /local-only/);
+  assert.match(guidance, /Never copy raw AgentMemory summaries/);
+});
+
 test('resolveAntigravityConfigPath prefers the Antigravity CLI registry', () => {
   const tempHome = makeTempHome();
 
@@ -201,6 +214,13 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
       args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
       disabled: false,
     });
+
+    const guidancePath = path.join(tempHome, '.agentmem', 'AGENTMEM_ANTIGRAVITY.md');
+    assert.equal(fs.existsSync(guidancePath), true);
+    const guidanceText = fs.readFileSync(guidancePath, 'utf8');
+    assert.match(guidanceText, /Before normal repo work, read the current workspace root `obsiguide\.md`/);
+    assert.match(guidanceText, /Treat all AgentMemory results as unverified working memory/);
+    assert.match(guidanceText, /Never copy raw AgentMemory summaries/);
   } finally {
     removeDir(tempHome);
   }
@@ -243,6 +263,10 @@ test('agentmem install migrates stale Antigravity CLI agentvault registry', asyn
       args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
       disabled: false,
     });
+    assert.equal(
+      fs.existsSync(path.join(tempHome, '.agentmem', 'AGENTMEM_ANTIGRAVITY.md')),
+      true
+    );
   } finally {
     removeDir(tempHome);
   }

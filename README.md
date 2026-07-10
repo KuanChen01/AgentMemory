@@ -4,7 +4,7 @@
 
 ---
 
-AgentMemory is a compilation-free, lightweight, and universal persistent memory system (Universal Agent Memory - UAM). It allows multiple developer agents (such as **Claude Code**, **OpenCode**, **Codex**, and **Antigravity CLI**) to share, record, and query context observations and decisions across different workspaces.
+AgentMemory is a compilation-free, lightweight, and universal persistent memory system (Universal Agent Memory - UAM). It allows multiple developer agents (such as **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, and **Antigravity CLI**) to share, record, and query context observations and decisions across different workspaces.
 
 ### 🌟 Features
 
@@ -26,7 +26,7 @@ graph TD
     subgraph Clients [Developer Assistants]
         CC[Claude Code]
         OC[OpenCode]
-        CX[Codex]
+        CX[ChatGPT desktop<br/>(Codex runtime)]
         AG[Antigravity CLI]
     end
 
@@ -92,7 +92,7 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. Automatic Agent Registration
-Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, **Codex**, and **Antigravity**:
+Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, and **Antigravity**:
 ```bash
 agentmem install
 ```
@@ -357,8 +357,8 @@ Claude Code uses two different files:
 }
 ```
 
-#### 3. Codex (`~/.codex/config.toml` and `~/.codex/hooks.json`)
-Expose the MCP server in `config.toml`, and register lifecycle hooks in `hooks.json`:
+#### 3. ChatGPT desktop (Codex runtime) (`~/.codex/config.toml` and `~/.codex/hooks.json`)
+The desktop app is currently branded **ChatGPT**, while its Codex runtime continues to use `~/.codex`. Expose the MCP server in `config.toml`, and register lifecycle hooks in `hooks.json`; keep the `codex-*` hook file names unchanged.
 
 **`~/.codex/config.toml`**
 ```toml
@@ -410,11 +410,15 @@ Generic shape:
 }
 ```
 
+The installer also writes `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`. Use that file as the Antigravity rule/prompt surface for AgentMemory-managed workspaces. It tells Antigravity to read or bootstrap root `obsiguide.md` before normal work, treat `agentmem` results as unverified working memory, verify before writing to `E:\Kuan\Vault`, keep root `obsiguide.md` local-only, and finish by recording a concise `record_memory` session outcome.
+
 Preferred startup call for Antigravity (MCP-only, no session-start hook):
 
-1. Call `get_project_context` with the current `project_path` and an optional `limit` to retrieve the same curated structured startup context that hook-backed agents render from `ProjectContextView`.
-2. If you need more detail after startup, use `memory_timeline` or `search_memory` for drill-down.
-3. If a timeline or search hit looks relevant, follow up with `get_memory_details` for the full narrative and file lists.
+1. Read the current workspace root `obsiguide.md`; if it is missing but `obsiguide.template.md` exists, bootstrap and initialize `obsiguide.md` from verified repo evidence before feature work.
+2. Call `get_project_context`, `search_memory`, or `memory_timeline` with the current `project_path` to recover AgentMemory context, then verify relevant results against repo evidence and `obsiguide.md`.
+3. Before writing to `E:\Kuan\Vault`, check current repo evidence, `obsiguide.md`, and existing vault notes. Do not paste raw AgentMemory summaries or session recaps into the vault.
+4. Finish meaningful work with `record_memory`, while promoting durable knowledge to the vault only when `obsiguide.md` says to do so.
+5. If you need more detail after startup, use `memory_timeline`, `search_memory`, and then `get_memory_details` for drill-down.
 
 This keeps Antigravity aligned with the hook-backed agents while collapsing startup recovery into one MCP call.
 

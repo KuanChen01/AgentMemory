@@ -4,7 +4,7 @@
 
 ---
 
-AgentMemory 是一个免编译、轻量化的全局持久化智能体记忆系统 (Universal Agent Memory - UAM)。它支持多个主流 AI 辅助编程助理（如 **Claude Code**、**OpenCode**、**Codex**、**Antigravity CLI** 等）在不同工作区开发时共同读取和沉淀开发经验、技术决策和历史上下文。
+AgentMemory 是一个免编译、轻量化的全局持久化智能体记忆系统 (Universal Agent Memory - UAM)。它支持多个主流 AI 辅助编程助理（如 **Claude Code**、**OpenCode**、**ChatGPT desktop（Codex runtime）**、**Antigravity CLI** 等）在不同工作区开发时共同读取和沉淀开发经验、技术决策和历史上下文。
 
 ### 🌟 核心特性
 
@@ -26,7 +26,7 @@ graph TD
     subgraph Clients [智能体客户端]
         CC[Claude Code]
         OC[OpenCode]
-        CX[Codex]
+        CX[ChatGPT desktop<br/>(Codex runtime)]
         AG[Antigravity CLI]
     end
 
@@ -92,7 +92,7 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. 自动注册集成
-运行内置的安装器，它会自动向 **Claude Code**、**OpenCode**、**Codex** 和 **Antigravity** 写入相应的 hooks / plugin / MCP 注册参数：
+运行内置的安装器，它会自动向 **Claude Code**、**OpenCode**、**ChatGPT desktop（Codex runtime）** 和 **Antigravity** 写入相应的 hooks / plugin / MCP 注册参数：
 ```bash
 agentmem install
 ```
@@ -357,8 +357,8 @@ Claude Code 当前使用两份不同配置文件：
 }
 ```
 
-#### 3. Codex 客户端（`~/.codex/config.toml` 与 `~/.codex/hooks.json`）
-MCP server 注册在 `config.toml`，生命周期 hooks 注册在 `hooks.json`：
+#### 3. ChatGPT desktop（Codex runtime）（`~/.codex/config.toml` 与 `~/.codex/hooks.json`）
+桌面应用当前显示为 **ChatGPT**，但内部 Codex runtime 仍使用 `~/.codex`。MCP server 注册在 `config.toml`，生命周期 hooks 注册在 `hooks.json`；请保留 `codex-*` hook 文件名不变：
 
 **`~/.codex/config.toml`**
 ```toml
@@ -410,11 +410,15 @@ agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
 }
 ```
 
+安装器还会写入 `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`。把这个文件作为 Antigravity 在 AgentMemory 受管理工作区中的 rule / prompt surface 使用。它会要求 Antigravity 在正常工作前读取或 bootstrap 根目录 `obsiguide.md`，把 `agentmem` 返回只当作未验证工作记忆，写入 `E:\Kuan\Vault` 前必须先用 repo evidence、`obsiguide.md` 和现有 vault notes 交叉验证，根目录 `obsiguide.md` 默认 local-only，不推到 GitHub，并在收尾时用 `record_memory` 记录简洁 session outcome。
+
 推荐的 Antigravity 启动入口（MCP-only，无 session-start hook）：
 
-1. 用当前 `project_path` 调用 `get_project_context`，必要时可附带 `limit`，一次拿到与 hook-backed agent 等价的 `ProjectContextView` 启动文本。
-2. 如果启动后还需要进一步展开细节，再调用 `memory_timeline` 或 `search_memory` 做 drill-down。
-3. 如果 timeline 或 search 结果里有值得展开的条目，再调用 `get_memory_details` 查看完整 narrative 和文件列表。
+1. 先读当前 workspace 根目录 `obsiguide.md`；如果缺失但存在 `obsiguide.template.md`，先按模板创建并用已验证 repo evidence 填好关键字段，再做 feature work。
+2. 用当前 `project_path` 调用 `get_project_context`、`search_memory` 或 `memory_timeline` 恢复 AgentMemory 上下文，并把相关结果先用 repo evidence 和 `obsiguide.md` 验证。
+3. 写入 `E:\Kuan\Vault` 前，必须检查当前 repo evidence、`obsiguide.md` 和现有 vault notes；不要把 AgentMemory 原始摘要或 session recap 直接倒入 vault。
+4. 有意义的工作收尾时调用 `record_memory` 记录简洁 outcome；durable knowledge 只在 `obsiguide.md` 要求时进入 vault。
+5. 如果启动后还需要进一步展开细节，再用 `memory_timeline`、`search_memory` 和 `get_memory_details` 做 drill-down。
 
 这样可以把 Antigravity 的启动恢复收敛成一次 MCP 调用，同时继续保留按需展开历史细节的能力。
 

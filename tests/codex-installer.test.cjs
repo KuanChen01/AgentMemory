@@ -144,7 +144,9 @@ test('agentmem install creates fresh Codex config.toml and hooks.json', async ()
   const tempHome = makeTempHome();
 
   try {
-    await runInstall(tempHome);
+    const { stdout } = await runInstall(tempHome);
+
+    assert.match(stdout, /ChatGPT desktop \(Codex runtime\)/);
 
     const configPath = path.join(tempHome, '.codex', 'config.toml');
     const hooksPath = path.join(tempHome, '.codex', 'hooks.json');

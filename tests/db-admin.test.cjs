@@ -151,3 +151,45 @@ test('DatabaseManager lists global observations with filters and pagination', as
     assert.equal(pagedResults.records.length, 1);
   });
 });
+
+test('DatabaseManager normalizes Antigravity agent aliases on write', async () => {
+  await withDatabase(async (db) => {
+    const aliases = [
+      'Antigravity',
+      'antigravity-cli',
+      'C:/Users/Admin/AppData/Local/agy/bin/agy.exe',
+    ];
+
+    for (const alias of aliases) {
+      await db.saveSession({
+        id: randomUUID(),
+        project_path: 'E:/Repo/A',
+        agent_id: alias,
+        status: 'completed',
+      });
+      await db.saveObservation({
+        id: randomUUID(),
+        session_id: randomUUID(),
+        project_path: 'E:/Repo/A',
+        agent_id: alias,
+        title: `Memory from ${alias}`,
+        narrative: 'Antigravity alias normalization test memory.',
+        facts: ['alias normalization'],
+        concepts: ['agent-id'],
+        files_read: [],
+        files_modified: [],
+        embedding: [1, 0, 0],
+      });
+    }
+
+    const agents = await db.listDistinctAgents();
+    assert.deepEqual(agents, ['antigravity']);
+
+    const antigravityResults = await db.listObservations({
+      agent: 'antigravity',
+      page: 1,
+      pageSize: 10,
+    });
+    assert.equal(antigravityResults.total, 3);
+  });
+});

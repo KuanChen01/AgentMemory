@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
+import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -28,6 +29,8 @@ async function main() {
     const payload = JSON.parse(stdinContent);
     
     const toolName = payload.toolName || payload.tool_name || payload.tool || 'unknown-tool';
+    if (shouldSkipAgentMemoryToolLog(toolName)) return;
+
     const input = payload.input || payload.arguments || payload.args || {};
     const output = payload.output || payload.result || payload.response || '';
     const success = payload.success !== undefined ? payload.success : true;

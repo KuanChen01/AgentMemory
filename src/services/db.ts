@@ -9,6 +9,7 @@ import {
   isTimestampOnOrBefore,
   timestampsEqual,
 } from './timestamps';
+import { normalizeAgentId } from './agent-id';
 
 // Type definitions
 export interface Observation {
@@ -626,11 +627,12 @@ export class DatabaseManager {
   // Create or update a session
   public async saveSession(session: Session): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
+    const normalizedAgentId = normalizeAgentId(session.agent_id);
     this.db.run(
       `INSERT INTO sessions (id, project_path, agent_id, status)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
-      [session.id, session.project_path, session.agent_id, session.status]
+      [session.id, session.project_path, normalizedAgentId, session.status]
     );
   }
 
@@ -643,6 +645,7 @@ export class DatabaseManager {
     const filesReadStr = JSON.stringify(obs.files_read);
     const filesModStr = JSON.stringify(obs.files_modified);
     const embeddingStr = JSON.stringify(obs.embedding);
+    const normalizedAgentId = normalizeAgentId(obs.agent_id);
 
     // Insert into primary table
     if (obs.created_at) {
@@ -653,7 +656,7 @@ export class DatabaseManager {
           obs.id,
           obs.session_id,
           obs.project_path,
-          obs.agent_id,
+          normalizedAgentId,
           obs.title,
           obs.narrative,
           factsStr,
@@ -672,7 +675,7 @@ export class DatabaseManager {
           obs.id,
           obs.session_id,
           obs.project_path,
-          obs.agent_id,
+          normalizedAgentId,
           obs.title,
           obs.narrative,
           factsStr,
@@ -1382,7 +1385,7 @@ export class DatabaseManager {
         normalizedProjectPath,
         input.source_observation_id,
         input.source_session_id,
-        input.source_agent_id,
+        normalizeAgentId(input.source_agent_id),
         input.source_title,
         input.query_text,
         'open',
