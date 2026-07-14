@@ -120,6 +120,10 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.agentmem\.env`
 - `%USERPROFILE%\.agentmem\install-state.json`
 - `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`
+- `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\plugin.json`
+- `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\hooks.json`
+- `%USERPROFILE%\.gemini\config\plugins.json`
+- `%USERPROFILE%\.gemini\config\import_manifest.json`
 - `%USERPROFILE%\.agentmem\backups\`
 - `%USERPROFILE%\.claude.json`
 - `%USERPROFILE%\.claude\settings.json`
@@ -157,7 +161,7 @@ bootstrap 成功后，再做这四项 live acceptance：
 1. `Claude Code` 新开一个会话，确认能看到 `SessionStart` 恢复内容
 2. `ChatGPT desktop（Codex runtime）` 新开一个会话，确认能看到 `SessionStart` 恢复内容；配置仍位于 `%USERPROFILE%\.codex\config.toml` 与 `%USERPROFILE%\.codex\hooks.json`
 3. `OpenCode` 新开一个会话并执行一次工具，确认插件桥接仍能恢复并写入
-4. `Antigravity` 读取 `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` 作为 rule / prompt surface，再对当前项目调用 `get_project_context`，确认能一次取回启动上下文
+4. `agy plugin list` 能看到已导入的 `agentmem` plugin；新开 Antigravity 会话后，`PreInvocation` 自动注入 context、`PostToolUse` 自动写入且记录的 `agent_id` / `project_path` 分别为 `antigravity` 和当前 workspace，`Stop` 会关闭 session
 5. 对任意受管理 repo，确认 Antigravity 会先读或 bootstrap 根目录 `obsiguide.md`，把 `agentmem` search/timeline 结果视为未验证工作记忆，且写入 `E:\Kuan\Vault` 前先按 `obsiguide.md` 和现有 vault notes 验证
 
 ## Troubleshooting
@@ -170,6 +174,10 @@ bootstrap 成功后，再做这四项 live acceptance：
   - 先重新运行 `agentmem install --strict`
   - 如果 Antigravity registry 路径不标准，带上 `--antigravity-config`
   - 这个文件是 AgentMemory 为 Antigravity 生成的规则面，用来区分 `obsiguide.md`、Obsidian Vault 和 `agentmem` working memory 的边界
+
+- `agy plugin list` 中没有 `agentmem`
+  - 重新执行 `agentmem install --strict`；安装器会调用官方 `agy plugin install` 激活 hooks plugin
+  - 检查 `%USERPROFILE%\.gemini\config\import_manifest.json` 与 `%USERPROFILE%\.gemini\config\plugins\agentmem\hooks.json`
 
 - `Bootstrap scaffolded ...\.agentmem\.env`
   - 说明 `.env` 只是模板，还没有真实凭证

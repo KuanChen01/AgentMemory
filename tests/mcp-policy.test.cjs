@@ -50,12 +50,13 @@ async function withSeededDatabase(run) {
   }
 }
 
-async function startMcpServer(dbPath) {
+async function startMcpServer(dbPath, extraEnv = {}) {
   const child = spawn('node', ['dist/servers/mcp-server.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: {
       ...process.env,
       AGENTMEM_DB_PATH: dbPath,
+      ...extraEnv,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -179,5 +180,31 @@ test('MCP record_memory does not write when write policy is off', async () => {
     const after = await reopened.listObservations({ page: 1, pageSize: 50 });
     reopened.close();
     assert.equal(after.total, before.total);
+  });
+});
+
+test('MCP record_memory inherits the configured client identity when agent_id is omitted', async () => {
+  await withSeededDatabase(async (db, dbPath) => {
+    const child = await startMcpServer(dbPath, { AGENTMEM_AGENT_ID: 'antigravity' });
+
+    try {
+      const response = await callTool(child, 3, 'record_memory', {
+        title: 'Antigravity identity fallback test',
+        narrative: 'The MCP client omitted agent_id and should inherit its configured identity.',
+        project_path: 'E:/Repo/A',
+      });
+      assert.match(response.result.content[0].text, /successfully recorded/i);
+    } finally {
+      await stopMcpServer(child);
+    }
+
+    const records = await db.listObservations({
+      agent: 'antigravity',
+      query: 'Antigravity identity fallback test',
+      page: 1,
+      pageSize: 10,
+    });
+    assert.equal(records.total, 1);
+    assert.equal(records.records[0].agent_id, 'antigravity');
   });
 });

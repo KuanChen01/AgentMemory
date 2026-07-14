@@ -23,7 +23,7 @@ import {
   renderProjectContextView,
 } from '../services/context-view';
 import { getEmbedding } from '../services/embedding';
-import { normalizeAgentId } from '../services/agent-id';
+import { resolveAgentId } from '../services/agent-id';
 import { resolveMemoryQuery } from '../services/memory-query';
 import { orchestrateMemoryRead } from '../services/memory-orchestrator';
 import {
@@ -577,7 +577,7 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
         const filesModified = (args?.files_modified as string[]) || [];
         const filesRead = (args?.files_read as string[]) || [];
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
-        const agentId = normalizeAgentId(String(args?.agent_id || 'mcp-client'));
+        const agentId = resolveAgentId(args?.agent_id);
 
         // Generate embedding vector
         const textToEmbed = `${title} ${narrative} ${facts.join(' ')} ${concepts.join(' ')}`;

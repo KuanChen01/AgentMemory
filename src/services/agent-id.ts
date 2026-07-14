@@ -16,3 +16,20 @@ export function normalizeAgentId(agentId: string): string {
 
   return raw;
 }
+
+export function resolveAgentId(
+  requestedAgentId?: unknown,
+  configuredAgentId: unknown = process.env.AGENTMEM_AGENT_ID
+): string {
+  const requested = String(requestedAgentId || '').trim();
+  if (requested) {
+    return normalizeAgentId(requested);
+  }
+
+  const configured = String(configuredAgentId || '').trim();
+  if (configured) {
+    return normalizeAgentId(configured);
+  }
+
+  return 'mcp-client';
+}

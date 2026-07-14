@@ -404,23 +404,24 @@ Generic shape:
     "agentmem": {
       "command": "node",
       "args": ["path/to/AgentMemory/dist/servers/mcp-server.js"],
+      "env": { "AGENTMEM_AGENT_ID": "antigravity" },
       "disabled": false
     }
   }
 }
 ```
 
-The installer also writes `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`. Use that file as the Antigravity rule/prompt surface for AgentMemory-managed workspaces. It tells Antigravity to read or bootstrap root `obsiguide.md` before normal work, treat `agentmem` results as unverified working memory, verify before writing to `E:\Kuan\Vault`, keep root `obsiguide.md` local-only, and finish by recording a concise `record_memory` session outcome.
+The installer also creates and activates an Antigravity plugin under `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem`. Its `PreInvocation`, `PostToolUse`, and `Stop` hooks automatically inject `ProjectContextView`, record tool work as canonical `antigravity`, and close the session. The MCP registry receives `AGENTMEM_AGENT_ID=antigravity`, so explicit `record_memory` calls that omit `agent_id` no longer fall back to `mcp-client`. `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` remains as a readable compatibility copy of the plugin rule.
 
-Preferred startup call for Antigravity (MCP-only, no session-start hook):
+Preferred Antigravity workflow:
 
 1. Read the current workspace root `obsiguide.md`; if it is missing but `obsiguide.template.md` exists, bootstrap and initialize `obsiguide.md` from verified repo evidence before feature work.
-2. Call `get_project_context`, `search_memory`, or `memory_timeline` with the current `project_path` to recover AgentMemory context, then verify relevant results against repo evidence and `obsiguide.md`.
+2. Let the `PreInvocation` hook inject startup context automatically. Use `get_project_context`, `search_memory`, or `memory_timeline` only for explicit drill-down, then verify relevant results against repo evidence and `obsiguide.md`.
 3. Before writing to `E:\Kuan\Vault`, check current repo evidence, `obsiguide.md`, and existing vault notes. Do not paste raw AgentMemory summaries or session recaps into the vault.
-4. Finish meaningful work with `record_memory`, while promoting durable knowledge to the vault only when `obsiguide.md` says to do so.
+4. Normal tool work is recorded automatically by `PostToolUse`, and `Stop` closes the session. Use explicit `record_memory(agent_id="antigravity")` only for a deliberate milestone entry.
 5. If you need more detail after startup, use `memory_timeline`, `search_memory`, and then `get_memory_details` for drill-down.
 
-This keeps Antigravity aligned with the hook-backed agents while collapsing startup recovery into one MCP call.
+This gives Antigravity the same automatic read/write lifecycle as the other hook-backed agents.
 
 ### ✅ Smoke Validation Checklist
 

@@ -404,23 +404,24 @@ agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
     "agentmem": {
       "command": "node",
       "args": ["您的开发路径/AgentMemory/dist/servers/mcp-server.js"],
+      "env": { "AGENTMEM_AGENT_ID": "antigravity" },
       "disabled": false
     }
   }
 }
 ```
 
-安装器还会写入 `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`。把这个文件作为 Antigravity 在 AgentMemory 受管理工作区中的 rule / prompt surface 使用。它会要求 Antigravity 在正常工作前读取或 bootstrap 根目录 `obsiguide.md`，把 `agentmem` 返回只当作未验证工作记忆，写入 `E:\Kuan\Vault` 前必须先用 repo evidence、`obsiguide.md` 和现有 vault notes 交叉验证，根目录 `obsiguide.md` 默认 local-only，不推到 GitHub，并在收尾时用 `record_memory` 记录简洁 session outcome。
+安装器还会在 `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem` 创建并激活 Antigravity plugin。它通过 `PreInvocation`、`PostToolUse` 和 `Stop` 自动注入 `ProjectContextView`、把工具工作记录为 canonical `antigravity` 并关闭 session；MCP registry 同时注入 `AGENTMEM_AGENT_ID=antigravity`，因此显式 `record_memory` 即使省略 `agent_id` 也不会再落到 `mcp-client`。`%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` 继续作为 plugin rule 的可读兼容副本。
 
-推荐的 Antigravity 启动入口（MCP-only，无 session-start hook）：
+推荐的 Antigravity 工作流：
 
 1. 先读当前 workspace 根目录 `obsiguide.md`；如果缺失但存在 `obsiguide.template.md`，先按模板创建并用已验证 repo evidence 填好关键字段，再做 feature work。
-2. 用当前 `project_path` 调用 `get_project_context`、`search_memory` 或 `memory_timeline` 恢复 AgentMemory 上下文，并把相关结果先用 repo evidence 和 `obsiguide.md` 验证。
+2. 让 `PreInvocation` hook 自动注入启动上下文；只有需要进一步展开时才调用 `get_project_context`、`search_memory` 或 `memory_timeline`，并把结果先用 repo evidence 和 `obsiguide.md` 验证。
 3. 写入 `E:\Kuan\Vault` 前，必须检查当前 repo evidence、`obsiguide.md` 和现有 vault notes；不要把 AgentMemory 原始摘要或 session recap 直接倒入 vault。
-4. 有意义的工作收尾时调用 `record_memory` 记录简洁 outcome；durable knowledge 只在 `obsiguide.md` 要求时进入 vault。
+4. 普通工具工作由 `PostToolUse` 自动记录，`Stop` 自动关闭 session；只有需要单独标记里程碑时才显式调用 `record_memory(agent_id="antigravity")`。
 5. 如果启动后还需要进一步展开细节，再用 `memory_timeline`、`search_memory` 和 `get_memory_details` 做 drill-down。
 
-这样可以把 Antigravity 的启动恢复收敛成一次 MCP 调用，同时继续保留按需展开历史细节的能力。
+这样 Antigravity 也具备与其他 hook-backed agent 一致的自动读写生命周期。
 
 ### ✅ Smoke 验证清单
 

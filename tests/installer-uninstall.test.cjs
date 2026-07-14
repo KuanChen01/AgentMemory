@@ -30,6 +30,7 @@ function makeCliEnv(tempHome) {
 
   return {
     ...process.env,
+    AGENTMEM_SKIP_ANTIGRAVITY_PLUGIN_ACTIVATION: '1',
     AGENTMEM_SKIP_GLOBAL_UNLINK: '1',
     HOME: tempHome,
     USERPROFILE: tempHome,

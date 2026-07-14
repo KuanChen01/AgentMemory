@@ -13,7 +13,11 @@ export type ManagedTargetKind =
   | 'opencode-displaced-json'
   | 'opencode-plugin'
   | 'antigravity-config'
-  | 'antigravity-guidance';
+  | 'antigravity-guidance'
+  | 'antigravity-plugins-config'
+  | 'antigravity-plugin-manifest'
+  | 'antigravity-plugin-hooks'
+  | 'antigravity-plugin-rule';
 
 export interface InstallStateRecord {
   baselineBackupPath?: string;

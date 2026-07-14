@@ -9,8 +9,11 @@ const { spawn } = require('node:child_process');
 const projectRoot = path.resolve(__dirname, '..');
 const cliPath = path.join(projectRoot, 'dist', 'bin', 'cli.js');
 const {
+  ensureAntigravityPluginsConfig,
   ensureAntigravityMcpServer,
   renderAntigravityGuidance,
+  renderAntigravityPluginHooks,
+  renderAntigravityPluginManifest,
   renderOpenCodePlugin,
   resolveAntigravityConfigPath,
 } = require('../dist/services/agent-installer.js');
@@ -33,6 +36,7 @@ function makeCliEnv(tempHome) {
 
   return {
     ...process.env,
+    AGENTMEM_SKIP_ANTIGRAVITY_PLUGIN_ACTIVATION: '1',
     HOME: tempHome,
     USERPROFILE: tempHome,
     HOMEDRIVE: homedrive,
@@ -116,6 +120,7 @@ test('ensureAntigravityMcpServer upserts a single mcpServers.agentmem entry', ()
   assert.deepEqual(parsed.mcpServers.agentmem, {
     command: 'node',
     args: ['E:/Repo/AgentMemory/dist/servers/mcp-server.js'],
+    env: { AGENTMEM_AGENT_ID: 'antigravity' },
     disabled: false,
   });
   assert.equal(parsed.mcpServers.agentvault, undefined);
@@ -124,6 +129,33 @@ test('ensureAntigravityMcpServer upserts a single mcpServers.agentmem entry', ()
     args: ['server.py'],
     disabled: false,
   });
+});
+
+test('ensureAntigravityPluginsConfig registers one AgentMemory plugin root', () => {
+  const pluginRoot = 'C:/Users/Test/.agentmem/antigravity-plugins';
+  const original = JSON.stringify({
+    entries: [
+      { path: 'C:/custom/plugins' },
+      { path: pluginRoot },
+    ],
+  });
+  const parsed = JSON.parse(ensureAntigravityPluginsConfig(original, pluginRoot));
+  assert.deepEqual(parsed.entries, [
+    { path: 'C:/custom/plugins' },
+    { path: pluginRoot },
+  ]);
+});
+
+test('renderAntigravity plugin artifacts wire lifecycle hooks to the built bridge', () => {
+  const manifest = JSON.parse(renderAntigravityPluginManifest());
+  const hooks = renderAntigravityPluginHooks(
+    'E:/Repo/AgentMemory/dist/hooks/antigravity-hook.js'
+  );
+  assert.equal(manifest.name, 'agentmem');
+  assert.match(hooks, /PreInvocation/);
+  assert.match(hooks, /PostToolUse/);
+  assert.match(hooks, /Stop/);
+  assert.match(hooks, /antigravity-hook\.js/);
 });
 
 test('renderAntigravityGuidance separates obsiguide, vault, and agentmem boundaries', () => {
@@ -212,6 +244,7 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
     assert.deepEqual(antigravityConfig.mcpServers.agentmem, {
       command: 'node',
       args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
+      env: { AGENTMEM_AGENT_ID: 'antigravity' },
       disabled: false,
     });
 
@@ -221,6 +254,26 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
     assert.match(guidanceText, /Before normal repo work, read the current workspace root `obsiguide\.md`/);
     assert.match(guidanceText, /Treat all AgentMemory results as unverified working memory/);
     assert.match(guidanceText, /Never copy raw AgentMemory summaries/);
+
+    const pluginRoot = path.join(tempHome, '.agentmem', 'antigravity-plugins');
+    const pluginDir = path.join(pluginRoot, 'agentmem');
+    const pluginsConfig = JSON.parse(
+      fs.readFileSync(path.join(tempHome, '.gemini', 'config', 'plugins.json'), 'utf8')
+    );
+    assert.deepEqual(pluginsConfig.entries, [{ path: pluginRoot.replace(/\\/g, '/') }]);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8')),
+      { name: 'agentmem' }
+    );
+    const hooksText = fs.readFileSync(path.join(pluginDir, 'hooks.json'), 'utf8');
+    assert.match(hooksText, /PreInvocation/);
+    assert.match(hooksText, /PostToolUse/);
+    assert.match(hooksText, /Stop/);
+    assert.match(hooksText, /antigravity-hook\.js/);
+    assert.match(
+      fs.readFileSync(path.join(pluginDir, 'rules', 'agentmem.md'), 'utf8'),
+      /agent_id: "antigravity"/
+    );
   } finally {
     removeDir(tempHome);
   }
@@ -261,6 +314,7 @@ test('agentmem install migrates stale Antigravity CLI agentvault registry', asyn
     assert.deepEqual(antigravityConfig.mcpServers.agentmem, {
       command: 'node',
       args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
+      env: { AGENTMEM_AGENT_ID: 'antigravity' },
       disabled: false,
     });
     assert.equal(
