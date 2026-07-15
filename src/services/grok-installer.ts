@@ -4,6 +4,10 @@ interface TomlSection {
 }
 
 const TOP_LEVEL_SECTION = /^\s*\[([^\[\]]+)\]\s*$/;
+const GROK_RULES_START = '<!-- AgentMemory Grok Vault Rules: START -->';
+const GROK_RULES_END = '<!-- AgentMemory Grok Vault Rules: END -->';
+const MANAGED_HOOKS_FALSE = 'hooks = false # AgentMemory managed';
+const ORIGINAL_HOOKS_PREFIX = '# AgentMemory original compat.claude hooks = ';
 
 function normalizeToml(toml: string): string {
   return toml.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -57,6 +61,40 @@ function withoutExactAssignment(lines: string[], key: string, value: string): st
   return lines.filter((line) => !pattern.test(line));
 }
 
+function findHooksAssignment(lines: string[]): { line: string; value: 'true' | 'false' } | null {
+  for (const line of lines) {
+    const match = line.match(/^\s*hooks\s*=\s*(true|false)\s*(?:#.*)?$/i);
+    if (match) {
+      return { line, value: match[1].toLowerCase() as 'true' | 'false' };
+    }
+  }
+  return null;
+}
+
+function isManagedHooksAssignment(line: string): boolean {
+  return /#\s*AgentMemory managed\s*$/i.test(line);
+}
+
+function removeManagedCompatHooks(lines: string[]): string[] {
+  let originalValue: 'true' | 'false' | null = null;
+  const output: string[] = [];
+
+  for (const line of lines) {
+    const originalMatch = line.match(/^\s*#\s*AgentMemory original compat\.claude hooks\s*=\s*(true|false)\s*$/i);
+    if (originalMatch) {
+      originalValue = originalMatch[1].toLowerCase() as 'true' | 'false';
+      continue;
+    }
+    if (isManagedHooksAssignment(line)) continue;
+    output.push(line);
+  }
+
+  if (originalValue) {
+    output.push(`hooks = ${originalValue}`);
+  }
+  return output;
+}
+
 export function ensureGrokConfigToml(toml: string, mcpServerPath: string): string {
   const output: TomlSection[] = [{ name: null, lines: parseTomlSections(toml)[0]?.lines || [] }];
   const parsed = parseTomlSections(toml);
@@ -78,7 +116,7 @@ export function ensureGrokConfigToml(toml: string, mcpServerPath: string): strin
     }
     if (section.name === 'compat.claude') {
       compatIndex ??= output.length;
-      compatLines.push(...withoutAssignments(section.lines, ['hooks']));
+      compatLines.push(...section.lines);
       continue;
     }
     output.push({ name: section.name, lines: section.lines });
@@ -88,9 +126,20 @@ export function ensureGrokConfigToml(toml: string, mcpServerPath: string): strin
     output.splice(index ?? output.length, 0, section);
   };
   insertAt(agentIndex, { name: 'agent', lines: ['name = "agentmem"', ...trimBlankEdges(agentLines)] });
+  const existingHooks = findHooksAssignment(compatLines);
+  const compatWithoutHooks = withoutAssignments(compatLines, ['hooks']);
+  const managedCompatLines = existingHooks?.value === 'false' && !isManagedHooksAssignment(existingHooks.line)
+    ? [existingHooks.line, ...trimBlankEdges(compatWithoutHooks)]
+    : [
+      ...(existingHooks?.value === 'true' && !isManagedHooksAssignment(existingHooks.line)
+        ? [`${ORIGINAL_HOOKS_PREFIX}true`]
+        : []),
+      MANAGED_HOOKS_FALSE,
+      ...trimBlankEdges(compatWithoutHooks),
+    ];
   insertAt(compatIndex === null ? null : Math.min(compatIndex + 1, output.length), {
     name: 'compat.claude',
-    lines: ['hooks = false', ...trimBlankEdges(compatLines)],
+    lines: managedCompatLines,
   });
   insertAt(mcpIndex, {
     name: 'mcp_servers.agentmem',
@@ -117,7 +166,7 @@ export function removeGrokAgentMemoryConfig(toml: string): string {
       continue;
     }
     if (section.name === 'compat.claude') {
-      const lines = withoutExactAssignment(section.lines, 'hooks', 'false');
+      const lines = removeManagedCompatHooks(section.lines);
       if (trimBlankEdges(lines).length > 0) output.push({ name: section.name, lines });
       continue;
     }
@@ -147,7 +196,7 @@ Normal tool activity is captured by hooks. For a deliberate milestone, call \`re
 `;
 }
 
-export function renderGrokGlobalRules(): string {
+function renderGrokGlobalRulesBody(): string {
   return `# AgentMemory Grok Vault Rules
 
 ## Obsidian Sync Rules
@@ -192,6 +241,47 @@ export function renderGrokGlobalRules(): string {
 - \`obsiguide.md\` 是 repo-local sync guide，不是长期知识库。
 - 不要将 repo-root \`AGENTS.md\`、\`CLAUDE.md\` 或 \`GEMINI.md\` 当作项目级 sync contract；项目合同始终是 root \`obsiguide.md\`。
 `;
+}
+
+export function renderGrokGlobalRules(): string {
+  return `${GROK_RULES_START}\n${renderGrokGlobalRulesBody().trimEnd()}\n${GROK_RULES_END}\n`;
+}
+
+export function hasGrokGlobalRules(text: string): boolean {
+  const start = text.indexOf(GROK_RULES_START);
+  const end = text.indexOf(GROK_RULES_END);
+  return start >= 0 && end > start;
+}
+
+function isLegacyGrokGlobalRules(text: string): boolean {
+  return normalizeToml(text).trim() === renderGrokGlobalRulesBody().trim();
+}
+
+export function mergeGrokGlobalRules(existing: string): string {
+  const normalized = normalizeToml(existing);
+  const start = normalized.indexOf(GROK_RULES_START);
+  const end = normalized.indexOf(GROK_RULES_END);
+  const managedRules = renderGrokGlobalRules().trimEnd();
+
+  if (start >= 0 && end > start) {
+    const afterEnd = end + GROK_RULES_END.length;
+    return `${normalized.slice(0, start)}${managedRules}${normalized.slice(afterEnd)}`.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  }
+  if (normalized.trim() === '' || isLegacyGrokGlobalRules(normalized)) {
+    return `${managedRules}\n`;
+  }
+  return `${normalized.trimEnd()}\n\n${managedRules}\n`;
+}
+
+export function removeGrokGlobalRules(existing: string): string {
+  const normalized = normalizeToml(existing);
+  const start = normalized.indexOf(GROK_RULES_START);
+  const end = normalized.indexOf(GROK_RULES_END);
+  if (start >= 0 && end > start) {
+    const afterEnd = end + GROK_RULES_END.length;
+    return `${normalized.slice(0, start)}${normalized.slice(afterEnd)}`.replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return isLegacyGrokGlobalRules(normalized) ? '' : existing;
 }
 
 export function renderGrokHooksConfig(grokHookPath: string): string {

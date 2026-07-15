@@ -19,7 +19,10 @@ const {
 } = require('../dist/services/agent-installer.js');
 const {
   ensureGrokConfigToml,
+  hasGrokGlobalRules,
+  mergeGrokGlobalRules,
   removeGrokAgentMemoryConfig,
+  removeGrokGlobalRules,
   renderGrokAgentProfile,
   renderGrokGlobalRules,
   renderGrokHooksConfig,
@@ -155,7 +158,7 @@ test('Grok config upsert preserves unrelated settings and enables the managed id
   const cleaned = removeGrokAgentMemoryConfig(updated);
   assert.doesNotMatch(cleaned, /mcp_servers\.agentmem/);
   assert.doesNotMatch(cleaned, /name = "agentmem"/);
-  assert.doesNotMatch(cleaned, /hooks = false/);
+  assert.match(cleaned, /hooks = true/);
   assert.match(cleaned, /skills = true/);
   assert.match(cleaned, /model = "grok-build"/);
 });
@@ -172,10 +175,31 @@ test('Grok generated global rules, profile, and hooks provide the Vault and life
   assert.match(rules, /obsiguide\.md/);
   assert.match(rules, /E:\\Kuan\\Vault/);
   assert.match(rules, /Project Ledger/);
+  assert.equal(hasGrokGlobalRules(rules), true);
   assert.match(hooks, /SessionStart/);
   assert.match(hooks, /PostToolUseFailure/);
   assert.match(hooks, /SessionEnd/);
   assert.match(hooks, /grok-hook\.js/);
+});
+
+test('Grok global rules merge into and remove from an existing user rules file', () => {
+  const original = '# User Grok Rules\n\nKeep the Acme workflow enabled.\n';
+  const merged = mergeGrokGlobalRules(original);
+  const twice = mergeGrokGlobalRules(merged);
+
+  assert.match(merged, /# User Grok Rules/);
+  assert.match(merged, /AgentMemory Grok Vault Rules: START/);
+  assert.equal(twice, merged);
+  assert.equal(removeGrokGlobalRules(`${merged}\n# User addition\n`), `${original.trimEnd()}\n\n# User addition`);
+});
+
+test('Grok config cleanup preserves a user-owned hooks false setting', () => {
+  const original = '[compat.claude]\nhooks = false\n';
+  const updated = ensureGrokConfigToml(original, 'E:/Repo/AgentMemory/dist/servers/mcp-server.js');
+  const cleaned = removeGrokAgentMemoryConfig(`${updated}\n[custom]\nflag = true\n`);
+
+  assert.match(cleaned, /hooks = false/);
+  assert.match(cleaned, /\[custom\]/);
 });
 
 test('ensureAntigravityPluginsConfig registers one AgentMemory plugin root', () => {

@@ -9,7 +9,10 @@ import {
 } from './codex-installer';
 import {
   ensureGrokConfigToml,
+  hasGrokGlobalRules,
+  mergeGrokGlobalRules,
   removeGrokAgentMemoryConfig,
+  removeGrokGlobalRules,
   renderGrokAgentProfile,
   renderGrokGlobalRules,
   renderGrokHooksConfig,
@@ -657,8 +660,7 @@ function detectCodexHooksLegacy(hooksConfig: Record<string, any>): boolean {
 
 function detectGrokConfigLegacy(toml: string): boolean {
   return /\[mcp_servers\.agentmem\]/.test(toml) ||
-    /\[agent\][\s\S]*?^\s*name\s*=\s*["']agentmem["']/m.test(toml) ||
-    /\[compat\.claude\][\s\S]*?^\s*hooks\s*=\s*false\s*$/m.test(toml);
+    /\[agent\][\s\S]*?^\s*name\s*=\s*["']agentmem["']/m.test(toml);
 }
 
 function detectOpenCodeLegacy(config: Record<string, any>): boolean {
@@ -1160,6 +1162,9 @@ function installGrok(context: InstallContext): InstallResult {
   const existingToml = fs.existsSync(context.paths.grokConfigPath)
     ? fs.readFileSync(context.paths.grokConfigPath, 'utf8')
     : '';
+  const existingRules = fs.existsSync(context.paths.grokRulesPath)
+    ? fs.readFileSync(context.paths.grokRulesPath, 'utf8')
+    : '';
 
   const warnings = [
     ...applyManagedTextWrite(
@@ -1189,9 +1194,8 @@ function installGrok(context: InstallContext): InstallResult {
       context,
       'grok-rules',
       context.paths.grokRulesPath,
-      renderGrokGlobalRules(),
-      fs.existsSync(context.paths.grokRulesPath) &&
-        fs.readFileSync(context.paths.grokRulesPath, 'utf8').includes('AgentMemory Grok Vault Rules')
+      mergeGrokGlobalRules(existingRules),
+      existingRules.trim() === renderGrokGlobalRules().trim()
     ),
   ];
 
@@ -1420,13 +1424,13 @@ function uninstallGrok(context: InstallContext): UninstallResult {
     fs.existsSync(context.paths.grokProfilePath) &&
       fs.readFileSync(context.paths.grokProfilePath, 'utf8').includes('AgentMemory Grok Profile')
   );
-  const rulesCleanup = uninstallDedicatedArtifact(
-    context,
-    'grok-rules',
-    context.paths.grokRulesPath,
-    fs.existsSync(context.paths.grokRulesPath) &&
-      fs.readFileSync(context.paths.grokRulesPath, 'utf8').includes('AgentMemory Grok Vault Rules')
-  );
+  const rulesCleanup = uninstallManagedTextTarget(context, {
+    cleanup: removeGrokGlobalRules,
+    hasManagedContent: hasGrokGlobalRules,
+    kind: 'grok-rules',
+    removeWhenEmpty: true,
+    targetPath: context.paths.grokRulesPath,
+  });
 
   return {
     action: `${configCleanup.action}+${hooksCleanup.action}+${profileCleanup.action}+${rulesCleanup.action}`,
@@ -1521,7 +1525,7 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   if (!grokToml.includes(paths.mcpServerPath) || !/AGENTMEM_AGENT_ID\s*=\s*"grok"/.test(grokToml)) {
     issues.push(`Grok config.toml is missing the AgentMemory MCP server or AGENTMEM_AGENT_ID=grok (${paths.grokConfigPath}).`);
   }
-  if (!/^\s*name\s*=\s*"agentmem"\s*$/m.test(grokToml) || !/^\s*hooks\s*=\s*false\s*$/m.test(grokToml)) {
+  if (!/^\s*name\s*=\s*"agentmem"\s*$/m.test(grokToml) || !/^\s*hooks\s*=\s*false\s*(?:#.*)?$/m.test(grokToml)) {
     issues.push(`Grok config.toml is missing the default agentmem profile or compat.claude hooks=false (${paths.grokConfigPath}).`);
   }
   if (!fs.existsSync(paths.grokHooksPath) || !fs.readFileSync(paths.grokHooksPath, 'utf8').includes(paths.grokHook)) {

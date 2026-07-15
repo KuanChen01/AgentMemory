@@ -303,18 +303,65 @@ test('agentmem uninstall restores a pristine Grok config and removes generated a
     const grokProfilePath = path.join(tempHome, '.grok', 'agents', 'agentmem.md');
     const grokRulesPath = path.join(tempHome, '.grok', 'AGENTS.md');
     const original = `[cli]\ninstaller = "internal"\n`;
+    const originalRules = '# User Grok Rules\n\nKeep the Acme workflow enabled.\n';
     fs.mkdirSync(path.dirname(grokConfigPath), { recursive: true });
     fs.writeFileSync(grokConfigPath, original, 'utf8');
+    fs.writeFileSync(grokRulesPath, originalRules, 'utf8');
 
     await runCli(tempHome, ['install']);
-    assert.match(fs.readFileSync(grokRulesPath, 'utf8'), /AgentMemory Grok Vault Rules/);
-    assert.match(fs.readFileSync(grokRulesPath, 'utf8'), /obsiguide\.md/);
+    const installedRules = fs.readFileSync(grokRulesPath, 'utf8');
+    assert.match(installedRules, /# User Grok Rules/);
+    assert.match(installedRules, /AgentMemory Grok Vault Rules: START/);
     await runCli(tempHome, ['uninstall']);
 
     assert.equal(fs.readFileSync(grokConfigPath, 'utf8'), original);
     assert.equal(fs.existsSync(grokHooksPath), false);
     assert.equal(fs.existsSync(grokProfilePath), false);
-    assert.equal(fs.existsSync(grokRulesPath), false);
+    assert.equal(fs.readFileSync(grokRulesPath, 'utf8'), originalRules);
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
+test('agentmem uninstall removes only its Grok rules block after a user rules file diverges', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    seedAntigravity(tempHome);
+    const grokRulesPath = path.join(tempHome, '.grok', 'AGENTS.md');
+    const originalRules = '# User Grok Rules\n\nKeep the Acme workflow enabled.\n';
+    fs.mkdirSync(path.dirname(grokRulesPath), { recursive: true });
+    fs.writeFileSync(grokRulesPath, originalRules, 'utf8');
+
+    await runCli(tempHome, ['install']);
+    fs.appendFileSync(grokRulesPath, '\n# User addition\nKeep the release checklist.\n', 'utf8');
+    await runCli(tempHome, ['uninstall']);
+
+    const cleanedRules = fs.readFileSync(grokRulesPath, 'utf8');
+    assert.match(cleanedRules, /# User Grok Rules/);
+    assert.match(cleanedRules, /# User addition/);
+    assert.doesNotMatch(cleanedRules, /AgentMemory Grok Vault Rules/);
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
+test('agentmem uninstall preserves a user-owned Grok hooks false setting after config drift', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    seedAntigravity(tempHome);
+    const grokConfigPath = path.join(tempHome, '.grok', 'config.toml');
+    fs.mkdirSync(path.dirname(grokConfigPath), { recursive: true });
+    fs.writeFileSync(grokConfigPath, '[compat.claude]\nhooks = false\n', 'utf8');
+
+    await runCli(tempHome, ['install']);
+    fs.appendFileSync(grokConfigPath, '\n[custom]\nflag = true\n', 'utf8');
+    await runCli(tempHome, ['uninstall']);
+
+    const cleaned = fs.readFileSync(grokConfigPath, 'utf8');
+    assert.match(cleaned, /hooks = false/);
+    assert.match(cleaned, /\[custom\]/);
   } finally {
     removeDir(tempHome);
   }
