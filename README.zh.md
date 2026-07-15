@@ -4,7 +4,7 @@
 
 ---
 
-AgentMemory 是一个免编译、轻量化的全局持久化智能体记忆系统 (Universal Agent Memory - UAM)。它支持多个主流 AI 辅助编程助理（如 **Claude Code**、**OpenCode**、**ChatGPT desktop（Codex runtime）**、**Antigravity CLI** 等）在不同工作区开发时共同读取和沉淀开发经验、技术决策和历史上下文。
+AgentMemory 是一个免编译、轻量化的全局持久化智能体记忆系统 (Universal Agent Memory - UAM)。它支持多个主流 AI 辅助编程助理（如 **Claude Code**、**OpenCode**、**ChatGPT desktop（Codex runtime）**、**Antigravity CLI**、**Grok** 等）在不同工作区开发时共同读取和沉淀开发经验、技术决策和历史上下文。
 
 ### 🌟 核心特性
 
@@ -28,6 +28,7 @@ graph TD
         OC[OpenCode]
         CX[ChatGPT desktop<br/>(Codex runtime)]
         AG[Antigravity CLI]
+        GK[Grok]
     end
 
     subgraph AgentMemory Core [AgentMemory 系统核心]
@@ -41,9 +42,11 @@ graph TD
     OC -- Stdio MCP / ESM Plugin --> MCP
     CX -- Stdio MCP --> MCP
     AG -- Stdio MCP --> MCP
+    GK -- Stdio MCP / Hooks --> MCP
 
     CC -- 拦截工具日志 --> Worker
     OC -- 拦截工具日志 --> Worker
+    GK -- 生命周期事件 --> Worker
 
     Worker -- 异步摘要提取 --> LLM[DeepSeek Flash API]
     Worker -- 写入观测记录 --> DB
@@ -92,12 +95,12 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. 自动注册集成
-运行内置的安装器，它会自动向 **Claude Code**、**OpenCode**、**ChatGPT desktop（Codex runtime）** 和 **Antigravity** 写入相应的 hooks / plugin / MCP 注册参数：
+运行内置的安装器，它会自动向 **Claude Code**、**OpenCode**、**ChatGPT desktop（Codex runtime）**、**Antigravity** 和 **Grok** 写入相应的 hooks / plugin / MCP 注册参数：
 ```bash
 agentmem install
 ```
 
-如果你希望“四个 agent 任意一个没配好就立刻失败”，请使用：
+如果你希望“五个 agent 任意一个没配好就立刻失败”，请使用：
 ```bash
 agentmem install --strict
 ```
@@ -132,7 +135,7 @@ agentmem uninstall --strict
 *   **停止后台服务**：`agentmem stop`
 *   **查询运行状态**：`agentmem status`
 *   **查看当前版本**：`agentmem version`
-*   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode、Codex 和 Antigravity 的设置）
+*   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode、Codex、Antigravity 和 Grok 的设置）
 *   **严格注册模式**：`agentmem install --strict`（任意一项失败即退出）
 *   **卸载本机集成**：`agentmem uninstall --strict`（移除当前机器上的 AgentMemory hooks、MCP 注册、插件产物、`.env` 与数据库文件）
 *   **彻底清掉安装状态**：`agentmem uninstall --strict --purge-all`（同时删除保留的备份与 install-state）
@@ -151,7 +154,7 @@ cd AgentMemory
 .\bootstrap-second-machine.cmd
 ```
 
-这个入口会自动执行 `npm install`、`npm run build`、创建或校验 `%USERPROFILE%\.agentmem\.env`、执行 `npm link`、配置四个 agent、探测或拉起 worker，并打开 `/admin`。
+这个入口会自动执行 `npm install`、`npm run build`、创建或校验 `%USERPROFILE%\.agentmem\.env`、执行 `npm link`、配置五个 agent、探测或拉起 worker，并打开 `/admin`。
 
 如果 `%USERPROFILE%\.agentmem\.env` 不存在，bootstrap 会先写一个“空 API key + 默认 URL/model”的安全模板，然后立即停止，不会假装成功。你只需要填好 `AGENTMEM_LLM_*` 后重新运行。
 
@@ -422,6 +425,24 @@ agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
 5. 如果启动后还需要进一步展开细节，再用 `memory_timeline`、`search_memory` 和 `get_memory_details` 做 drill-down。
 
 这样 Antigravity 也具备与其他 hook-backed agent 一致的自动读写生命周期。
+
+#### 5. Grok（`~/.grok/config.toml`）
+`agentmem install` 会为 Grok 注册带 `AGENTMEM_AGENT_ID=grok` 的 stdio MCP server，生成受管的全局 `~/.grok/AGENTS.md` Vault 规则、默认 `~/.grok/agents/agentmem.md` profile，并在 `~/.grok/hooks/agentmem.json` 写入全局 lifecycle hooks。
+
+```toml
+[agent]
+name = "agentmem"
+
+[compat.claude]
+hooks = false
+
+[mcp_servers.agentmem]
+command = "node"
+args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
+env = { AGENTMEM_AGENT_ID = "grok" }
+```
+
+全局 `AGENTS.md` 会被每个 Grok profile 加载，包含 `obsiguide.md` bootstrap、AgentMemory / Vault 边界、证据优先级、durable note 与收尾报告规则。默认 profile 会启用 `AGENTS.md` 加载，并把 `get_project_context` 作为首个记忆读取入口。Grok 的被动 hook stdout 不能注入模型，因此启动恢复由 profile 负责；`SessionStart`、`PostToolUse`、`PostToolUseFailure`、`Stop` 与 `SessionEnd` hooks 则负责注册 session、记录工具工作和关闭 session。安装器只关闭 Grok 的 Claude-hook compatibility，避免现有 Claude post-tool hook 把 Grok 记录误标为 `claudecode`；Claude skills 与 MCP compatibility 仍然启用。
 
 ### ✅ Smoke 验证清单
 

@@ -10,7 +10,7 @@ Developers and operator-users who run multiple local coding agents and need one 
 
 ## Product Purpose
 
-AgentMemory provides a local persistent memory layer for Claude Code, OpenCode, Codex, and Antigravity CLI. The admin workbench exists to inspect the database, control read/write memory gates, view curated startup context, test search quality, manage structured state, and validate the LLM connection used by background summarization.
+AgentMemory provides a local persistent memory layer for Claude Code, OpenCode, Codex, Antigravity CLI, and Grok. The admin workbench exists to inspect the database, control read/write memory gates, view curated startup context, test search quality, manage structured state, and validate the LLM connection used by background summarization.
 
 ## Brand Personality
 

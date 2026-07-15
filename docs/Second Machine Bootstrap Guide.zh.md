@@ -2,21 +2,22 @@
 
 ## Goal
 
-这份指南面向第二台 Windows 电脑，目标是把 `AgentMemory` 以“同样四个 agent、同样配置方式、但不复制本机历史数据库”的方式准确落地。
+这份指南面向第二台 Windows 电脑，目标是把 `AgentMemory` 以“同样五个 agent、同样配置方式、但不复制本机历史数据库”的方式准确落地。
 
-目标覆盖的四个 agent：
+目标覆盖的五个 agent：
 
 - `Claude Code`
 - `ChatGPT desktop（Codex runtime）`
 - `OpenCode`
 - `Antigravity`
+- `Grok`
 
 ## What Gets Replicated
 
 - 会复制的内容：
   - 仓库代码
   - `agentmem` CLI
-  - `Claude Code` / `ChatGPT desktop（Codex runtime）` / `OpenCode` / `Antigravity` 的本机配置
+  - `Claude Code` / `ChatGPT desktop（Codex runtime）` / `OpenCode` / `Antigravity` / `Grok` 的本机配置
   - `OpenCode` 的桥接插件 `agentmem-plugin.mjs`
   - `~/.agentmem/.env` 配置骨架
   - Windows 一键 bootstrap 与 `/admin` workbench 入口
@@ -31,7 +32,7 @@
 第二台电脑需要先具备这些前提：
 
 1. 已安装 `Node.js 18+`
-2. 已安装四个目标 agent
+2. 已安装五个目标 agent
 3. 已把 `Antigravity` 的 Gemini-compatible plugin registry 建好
 4. 已拿到可用的 `AGENTMEM_LLM_API_KEY`
 
@@ -57,7 +58,7 @@ cd AgentMemory
 2. `npm run build`
 3. 生成或检查 `%USERPROFILE%\.agentmem\.env`
 4. `npm link`
-5. 配置四个 agent
+5. 配置五个 agent
 6. 探测或拉起 worker
 7. 打开 `/admin`
 8. 输出严格安装结果
@@ -129,6 +130,10 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.claude\settings.json`
 - `%USERPROFILE%\.codex\config.toml`
 - `%USERPROFILE%\.codex\hooks.json`
+- `%USERPROFILE%\.grok\config.toml`
+- `%USERPROFILE%\.grok\AGENTS.md`
+- `%USERPROFILE%\.grok\agents\agentmem.md`
+- `%USERPROFILE%\.grok\hooks\agentmem.json`
 - `%USERPROFILE%\.config\opencode\opencode.jsonc`
 - `%USERPROFILE%\.config\opencode\plugins\agentmem-plugin.mjs`
 - `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`，或安装器探测到的其它 Antigravity `mcp_config.json`
@@ -144,7 +149,7 @@ agentmem uninstall --strict
 这条命令会：
 
 1. 停掉本地 worker 并清理 `worker.pid`
-2. 移除四个 agent 中由 AgentMemory 管理的 hooks / MCP 注册 / OpenCode 插件
+2. 移除五个 agent 中由 AgentMemory 管理的 hooks / MCP 注册 / OpenCode 插件
 3. 删除 `%USERPROFILE%\.agentmem\.env` 与 `agentmemory.db`
 4. 在有干净基线备份时恢复原配置；如果该文件是旧安装遗留或你在安装后又手改过，则只做“定向清理 AgentMemory 项”，不会强行覆盖你的后续改动
 
@@ -162,7 +167,8 @@ bootstrap 成功后，再做这四项 live acceptance：
 2. `ChatGPT desktop（Codex runtime）` 新开一个会话，确认能看到 `SessionStart` 恢复内容；配置仍位于 `%USERPROFILE%\.codex\config.toml` 与 `%USERPROFILE%\.codex\hooks.json`
 3. `OpenCode` 新开一个会话并执行一次工具，确认插件桥接仍能恢复并写入
 4. `agy plugin list` 能看到已导入的 `agentmem` plugin；新开 Antigravity 会话后，`PreInvocation` 自动注入 context、`PostToolUse` 自动写入且记录的 `agent_id` / `project_path` 分别为 `antigravity` 和当前 workspace，`Stop` 会关闭 session
-5. 对任意受管理 repo，确认 Antigravity 会先读或 bootstrap 根目录 `obsiguide.md`，把 `agentmem` search/timeline 结果视为未验证工作记忆，且写入 `E:\Kuan\Vault` 前先按 `obsiguide.md` 和现有 vault notes 验证
+5. `grok mcp doctor agentmem` 通过，`grok inspect --json` 显示默认 `agentmem` profile、Grok lifecycle hooks 与本机 MCP server；执行一次非 AgentMemory 工具后，Observation Ledger 仅产生 `agent_id=grok` 的记录
+6. 对任意受管理 repo，确认 Antigravity 与 Grok 都会先读或 bootstrap 根目录 `obsiguide.md`，把 `agentmem` search/timeline 结果视为未验证工作记忆，且写入 `E:\Kuan\Vault` 前先按 `obsiguide.md` 和现有 vault notes 验证
 
 ## Troubleshooting
 

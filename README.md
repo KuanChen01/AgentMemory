@@ -4,7 +4,7 @@
 
 ---
 
-AgentMemory is a compilation-free, lightweight, and universal persistent memory system (Universal Agent Memory - UAM). It allows multiple developer agents (such as **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, and **Antigravity CLI**) to share, record, and query context observations and decisions across different workspaces.
+AgentMemory is a compilation-free, lightweight, and universal persistent memory system (Universal Agent Memory - UAM). It allows multiple developer agents (such as **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, **Antigravity CLI**, and **Grok**) to share, record, and query context observations and decisions across different workspaces.
 
 ### 🌟 Features
 
@@ -28,6 +28,7 @@ graph TD
         OC[OpenCode]
         CX[ChatGPT desktop<br/>(Codex runtime)]
         AG[Antigravity CLI]
+        GK[Grok]
     end
 
     subgraph AgentMemory Core [AgentMemory System]
@@ -41,9 +42,11 @@ graph TD
     OC -- Stdio MCP / ESM Plugin --> MCP
     CX -- Stdio MCP --> MCP
     AG -- Stdio MCP --> MCP
+    GK -- Stdio MCP / Hooks --> MCP
 
     CC -- Post-Tool Event --> Worker
     OC -- Post-Tool Event --> Worker
+    GK -- Lifecycle Events --> Worker
 
     Worker -- Async Summarization --> LLM[DeepSeek Flash API]
     Worker -- Write Obs --> DB
@@ -92,12 +95,12 @@ AGENTMEM_PORT=38888
 ```
 
 #### 4. Automatic Agent Registration
-Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, and **Antigravity**:
+Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, **Antigravity**, and **Grok**:
 ```bash
 agentmem install
 ```
 
-If you want the command to fail whenever any one of the four agents cannot be configured, use:
+If you want the command to fail whenever any one of the five agents cannot be configured, use:
 ```bash
 agentmem install --strict
 ```
@@ -132,8 +135,8 @@ Run these commands globally from any directory:
 *   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
 *   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
 *   **Print Version**: `agentmem version`
-*   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, and Antigravity settings)
-*   **Strict Setup**: `agentmem install --strict` (fails if any one of the four agents cannot be configured)
+*   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, Antigravity, and Grok settings)
+*   **Strict Setup**: `agentmem install --strict` (fails if any one of the five agents cannot be configured)
 *   **Uninstall Local Integration**: `agentmem uninstall --strict` (removes AgentMemory-managed hooks, MCP entries, plugin artifacts, `.env`, and database files from the current machine)
 *   **Purge Local Install State**: `agentmem uninstall --strict --purge-all` (also removes retained backup and install-state artifacts)
 *   **Second-Machine Bootstrap**: `agentmem bootstrap-win --strict` or `bootstrap-second-machine.cmd`
@@ -151,7 +154,7 @@ cd AgentMemory
 .\bootstrap-second-machine.cmd
 ```
 
-The bootstrap script runs `npm install`, `npm run build`, creates or validates `%USERPROFILE%\.agentmem\.env`, runs `npm link`, configures all four agents, probes or starts the worker, and opens `/admin`.
+The bootstrap script runs `npm install`, `npm run build`, creates or validates `%USERPROFILE%\.agentmem\.env`, runs `npm link`, configures all five agents, probes or starts the worker, and opens `/admin`.
 
 If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a blank scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
 
@@ -422,6 +425,24 @@ Preferred Antigravity workflow:
 5. If you need more detail after startup, use `memory_timeline`, `search_memory`, and then `get_memory_details` for drill-down.
 
 This gives Antigravity the same automatic read/write lifecycle as the other hook-backed agents.
+
+#### 5. Grok (`~/.grok/config.toml`)
+`agentmem install` registers the stdio MCP server with `AGENTMEM_AGENT_ID=grok`, creates a managed global `~/.grok/AGENTS.md` Vault rule file, creates a default `~/.grok/agents/agentmem.md` profile, and writes global lifecycle hooks to `~/.grok/hooks/agentmem.json`.
+
+```toml
+[agent]
+name = "agentmem"
+
+[compat.claude]
+hooks = false
+
+[mcp_servers.agentmem]
+command = "node"
+args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
+env = { AGENTMEM_AGENT_ID = "grok" }
+```
+
+The managed global `AGENTS.md` is loaded by every Grok profile and contains the `obsiguide.md` bootstrap, AgentMemory/Vault boundary, evidence priority, durable-note, and reporting workflow. The default profile enables `AGENTS.md` loading, then makes `get_project_context` its first memory read. Grok's passive hooks cannot inject stdout into the model, so the profile owns startup recovery while `SessionStart`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd` hooks register sessions, record tool work, and close sessions. The installer disables Grok's Claude-hook compatibility only: this prevents the existing Claude post-tool hook from mislabeling Grok activity as `claudecode`; Claude skills and MCP compatibility remain enabled.
 
 ### ✅ Smoke Validation Checklist
 

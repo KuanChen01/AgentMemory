@@ -8,6 +8,13 @@ import {
   updateCodexConfigToml,
 } from './codex-installer';
 import {
+  ensureGrokConfigToml,
+  removeGrokAgentMemoryConfig,
+  renderGrokAgentProfile,
+  renderGrokGlobalRules,
+  renderGrokHooksConfig,
+} from './grok-installer';
+import {
   InstallStateManifest,
   ManagedTargetKind,
   loadInstallState,
@@ -18,7 +25,7 @@ import {
   saveInstallState,
 } from './install-state';
 
-type ManagedAgent = 'claude' | 'opencode' | 'codex' | 'antigravity' | 'runtime' | 'cli';
+type ManagedAgent = 'claude' | 'opencode' | 'codex' | 'grok' | 'antigravity' | 'runtime' | 'cli';
 
 const CODEX_DISPLAY_NAME = 'ChatGPT desktop (Codex runtime)';
 
@@ -44,6 +51,11 @@ export interface InstallPaths {
   opencodePostHook: string;
   codexStartHook: string;
   codexPostHook: string;
+  grokHook: string;
+  grokConfigPath: string;
+  grokHooksPath: string;
+  grokProfilePath: string;
+  grokRulesPath: string;
   antigravityHook: string;
   antigravityGuidancePath: string;
   antigravityPluginRoot: string;
@@ -374,6 +386,11 @@ export function resolveInstallPaths(repoRoot: string, homeDir: string = os.homed
     opencodePostHook: `${normalizedRepoRoot}/dist/hooks/opencode-post-tool.js`,
     codexStartHook: `${normalizedRepoRoot}/dist/hooks/codex-session-start.js`,
     codexPostHook: `${normalizedRepoRoot}/dist/hooks/codex-post-tool.js`,
+    grokHook: `${normalizedRepoRoot}/dist/hooks/grok-hook.js`,
+    grokConfigPath: path.join(homeDir, '.grok', 'config.toml'),
+    grokHooksPath: path.join(homeDir, '.grok', 'hooks', 'agentmem.json'),
+    grokProfilePath: path.join(homeDir, '.grok', 'agents', 'agentmem.md'),
+    grokRulesPath: path.join(homeDir, '.grok', 'AGENTS.md'),
     antigravityHook: `${normalizedRepoRoot}/dist/hooks/antigravity-hook.js`,
     antigravityGuidancePath: path.join(homeDir, '.agentmem', 'AGENTMEM_ANTIGRAVITY.md'),
     antigravityPluginRoot,
@@ -636,6 +653,12 @@ function detectCodexConfigLegacy(toml: string): boolean {
 
 function detectCodexHooksLegacy(hooksConfig: Record<string, any>): boolean {
   return hasMarkerInJson(hooksConfig?.hooks, ['codex-session-start.js', 'codex-post-tool.js']);
+}
+
+function detectGrokConfigLegacy(toml: string): boolean {
+  return /\[mcp_servers\.agentmem\]/.test(toml) ||
+    /\[agent\][\s\S]*?^\s*name\s*=\s*["']agentmem["']/m.test(toml) ||
+    /\[compat\.claude\][\s\S]*?^\s*hooks\s*=\s*false\s*$/m.test(toml);
 }
 
 function detectOpenCodeLegacy(config: Record<string, any>): boolean {
@@ -1131,6 +1154,57 @@ function installAntigravity(context: InstallContext, overridePath?: string): Ins
   };
 }
 
+function installGrok(context: InstallContext): InstallResult {
+  const grokDir = path.dirname(context.paths.grokConfigPath);
+  ensureDir(grokDir);
+  const existingToml = fs.existsSync(context.paths.grokConfigPath)
+    ? fs.readFileSync(context.paths.grokConfigPath, 'utf8')
+    : '';
+
+  const warnings = [
+    ...applyManagedTextWrite(
+      context,
+      'grok-config',
+      context.paths.grokConfigPath,
+      ensureGrokConfigToml(existingToml, context.paths.mcpServerPath),
+      detectGrokConfigLegacy(existingToml)
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'grok-hooks',
+      context.paths.grokHooksPath,
+      renderGrokHooksConfig(context.paths.grokHook),
+      fs.existsSync(context.paths.grokHooksPath) &&
+        fs.readFileSync(context.paths.grokHooksPath, 'utf8').includes('grok-hook.js')
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'grok-profile',
+      context.paths.grokProfilePath,
+      renderGrokAgentProfile(),
+      fs.existsSync(context.paths.grokProfilePath) &&
+        fs.readFileSync(context.paths.grokProfilePath, 'utf8').includes('AgentMemory Grok Profile')
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'grok-rules',
+      context.paths.grokRulesPath,
+      renderGrokGlobalRules(),
+      fs.existsSync(context.paths.grokRulesPath) &&
+        fs.readFileSync(context.paths.grokRulesPath, 'utf8').includes('AgentMemory Grok Vault Rules')
+    ),
+  ];
+
+  return {
+    action: 'merged-managed-entries',
+    agent: 'grok',
+    ok: true,
+    targetPath: context.paths.grokConfigPath,
+    message: `Registered global rules, default profile, lifecycle hooks, and MCP server in Grok (${context.paths.grokConfigPath})`,
+    warnings,
+  };
+}
+
 function uninstallClaude(context: InstallContext): UninstallResult {
   const claudeSettingsPath = path.join(context.homeDir, '.claude', 'settings.json');
   const claudeGlobalPath = path.join(context.homeDir, '.claude.json');
@@ -1325,6 +1399,45 @@ function uninstallAntigravity(context: InstallContext, overridePath?: string): U
   };
 }
 
+function uninstallGrok(context: InstallContext): UninstallResult {
+  const configCleanup = uninstallManagedTextTarget(context, {
+    cleanup: removeGrokAgentMemoryConfig,
+    hasManagedContent: detectGrokConfigLegacy,
+    kind: 'grok-config',
+    targetPath: context.paths.grokConfigPath,
+  });
+  const hooksCleanup = uninstallDedicatedArtifact(
+    context,
+    'grok-hooks',
+    context.paths.grokHooksPath,
+    fs.existsSync(context.paths.grokHooksPath) &&
+      fs.readFileSync(context.paths.grokHooksPath, 'utf8').includes('grok-hook.js')
+  );
+  const profileCleanup = uninstallDedicatedArtifact(
+    context,
+    'grok-profile',
+    context.paths.grokProfilePath,
+    fs.existsSync(context.paths.grokProfilePath) &&
+      fs.readFileSync(context.paths.grokProfilePath, 'utf8').includes('AgentMemory Grok Profile')
+  );
+  const rulesCleanup = uninstallDedicatedArtifact(
+    context,
+    'grok-rules',
+    context.paths.grokRulesPath,
+    fs.existsSync(context.paths.grokRulesPath) &&
+      fs.readFileSync(context.paths.grokRulesPath, 'utf8').includes('AgentMemory Grok Vault Rules')
+  );
+
+  return {
+    action: `${configCleanup.action}+${hooksCleanup.action}+${profileCleanup.action}+${rulesCleanup.action}`,
+    agent: 'grok',
+    ok: true,
+    targetPath: context.paths.grokConfigPath,
+    message: `Uninstalled AgentMemory from Grok (${context.paths.grokConfigPath}, ${context.paths.grokHooksPath}, ${context.paths.grokRulesPath})`,
+    warnings: [...configCleanup.warnings, ...hooksCleanup.warnings, ...profileCleanup.warnings, ...rulesCleanup.warnings],
+  };
+}
+
 function readJsonFileText(text: string): Record<string, any> {
   return JSON.parse(stripComments(text || '{}') || '{}');
 }
@@ -1402,6 +1515,33 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   }
   if (!JSON.stringify(codexHooks).includes(paths.codexPostHook)) {
     issues.push(`${CODEX_DISPLAY_NAME} PostToolUse hook is missing (${codexHooksPath}).`);
+  }
+
+  const grokToml = fs.existsSync(paths.grokConfigPath) ? fs.readFileSync(paths.grokConfigPath, 'utf8') : '';
+  if (!grokToml.includes(paths.mcpServerPath) || !/AGENTMEM_AGENT_ID\s*=\s*"grok"/.test(grokToml)) {
+    issues.push(`Grok config.toml is missing the AgentMemory MCP server or AGENTMEM_AGENT_ID=grok (${paths.grokConfigPath}).`);
+  }
+  if (!/^\s*name\s*=\s*"agentmem"\s*$/m.test(grokToml) || !/^\s*hooks\s*=\s*false\s*$/m.test(grokToml)) {
+    issues.push(`Grok config.toml is missing the default agentmem profile or compat.claude hooks=false (${paths.grokConfigPath}).`);
+  }
+  if (!fs.existsSync(paths.grokHooksPath) || !fs.readFileSync(paths.grokHooksPath, 'utf8').includes(paths.grokHook)) {
+    issues.push(`Grok AgentMemory lifecycle hook configuration is missing (${paths.grokHooksPath}).`);
+  }
+  if (!fs.existsSync(paths.grokProfilePath)) {
+    issues.push(`Grok AgentMemory profile is missing (${paths.grokProfilePath}).`);
+  } else {
+    const profileText = fs.readFileSync(paths.grokProfilePath, 'utf8');
+    if (!profileText.includes('agents_md: true') || !profileText.includes('get_project_context') || !profileText.includes('AgentMemory Grok Profile')) {
+      issues.push(`Grok AgentMemory profile is missing the startup and boundary workflow (${paths.grokProfilePath}).`);
+    }
+  }
+  if (!fs.existsSync(paths.grokRulesPath)) {
+    issues.push(`Grok global AGENTS.md is missing (${paths.grokRulesPath}).`);
+  } else {
+    const rulesText = fs.readFileSync(paths.grokRulesPath, 'utf8');
+    if (!rulesText.includes('AgentMemory Grok Vault Rules') || !rulesText.includes('obsiguide.md') || !rulesText.includes('E:\\Kuan\\Vault')) {
+      issues.push(`Grok global AGENTS.md is missing the Vault workflow (${paths.grokRulesPath}).`);
+    }
   }
 
   const opencodeConfig = readJsonFile(
@@ -1499,6 +1639,7 @@ export function installAgentMemory(options: InstallOptions): InstallResult[] {
     { agent: 'claude', run: () => installClaude(context) },
     { agent: 'opencode', run: () => installOpenCode(context) },
     { agent: 'codex', run: () => installCodex(context) },
+    { agent: 'grok', run: () => installGrok(context) },
     { agent: 'antigravity', run: () => installAntigravity(context, options.antigravityConfigPath) },
   ];
 
@@ -1544,6 +1685,7 @@ export async function uninstallAgentMemory(options: UninstallOptions): Promise<U
     { agent: 'claude', run: () => uninstallClaude(context) },
     { agent: 'opencode', run: () => uninstallOpenCode(context) },
     { agent: 'codex', run: () => uninstallCodex(context) },
+    { agent: 'grok', run: () => uninstallGrok(context) },
     { agent: 'antigravity', run: () => uninstallAntigravity(context, options.antigravityConfigPath) },
   ];
 

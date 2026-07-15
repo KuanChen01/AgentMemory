@@ -17,6 +17,13 @@ const {
   renderOpenCodePlugin,
   resolveAntigravityConfigPath,
 } = require('../dist/services/agent-installer.js');
+const {
+  ensureGrokConfigToml,
+  removeGrokAgentMemoryConfig,
+  renderGrokAgentProfile,
+  renderGrokGlobalRules,
+  renderGrokHooksConfig,
+} = require('../dist/services/grok-installer.js');
 const { ensureBootstrapEnvFile } = require('../dist/services/bootstrap.js');
 
 function makeTempHome() {
@@ -129,6 +136,46 @@ test('ensureAntigravityMcpServer upserts a single mcpServers.agentmem entry', ()
     args: ['server.py'],
     disabled: false,
   });
+});
+
+test('Grok config upsert preserves unrelated settings and enables the managed identity', () => {
+  const original = `[cli]\ninstaller = "internal"\n\n[compat.claude]\nskills = true\nhooks = true\n\n[agent]\nmodel = "grok-build"\n`;
+  const updated = ensureGrokConfigToml(
+    original,
+    'E:/Repo/AgentMemory/dist/servers/mcp-server.js'
+  );
+
+  assert.match(updated, /installer = "internal"/);
+  assert.match(updated, /skills = true/);
+  assert.match(updated, /hooks = false/);
+  assert.match(updated, /name = "agentmem"/);
+  assert.match(updated, /AGENTMEM_AGENT_ID = "grok"/);
+  assert.equal((updated.match(/\[mcp_servers\.agentmem\]/g) || []).length, 1);
+
+  const cleaned = removeGrokAgentMemoryConfig(updated);
+  assert.doesNotMatch(cleaned, /mcp_servers\.agentmem/);
+  assert.doesNotMatch(cleaned, /name = "agentmem"/);
+  assert.doesNotMatch(cleaned, /hooks = false/);
+  assert.match(cleaned, /skills = true/);
+  assert.match(cleaned, /model = "grok-build"/);
+});
+
+test('Grok generated global rules, profile, and hooks provide the Vault and lifecycle workflow', () => {
+  const profile = renderGrokAgentProfile();
+  const rules = renderGrokGlobalRules();
+  const hooks = renderGrokHooksConfig('E:/Repo/AgentMemory/dist/hooks/grok-hook.js');
+
+  assert.match(profile, /agents_md: true/);
+  assert.match(profile, /get_project_context/);
+  assert.match(profile, /AgentMemory Grok Profile/);
+  assert.match(rules, /AgentMemory Grok Vault Rules/);
+  assert.match(rules, /obsiguide\.md/);
+  assert.match(rules, /E:\\Kuan\\Vault/);
+  assert.match(rules, /Project Ledger/);
+  assert.match(hooks, /SessionStart/);
+  assert.match(hooks, /PostToolUseFailure/);
+  assert.match(hooks, /SessionEnd/);
+  assert.match(hooks, /grok-hook\.js/);
 });
 
 test('ensureAntigravityPluginsConfig registers one AgentMemory plugin root', () => {

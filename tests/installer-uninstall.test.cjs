@@ -293,6 +293,57 @@ model = "gpt-5"
   }
 });
 
+test('agentmem uninstall restores a pristine Grok config and removes generated artifacts', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    seedAntigravity(tempHome);
+    const grokConfigPath = path.join(tempHome, '.grok', 'config.toml');
+    const grokHooksPath = path.join(tempHome, '.grok', 'hooks', 'agentmem.json');
+    const grokProfilePath = path.join(tempHome, '.grok', 'agents', 'agentmem.md');
+    const grokRulesPath = path.join(tempHome, '.grok', 'AGENTS.md');
+    const original = `[cli]\ninstaller = "internal"\n`;
+    fs.mkdirSync(path.dirname(grokConfigPath), { recursive: true });
+    fs.writeFileSync(grokConfigPath, original, 'utf8');
+
+    await runCli(tempHome, ['install']);
+    assert.match(fs.readFileSync(grokRulesPath, 'utf8'), /AgentMemory Grok Vault Rules/);
+    assert.match(fs.readFileSync(grokRulesPath, 'utf8'), /obsiguide\.md/);
+    await runCli(tempHome, ['uninstall']);
+
+    assert.equal(fs.readFileSync(grokConfigPath, 'utf8'), original);
+    assert.equal(fs.existsSync(grokHooksPath), false);
+    assert.equal(fs.existsSync(grokProfilePath), false);
+    assert.equal(fs.existsSync(grokRulesPath), false);
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
+test('agentmem uninstall cleans only Grok-managed config when the file diverged', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    seedAntigravity(tempHome);
+    const grokConfigPath = path.join(tempHome, '.grok', 'config.toml');
+    fs.mkdirSync(path.dirname(grokConfigPath), { recursive: true });
+    fs.writeFileSync(grokConfigPath, `[cli]\ninstaller = "internal"\n`, 'utf8');
+
+    await runCli(tempHome, ['install']);
+    fs.appendFileSync(grokConfigPath, '\n[custom]\nflag = true\n', 'utf8');
+    await runCli(tempHome, ['uninstall']);
+
+    const cleaned = fs.readFileSync(grokConfigPath, 'utf8');
+    assert.doesNotMatch(cleaned, /mcp_servers\.agentmem/);
+    assert.doesNotMatch(cleaned, /name = "agentmem"/);
+    assert.doesNotMatch(cleaned, /hooks = false/);
+    assert.match(cleaned, /\[custom\]/);
+    assert.match(cleaned, /flag = true/);
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
 test('agentmem uninstall --purge-all removes install state and backup artifacts', async () => {
   const tempHome = makeTempHome();
 

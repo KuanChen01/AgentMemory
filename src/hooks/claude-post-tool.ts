@@ -24,6 +24,12 @@ async function readStdin(): Promise<string> {
 }
 
 async function main() {
+  // Grok can discover Claude-compatible global hooks even when its compatibility
+  // setting disables them. Its native AgentMemory hook owns these events.
+  if (process.env.GROK_HOOK_EVENT) {
+    return;
+  }
+
   const stdinContent = await readStdin();
   if (!stdinContent.trim()) {
     return;
