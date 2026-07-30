@@ -26,7 +26,7 @@ graph TD
     subgraph Clients [智能体客户端]
         CC[Claude Code]
         OC[OpenCode]
-        CX[ChatGPT desktop<br/>(Codex runtime)]
+        CX["ChatGPT desktop<br/>(Codex runtime)"]
         AG[Antigravity CLI]
         GK[Grok]
     end
