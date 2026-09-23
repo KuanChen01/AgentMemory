@@ -21,6 +21,7 @@ const vaultDir = path.join(homeDir, '.agentmem');
 dotenv.config({ path: path.join(vaultDir, '.env') });
 
 const pidFile = path.join(vaultDir, 'worker.pid');
+const workerStatusFile = path.join(vaultDir, 'worker-status.json');
 const PORT = Number(process.env.AGENTMEM_PORT || 38888);
 
 if (!fs.existsSync(vaultDir)) {
@@ -217,7 +218,8 @@ async function checkStatus() {
 
   try {
     const res = await fetch(
-      `http://localhost:${PORT}/context?project_path=${encodeURIComponent(process.cwd())}&limit=1`
+      `http://localhost:${PORT}/context?project_path=${encodeURIComponent(process.cwd())}&limit=1`,
+      { signal: AbortSignal.timeout(1500) }
     );
     if (res.ok) {
       isRunning = true;
@@ -228,6 +230,26 @@ async function checkStatus() {
     console.log(`AgentMemory Status: ACTIVE (Port: ${PORT})`);
   } else {
     console.log('AgentMemory Status: INACTIVE');
+    if (fs.existsSync(pidFile)) {
+      const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+      let alive = false;
+      try {
+        process.kill(pid, 0);
+        alive = true;
+      } catch (_error) {}
+      console.log(`Worker PID file: ${pidFile} (PID: ${pid || 'invalid'}, alive: ${alive})`);
+    }
+    if (fs.existsSync(workerStatusFile)) {
+      try {
+        const status = JSON.parse(fs.readFileSync(workerStatusFile, 'utf8'));
+        console.log(
+          `Last worker state: ${status.state || 'unknown'}; updated: ${status.updatedAt || 'unknown'}; ` +
+          `port: ${status.port || 'unknown'}; pid: ${status.pid || 'unknown'}`
+        );
+      } catch (_error) {
+        console.log(`Worker status file is unreadable: ${workerStatusFile}`);
+      }
+    }
   }
 }
 

@@ -68,7 +68,7 @@ test('memory policy brain centralizes read, write, and promotion decisions', () 
     },
     source: 'tool_log',
   });
-  assert.equal(lowSignalWrite.action, 'record_low_signal');
+  assert.equal(lowSignalWrite.action, 'skip');
 
   const promotionDecision = decideProceduralSkillPromotion({
     title: 'Bootstrap workbench',

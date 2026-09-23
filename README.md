@@ -131,7 +131,7 @@ Detailed Chinese walkthrough: [docs/Second Machine Bootstrap Guide.zh.md](./docs
 
 Run these commands globally from any directory:
 
-*   **Start Worker**: `agentmem start` (launches the memory worker service; keep the terminal open while it is running)
+*   **Start Worker Manually**: `agentmem start` (optional foreground control; lifecycle hooks safely auto-start the background worker when it is unavailable)
 *   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
 *   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
 *   **Print Version**: `agentmem version`
@@ -215,7 +215,7 @@ AgentMemory now separates memory into explicit layers:
 
 The policy brain is now explicit instead of being scattered across hooks and ad-hoc call sites:
 
-*   `memory-policy.ts` centralizes read decisions, low-signal ledger writes, and draft promotion gates for procedural skill candidates.
+*   `memory-policy.ts` centralizes read decisions, suppresses routine read/status/search/view/run tool noise only when it has neither modified-file evidence nor a substantive outcome, and owns draft promotion gates for procedural skill candidates. Explicit `record_memory` milestones, failures, verified findings, and validation results remain recordable.
 *   `memory-orchestrator.ts` is the shared Stage 2 read orchestrator used by worker startup context, MCP `get_project_context`, and task-level query resolution.
 *   `memory-query.ts` is the task-oriented resolution path that now reuses the shared orchestrator to decide which layers to read, when to consult procedural memory, and how to attach bounded context, temporal diagnostics, and decision trace output.
 
@@ -244,6 +244,8 @@ New interfaces in this first cut:
 *   `generated_at`
 
 Structured state is still **explicit-write only** in this phase. Observations, hook logs, and LLM summaries do not automatically promote themselves into the state layer. Procedural skill candidates also remain **reviewable before promotion**: they can be promoted into draft skills, but they are never auto-enabled.
+
+All lifecycle hooks fail open. Worker requests have a short bounded timeout covering response headers and the complete body (default `1500ms`, configurable with `AGENTMEM_HOOK_TIMEOUT_MS`). Only a refused connection (`ECONNREFUSED` on every connection attempt) triggers one lock-protected detached worker start and a separate startup grace period (default `5000ms`, configurable with `AGENTMEM_HOOK_STARTUP_TIMEOUT_MS`). Timeouts, connection resets, and other ambiguous failures are never retried because the worker may already have accepted a `POST /tools` event. Set `AGENTMEM_HOOK_AUTOSTART=false` to disable hook-driven startup. Lifecycle diagnostics are written to `%USERPROFILE%\.agentmem\worker-status.json`, `worker.pid`, and `logs\worker-autostart.log`; integration tests isolate these files with `AGENTMEM_RUNTIME_DIR`. When summarization is unavailable, successful raw executions are skipped because they contain no extracted outcome or file evidence; actual tool failures are still recorded.
 
 #### Admin-only diagnostics APIs
 
@@ -297,7 +299,7 @@ Daily digest reads use the same read gate as startup context, and manual digest 
 7. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
 8. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
 9. Use `Observation Ledger` to drill into the raw observation history when needed
-10. Use `agentmem status` to confirm the worker is still reachable, and `agentmem stop` when finished
+10. Use `agentmem status` to confirm reachability and inspect the last runtime state. `agentmem stop` is still available, but the next managed lifecycle hook will start the worker again unless `AGENTMEM_HOOK_AUTOSTART=false` is set
 
 ---
 
@@ -394,7 +396,7 @@ args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
 #### 4. Antigravity CLI
-`agentmem install` now also updates the active Antigravity MCP registry. It checks Antigravity's direct registries first (`%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`, then `antigravity-ide`, `antigravity`, and `.gemini\config\mcp_config.json`) before falling back to Gemini-compatible plugin registries under `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json`. If your machine keeps that registry somewhere else, pass:
+`agentmem install` always updates Antigravity's official global MCP registry at `%USERPROFILE%\.gemini\config\mcp_config.json`. During migration it also updates an existing legacy direct registry (`antigravity-cli`, `antigravity-ide`, or `antigravity`) or an existing Gemini-compatible plugin registry under `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json`. If your machine keeps an additional registry somewhere else, pass:
 
 ```bash
 agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
@@ -414,20 +416,19 @@ Generic shape:
 }
 ```
 
-The installer also creates and activates an Antigravity plugin under `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem`. Its `PreInvocation`, `PostToolUse`, and `Stop` hooks automatically inject `ProjectContextView`, record tool work as canonical `antigravity`, and close the session. The MCP registry receives `AGENTMEM_AGENT_ID=antigravity`, so explicit `record_memory` calls that omit `agent_id` no longer fall back to `mcp-client`. `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` remains as a readable compatibility copy of the plugin rule.
+The installer builds the Antigravity plugin under `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem`, then activates it with `agy plugin install`. Antigravity 1.1.12 stages the imported plugin to `%USERPROFILE%\.gemini\config\plugins\agentmem` and records it in `import_manifest.json`. The plugin bundles `mcp_config.json`, `PreInvocation` / `PostToolUse` / `Stop` hooks, and a frontmatter rule. The official global MCP registry is `%USERPROFILE%\.gemini\config\mcp_config.json` and receives `AGENTMEM_AGENT_ID=antigravity`, so explicit `record_memory` calls that omit `agent_id` no longer fall back to `mcp-client`. `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` remains as a readable compatibility copy of the plugin rule.
 
 Preferred Antigravity workflow:
 
-1. Read the current workspace root `obsiguide.md`; if it is missing but `obsiguide.template.md` exists, bootstrap and initialize `obsiguide.md` from verified repo evidence before feature work.
-2. Let the `PreInvocation` hook inject startup context automatically. Use `get_project_context`, `search_memory`, or `memory_timeline` only for explicit drill-down, then verify relevant results against repo evidence and `obsiguide.md`.
-3. Before writing to `E:\Kuan\Vault`, check current repo evidence, `obsiguide.md`, and existing vault notes. Do not paste raw AgentMemory summaries or session recaps into the vault.
-4. Normal tool work is recorded automatically by `PostToolUse`, and `Stop` closes the session. Use explicit `record_memory(agent_id="antigravity")` only for a deliberate milestone entry.
-5. If you need more detail after startup, use `memory_timeline`, `search_memory`, and then `get_memory_details` for drill-down.
+1. Let the `PreInvocation` hook inject startup context automatically.
+2. Use `get_project_context`, `search_memory`, or `memory_timeline` only for explicit drill-down, then verify relevant results against current workspace files, diffs, commands, tests, or artifacts.
+3. Normal tool work is recorded automatically by `PostToolUse`, and `Stop` closes the session. Use explicit `record_memory(agent_id="antigravity")` only for a deliberate cross-session milestone.
+4. Do not treat raw AgentMemory summaries or session recaps as durable truth, and do not record trivial output merely because a task is ending.
 
 This gives Antigravity the same automatic read/write lifecycle as the other hook-backed agents.
 
 #### 5. Grok (`~/.grok/config.toml`)
-`agentmem install` registers the stdio MCP server with `AGENTMEM_AGENT_ID=grok`, creates a managed global `~/.grok/AGENTS.md` Vault rule file, creates a default `~/.grok/agents/agentmem.md` profile, and writes global lifecycle hooks to `~/.grok/hooks/agentmem.json`.
+`agentmem install` registers the stdio MCP server with `AGENTMEM_AGENT_ID=grok`, creates a default `~/.grok/agents/agentmem.md` profile, and writes global lifecycle hooks to `~/.grok/hooks/agentmem.json`. It does not create or require a global `~/.grok/AGENTS.md` file.
 
 ```toml
 [agent]
@@ -442,7 +443,7 @@ args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
 env = { AGENTMEM_AGENT_ID = "grok" }
 ```
 
-The managed global `AGENTS.md` is loaded by every Grok profile and contains the `obsiguide.md` bootstrap, AgentMemory/Vault boundary, evidence priority, durable-note, and reporting workflow. The default profile enables `AGENTS.md` loading, then makes `get_project_context` its first memory read. Grok's passive hooks cannot inject stdout into the model, so the profile owns startup recovery while `SessionStart`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd` hooks register sessions, record tool work, and close sessions. The installer disables Grok's Claude-hook compatibility only: this prevents the existing Claude post-tool hook from mislabeling Grok activity as `claudecode`; Claude skills and MCP compatibility remain enabled.
+The default profile disables global `AGENTS.md` loading and makes `get_project_context` its first memory read. Grok's passive hooks cannot inject stdout into the model, so the profile owns startup recovery while `SessionStart`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd` hooks register sessions, record tool work, and close sessions. The installer disables Grok's Claude-hook compatibility only: this prevents the existing Claude post-tool hook from mislabeling Grok activity as `claudecode`; Claude skills and MCP compatibility remain enabled.
 
 ### ✅ Smoke Validation Checklist
 

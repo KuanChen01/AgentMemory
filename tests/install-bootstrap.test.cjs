@@ -14,6 +14,8 @@ const {
   renderAntigravityGuidance,
   renderAntigravityPluginHooks,
   renderAntigravityPluginManifest,
+  renderAntigravityPluginMcpConfig,
+  renderAntigravityPluginRule,
   renderOpenCodePlugin,
   resolveAntigravityConfigPath,
 } = require('../dist/services/agent-installer.js');
@@ -142,7 +144,7 @@ test('ensureAntigravityMcpServer upserts a single mcpServers.agentmem entry', ()
 });
 
 test('Grok config upsert preserves unrelated settings and enables the managed identity', () => {
-  const original = `[cli]\ninstaller = "internal"\n\n[compat.claude]\nskills = true\nhooks = true\n\n[agent]\nmodel = "grok-build"\n`;
+  const original = `[cli]\ninstaller = "internal"\n\n[mcp_servers.agentmem]\ncommand = "node"\nargs = ["old-server.js"]\nenv = { AGENTMEM_AGENT_ID = "grok" }\n\n[mcp_servers.agentmem.env]\nAGENTMEM_AGENT_ID = "grok"\n\n[compat.claude]\nskills = true\nhooks = true\n\n[agent]\nmodel = "grok-build"\n`;
   const updated = ensureGrokConfigToml(
     original,
     'E:/Repo/AgentMemory/dist/servers/mcp-server.js'
@@ -154,27 +156,29 @@ test('Grok config upsert preserves unrelated settings and enables the managed id
   assert.match(updated, /name = "agentmem"/);
   assert.match(updated, /AGENTMEM_AGENT_ID = "grok"/);
   assert.equal((updated.match(/\[mcp_servers\.agentmem\]/g) || []).length, 1);
+  assert.doesNotMatch(updated, /\[mcp_servers\.agentmem\.env\]/);
+  assert.equal((updated.match(/AGENTMEM_AGENT_ID\s*=\s*"grok"/g) || []).length, 1);
 
   const cleaned = removeGrokAgentMemoryConfig(updated);
   assert.doesNotMatch(cleaned, /mcp_servers\.agentmem/);
+  assert.doesNotMatch(cleaned, /mcp_servers\.agentmem\.env/);
   assert.doesNotMatch(cleaned, /name = "agentmem"/);
   assert.match(cleaned, /hooks = true/);
   assert.match(cleaned, /skills = true/);
   assert.match(cleaned, /model = "grok-build"/);
 });
 
-test('Grok generated global rules, profile, and hooks provide the Vault and lifecycle workflow', () => {
+test('Grok profile and hooks provide lifecycle recovery without global AGENTS dependency', () => {
   const profile = renderGrokAgentProfile();
   const rules = renderGrokGlobalRules();
   const hooks = renderGrokHooksConfig('E:/Repo/AgentMemory/dist/hooks/grok-hook.js');
 
-  assert.match(profile, /agents_md: true/);
+  assert.match(profile, /agents_md: false/);
   assert.match(profile, /get_project_context/);
   assert.match(profile, /AgentMemory Grok Profile/);
-  assert.match(rules, /AgentMemory Grok Vault Rules/);
-  assert.match(rules, /obsiguide\.md/);
-  assert.match(rules, /E:\\Kuan\\Vault/);
-  assert.match(rules, /Project Ledger/);
+  assert.match(rules, /AgentMemory Grok Rules/);
+  assert.doesNotMatch(rules, /obsiguide\.md/);
+  assert.doesNotMatch(rules, /E:\\Kuan\\Vault/);
   assert.equal(hasGrokGlobalRules(rules), true);
   assert.match(hooks, /SessionStart/);
   assert.match(hooks, /PostToolUseFailure/);
@@ -222,44 +226,44 @@ test('renderAntigravity plugin artifacts wire lifecycle hooks to the built bridg
   const hooks = renderAntigravityPluginHooks(
     'E:/Repo/AgentMemory/dist/hooks/antigravity-hook.js'
   );
+  const pluginMcp = JSON.parse(
+    renderAntigravityPluginMcpConfig('E:/Repo/AgentMemory/dist/servers/mcp-server.js')
+  );
+  const rule = renderAntigravityPluginRule();
   assert.equal(manifest.name, 'agentmem');
+  assert.match(String(manifest.description || ''), /AgentMemory/);
   assert.match(hooks, /PreInvocation/);
   assert.match(hooks, /PostToolUse/);
   assert.match(hooks, /Stop/);
   assert.match(hooks, /antigravity-hook\.js/);
+  assert.equal(pluginMcp.mcpServers.agentmem.env.AGENTMEM_AGENT_ID, 'antigravity');
+  assert.match(rule, /^---\nname: agentmem\n/);
+  assert.match(rule, /trigger: always_on/);
 });
 
-test('renderAntigravityGuidance separates obsiguide, vault, and agentmem boundaries', () => {
+test('renderAntigravityGuidance keeps AgentMemory recovery narrow and evidence-backed', () => {
   const guidance = renderAntigravityGuidance();
 
-  assert.match(guidance, /obsiguide\.md/);
-  assert.match(guidance, /obsiguide\.template\.md/);
+  assert.doesNotMatch(guidance, /obsiguide\.md/);
+  assert.doesNotMatch(guidance, /E:\\Kuan\\Vault/);
   assert.match(guidance, /unverified working memory/);
-  assert.match(guidance, /E:\\Kuan\\Vault/);
   assert.match(guidance, /record_memory/);
-  assert.match(guidance, /local-only/);
-  assert.match(guidance, /Never copy raw AgentMemory summaries/);
+  assert.match(guidance, /trivial output/);
+  assert.match(guidance, /Never treat raw AgentMemory summaries/);
 });
 
-test('resolveAntigravityConfigPath prefers the Antigravity CLI registry', () => {
+test('resolveAntigravityConfigPath prefers the official Antigravity global registry', () => {
   const tempHome = makeTempHome();
 
   try {
+    const officialConfigPath = path.join(tempHome, '.gemini', 'config', 'mcp_config.json');
     const cliConfigPath = path.join(tempHome, '.gemini', 'antigravity-cli', 'mcp_config.json');
-    const pluginConfigPath = path.join(
-      tempHome,
-      '.gemini',
-      'config',
-      'plugins',
-      'local-game-mcps',
-      'mcp_config.json'
-    );
+    fs.mkdirSync(path.dirname(officialConfigPath), { recursive: true });
     fs.mkdirSync(path.dirname(cliConfigPath), { recursive: true });
-    fs.mkdirSync(path.dirname(pluginConfigPath), { recursive: true });
+    fs.writeFileSync(officialConfigPath, '{"mcpServers":{}}\n', 'utf8');
     fs.writeFileSync(cliConfigPath, '{"mcpServers":{}}\n', 'utf8');
-    fs.writeFileSync(pluginConfigPath, '{"mcpServers":{}}\n', 'utf8');
 
-    assert.equal(resolveAntigravityConfigPath(tempHome), cliConfigPath);
+    assert.equal(resolveAntigravityConfigPath(tempHome), officialConfigPath);
   } finally {
     removeDir(tempHome);
   }
@@ -319,22 +323,31 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
       disabled: false,
     });
 
+    const officialConfig = JSON.parse(
+      fs.readFileSync(path.join(tempHome, '.gemini', 'config', 'mcp_config.json'), 'utf8')
+    );
+    assert.deepEqual(officialConfig.mcpServers.agentmem, {
+      command: 'node',
+      args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
+      env: { AGENTMEM_AGENT_ID: 'antigravity' },
+      disabled: false,
+    });
+
     const guidancePath = path.join(tempHome, '.agentmem', 'AGENTMEM_ANTIGRAVITY.md');
     assert.equal(fs.existsSync(guidancePath), true);
     const guidanceText = fs.readFileSync(guidancePath, 'utf8');
-    assert.match(guidanceText, /Before normal repo work, read the current workspace root `obsiguide\.md`/);
+    assert.doesNotMatch(guidanceText, /obsiguide\.md/);
+    assert.match(guidanceText, /unverified working memory/);
     assert.match(guidanceText, /Treat all AgentMemory results as unverified working memory/);
-    assert.match(guidanceText, /Never copy raw AgentMemory summaries/);
+    assert.match(guidanceText, /Never treat raw AgentMemory summaries/);
 
     const pluginRoot = path.join(tempHome, '.agentmem', 'antigravity-plugins');
     const pluginDir = path.join(pluginRoot, 'agentmem');
-    const pluginsConfig = JSON.parse(
-      fs.readFileSync(path.join(tempHome, '.gemini', 'config', 'plugins.json'), 'utf8')
-    );
-    assert.deepEqual(pluginsConfig.entries, [{ path: pluginRoot.replace(/\\/g, '/') }]);
-    assert.deepEqual(
-      JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8')),
-      { name: 'agentmem' }
+    const pluginsConfigPath = path.join(tempHome, '.gemini', 'config', 'plugins.json');
+    assert.equal(fs.existsSync(pluginsConfigPath), false);
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8')).name,
+      'agentmem'
     );
     const hooksText = fs.readFileSync(path.join(pluginDir, 'hooks.json'), 'utf8');
     assert.match(hooksText, /PreInvocation/);
@@ -342,9 +355,41 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
     assert.match(hooksText, /Stop/);
     assert.match(hooksText, /antigravity-hook\.js/);
     assert.match(
+      fs.readFileSync(path.join(pluginDir, 'mcp_config.json'), 'utf8'),
+      /AGENTMEM_AGENT_ID/
+    );
+    assert.match(
+      fs.readFileSync(path.join(pluginDir, 'rules', 'agentmem.md'), 'utf8'),
+      /^---\r?\nname: agentmem/
+    );
+    assert.match(
       fs.readFileSync(path.join(pluginDir, 'rules', 'agentmem.md'), 'utf8'),
       /agent_id: "antigravity"/
     );
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
+test('repeated install removes an empty Antigravity plugins registry previously managed by AgentMemory', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    const pluginsConfigPath = path.join(tempHome, '.gemini', 'config', 'plugins.json');
+    const pluginRoot = path.join(tempHome, '.agentmem', 'antigravity-plugins').replace(/\\/g, '/');
+    fs.mkdirSync(path.dirname(pluginsConfigPath), { recursive: true });
+    fs.writeFileSync(
+      pluginsConfigPath,
+      `${JSON.stringify({ entries: [{ path: pluginRoot }] }, null, 2)}\n`,
+      'utf8'
+    );
+
+    await runCli(tempHome, ['install']);
+    assert.equal(fs.existsSync(pluginsConfigPath), false);
+
+    fs.writeFileSync(pluginsConfigPath, '{}\n', 'utf8');
+    await runCli(tempHome, ['install']);
+    assert.equal(fs.existsSync(pluginsConfigPath), false);
   } finally {
     removeDir(tempHome);
   }
@@ -397,14 +442,22 @@ test('agentmem install migrates stale Antigravity CLI agentvault registry', asyn
   }
 });
 
-test('agentmem install --strict fails when no Antigravity registry can be found', async () => {
+test('agentmem install --strict creates the official Antigravity global registry when none exists', async () => {
   const tempHome = makeTempHome();
 
   try {
     const result = await runCli(tempHome, ['install', '--strict'], { allowFailure: true });
 
-    assert.notEqual(result.exitCode, 0);
-    assert.match(`${result.stdout}\n${result.stderr}`, /Antigravity/i);
+    assert.equal(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+    const officialConfig = JSON.parse(
+      fs.readFileSync(path.join(tempHome, '.gemini', 'config', 'mcp_config.json'), 'utf8')
+    );
+    assert.equal(officialConfig.mcpServers.agentmem.env.AGENTMEM_AGENT_ID, 'antigravity');
+    assert.equal(fs.existsSync(path.join(tempHome, '.grok', 'AGENTS.md')), false);
+
+    const repeated = await runCli(tempHome, ['install', '--strict'], { allowFailure: true });
+    assert.equal(repeated.exitCode, 0, `${repeated.stdout}\n${repeated.stderr}`);
+    assert.equal(fs.existsSync(path.join(tempHome, '.grok', 'AGENTS.md')), false);
   } finally {
     removeDir(tempHome);
   }

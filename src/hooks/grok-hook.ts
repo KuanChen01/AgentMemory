@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import os from 'os';
 import path from 'path';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
+import { fetchAgentMemoryWorker } from './worker-client';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -62,15 +63,11 @@ export function extractGrokToolEvent(payload: GrokHookPayload, failed: boolean) 
 }
 
 async function postJson(endpoint: string, payload: unknown) {
-  try {
-    await fetch(`http://localhost:${PORT}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    // Hooks must fail open when the local worker is unavailable.
-  }
+  await fetchAgentMemoryWorker(PORT, endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
 }
 
 async function main() {

@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
+import { fetchAgentMemoryWorker } from './worker-client';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -49,7 +50,7 @@ async function main() {
     const projectPath = path.resolve(process.cwd()).replace(/\\/g, '/');
 
     // Post to local worker queue
-    const response = await fetch(`http://localhost:${PORT}/tools`, {
+    const response = await fetchAgentMemoryWorker(PORT, '/tools', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -63,11 +64,9 @@ async function main() {
       })
     });
 
-    if (!response.ok) {
-      console.error('[AgentMemory Hook Error] Worker returned status:', response.status);
-    }
-  } catch (err: any) {
-    console.error('[AgentMemory Hook Error] Failed to process tool log:', err.message);
+    if (!response?.ok) return;
+  } catch {
+    // Fail open: memory capture must never block normal tool use.
   }
 }
 

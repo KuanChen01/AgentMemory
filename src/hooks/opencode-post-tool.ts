@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import os from 'os';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
+import { fetchAgentMemoryWorker } from './worker-client';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -37,7 +38,7 @@ async function main() {
     const sessionId = payload.sessionId || payload.session_id || payload.uuid || 'global-session';
     const projectPath = path.resolve(process.cwd()).replace(/\\/g, '/');
 
-    await fetch(`http://localhost:${PORT}/tools`, {
+    await fetchAgentMemoryWorker(PORT, '/tools', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -50,8 +51,8 @@ async function main() {
         success
       })
     });
-  } catch (err: any) {
-    console.error('[AgentMemory Hook Error] OpenCode post-tool failure:', err.message);
+  } catch {
+    // Fail open: memory capture must never block normal tool use.
   }
 }
 

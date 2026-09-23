@@ -114,6 +114,7 @@ async function startWorker(dbPath, port) {
     env: {
       ...process.env,
       AGENTMEM_DB_PATH: dbPath,
+      AGENTMEM_RUNTIME_DIR: `${dbPath}.runtime`,
       AGENTMEM_PORT: String(port),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -162,6 +163,13 @@ async function stopWorker(child, port) {
 }
 
 function cleanupDb(dbPath) {
+  const runtimeDir = `${dbPath}.runtime`;
+  if (fs.existsSync(runtimeDir)) {
+    for (const name of ['worker.pid', 'worker-status.json']) {
+      fs.rmSync(path.join(runtimeDir, name), { force: true });
+    }
+    fs.rmdirSync(runtimeDir);
+  }
   for (const suffix of ['', '-shm', '-wal']) {
     const target = `${dbPath}${suffix}`;
     if (fs.existsSync(target)) {

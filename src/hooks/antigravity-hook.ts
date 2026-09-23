@@ -7,6 +7,7 @@ import {
   renderProjectContextView,
 } from '../services/context-view';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
+import { fetchAgentMemoryWorker } from './worker-client';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -95,7 +96,15 @@ function findWorkspaceRoot(candidate: unknown): string | null {
   }
 
   while (true) {
-    if (fs.existsSync(path.join(current, 'obsiguide.md')) || fs.existsSync(path.join(current, '.git'))) {
+    const rootMarkers = [
+      '.git',
+      'package.json',
+      'pyproject.toml',
+      'Cargo.toml',
+      'ProjectSettings',
+      'Home.md',
+    ];
+    if (rootMarkers.some((marker) => fs.existsSync(path.join(current, marker)))) {
       return current;
     }
     const parent = path.dirname(current);
@@ -220,15 +229,11 @@ function isAgentMemoryToolEvent(event: ToolEvent): boolean {
 }
 
 async function postJson(endpoint: string, payload: unknown): Promise<Response | null> {
-  try {
-    return await fetch(`http://localhost:${PORT}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    return null;
-  }
+  return fetchAgentMemoryWorker(PORT, endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
 }
 
 async function handlePreInvocation(payload: AntigravityHookPayload) {
@@ -247,10 +252,11 @@ async function handlePreInvocation(payload: AntigravityHookPayload) {
   });
 
   try {
-    const response = await fetch(
-      `http://localhost:${PORT}/context?project_path=${encodeURIComponent(projectPath)}&limit=10`
+    const response = await fetchAgentMemoryWorker(
+      PORT,
+      `/context?project_path=${encodeURIComponent(projectPath)}&limit=10`
     );
-    if (!response.ok) {
+    if (!response?.ok) {
       jsonOutput({});
       return;
     }

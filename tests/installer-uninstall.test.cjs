@@ -293,7 +293,7 @@ model = "gpt-5"
   }
 });
 
-test('agentmem uninstall restores a pristine Grok config and removes generated artifacts', async () => {
+test('agentmem install preserves user Grok rules and uninstall removes generated artifacts', async () => {
   const tempHome = makeTempHome();
 
   try {
@@ -310,8 +310,7 @@ test('agentmem uninstall restores a pristine Grok config and removes generated a
 
     await runCli(tempHome, ['install']);
     const installedRules = fs.readFileSync(grokRulesPath, 'utf8');
-    assert.match(installedRules, /# User Grok Rules/);
-    assert.match(installedRules, /AgentMemory Grok Vault Rules: START/);
+    assert.equal(installedRules, originalRules);
     await runCli(tempHome, ['uninstall']);
 
     assert.equal(fs.readFileSync(grokConfigPath, 'utf8'), original);
@@ -323,17 +322,21 @@ test('agentmem uninstall restores a pristine Grok config and removes generated a
   }
 });
 
-test('agentmem uninstall removes only its Grok rules block after a user rules file diverges', async () => {
+test('agentmem install removes only its legacy Grok rules block and preserves user rules', async () => {
   const tempHome = makeTempHome();
 
   try {
     seedAntigravity(tempHome);
     const grokRulesPath = path.join(tempHome, '.grok', 'AGENTS.md');
     const originalRules = '# User Grok Rules\n\nKeep the Acme workflow enabled.\n';
+    const legacyRules = `${originalRules}\n<!-- AgentMemory Grok Vault Rules: START -->\nLegacy managed rules.\n<!-- AgentMemory Grok Vault Rules: END -->\n`;
     fs.mkdirSync(path.dirname(grokRulesPath), { recursive: true });
-    fs.writeFileSync(grokRulesPath, originalRules, 'utf8');
+    fs.writeFileSync(grokRulesPath, legacyRules, 'utf8');
 
     await runCli(tempHome, ['install']);
+    const installedRules = fs.readFileSync(grokRulesPath, 'utf8');
+    assert.match(installedRules, /# User Grok Rules/);
+    assert.doesNotMatch(installedRules, /AgentMemory Grok Vault Rules/);
     fs.appendFileSync(grokRulesPath, '\n# User addition\nKeep the release checklist.\n', 'utf8');
     await runCli(tempHome, ['uninstall']);
 
@@ -341,6 +344,64 @@ test('agentmem uninstall removes only its Grok rules block after a user rules fi
     assert.match(cleanedRules, /# User Grok Rules/);
     assert.match(cleanedRules, /# User addition/);
     assert.doesNotMatch(cleanedRules, /AgentMemory Grok Vault Rules/);
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
+test('agentmem uninstall never restores a legacy Grok global rules block removed during upgrade', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    seedAntigravity(tempHome);
+    const grokRulesPath = path.join(tempHome, '.grok', 'AGENTS.md');
+    const userRules = '# User Grok Rules\n\nKeep the Acme workflow enabled.\n';
+    const legacyRules = `${userRules}\n<!-- AgentMemory Grok Vault Rules: START -->\nLegacy managed rules.\n<!-- AgentMemory Grok Vault Rules: END -->\n`;
+    fs.mkdirSync(path.dirname(grokRulesPath), { recursive: true });
+    fs.writeFileSync(grokRulesPath, legacyRules, 'utf8');
+
+    await runCli(tempHome, ['install']);
+    await runCli(tempHome, ['uninstall']);
+
+    const afterUninstall = fs.readFileSync(grokRulesPath, 'utf8');
+    assert.match(afterUninstall, /# User Grok Rules/);
+    assert.doesNotMatch(afterUninstall, /AgentMemory Grok Vault Rules/);
+  } finally {
+    removeDir(tempHome);
+  }
+});
+
+test('agentmem uninstall cleans every Antigravity registry touched during install', async () => {
+  const tempHome = makeTempHome();
+
+  try {
+    seedAntigravity(tempHome);
+    const legacyRegistryPath = path.join(
+      tempHome,
+      '.gemini',
+      'config',
+      'plugins',
+      'local-game-mcps',
+      'mcp_config.json'
+    );
+    const officialRegistryPath = path.join(tempHome, '.gemini', 'config', 'mcp_config.json');
+
+    await runCli(tempHome, ['install']);
+    assert.equal(
+      JSON.parse(fs.readFileSync(legacyRegistryPath, 'utf8')).mcpServers.agentmem.env.AGENTMEM_AGENT_ID,
+      'antigravity'
+    );
+    assert.equal(
+      JSON.parse(fs.readFileSync(officialRegistryPath, 'utf8')).mcpServers.agentmem.env.AGENTMEM_AGENT_ID,
+      'antigravity'
+    );
+
+    await runCli(tempHome, ['uninstall']);
+
+    const legacyRegistry = JSON.parse(fs.readFileSync(legacyRegistryPath, 'utf8'));
+    assert.equal(legacyRegistry.mcpServers.agentmem, undefined);
+    assert.equal(legacyRegistry.mcpServers.other.command, 'python');
+    assert.equal(fs.existsSync(officialRegistryPath), false);
   } finally {
     removeDir(tempHome);
   }

@@ -67,6 +67,8 @@ bootstrap 完成后：
 
 - 需要继续沿用旧的一键启动体验时，运行 `npm run workbench`
 - 需要本机交互式控制 `Start / Stop / Restart / Status / Open Admin` 时，运行 `start-workbench.cmd`
+- 正常使用不要求你手工常驻一个终端；worker 不在线时，受管 lifecycle hook 默认会用跨进程锁后台拉起它
+- 如需完全关闭自动拉起，设置 `AGENTMEM_HOOK_AUTOSTART=false`；响应超时与冷启动宽限分别由 `AGENTMEM_HOOK_TIMEOUT_MS`、`AGENTMEM_HOOK_STARTUP_TIMEOUT_MS` 控制
 
 ## First Run Behavior
 
@@ -123,7 +125,9 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`
 - `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\plugin.json`
 - `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\hooks.json`
-- `%USERPROFILE%\.gemini\config\plugins.json`
+- `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\mcp_config.json`
+- `%USERPROFILE%\.gemini\config\mcp_config.json`
+- `%USERPROFILE%\.gemini\config\plugins\agentmem\plugin.json`
 - `%USERPROFILE%\.gemini\config\import_manifest.json`
 - `%USERPROFILE%\.agentmem\backups\`
 - `%USERPROFILE%\.claude.json`
@@ -131,7 +135,6 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.codex\config.toml`
 - `%USERPROFILE%\.codex\hooks.json`
 - `%USERPROFILE%\.grok\config.toml`
-- `%USERPROFILE%\.grok\AGENTS.md`
 - `%USERPROFILE%\.grok\agents\agentmem.md`
 - `%USERPROFILE%\.grok\hooks\agentmem.json`
 - `%USERPROFILE%\.config\opencode\opencode.jsonc`
@@ -153,6 +156,8 @@ agentmem uninstall --strict
 3. 删除 `%USERPROFILE%\.agentmem\.env` 与 `agentmemory.db`
 4. 在有干净基线备份时恢复原配置；如果该文件是旧安装遗留或你在安装后又手改过，则只做“定向清理 AgentMemory 项”，不会强行覆盖你的后续改动
 
+安装、升级和重复安装都不会生成 `%USERPROFILE%\.grok\AGENTS.md` 或其它用户级全局 Agent 规则；如果旧 `~/.grok/AGENTS.md` 中仍有 AgentMemory managed block，安装器只移除该遗留 block，并保留用户自己的内容。
+
 如果还要连备份与安装状态一起清掉，再执行：
 
 ```powershell
@@ -168,18 +173,18 @@ bootstrap 成功后，再做这四项 live acceptance：
 3. `OpenCode` 新开一个会话并执行一次工具，确认插件桥接仍能恢复并写入
 4. `agy plugin list` 能看到已导入的 `agentmem` plugin；新开 Antigravity 会话后，`PreInvocation` 自动注入 context、`PostToolUse` 自动写入且记录的 `agent_id` / `project_path` 分别为 `antigravity` 和当前 workspace，`Stop` 会关闭 session
 5. `grok mcp doctor agentmem` 通过，`grok inspect --json` 显示默认 `agentmem` profile、Grok lifecycle hooks 与本机 MCP server；执行一次非 AgentMemory 工具后，Observation Ledger 仅产生 `agent_id=grok` 的记录
-6. 对任意受管理 repo，确认 Antigravity 与 Grok 都会先读或 bootstrap 根目录 `obsiguide.md`，把 `agentmem` search/timeline 结果视为未验证工作记忆，且写入 `E:\Kuan\Vault` 前先按 `obsiguide.md` 和现有 vault notes 验证
+6. 对任意受管理 repo，确认 Antigravity 与 Grok 会把 `agentmem` search/timeline 结果视为未验证工作记忆，并在 durable use 前用当前 workspace 文件、diff、命令、测试或产物验证
 
 ## Troubleshooting
 
-- `Antigravity MCP registry was not found`
-  - 说明 `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`、`antigravity-ide`、`antigravity`、`.gemini\config\mcp_config.json` 和 `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json` 都没找到
-  - 先确认 Antigravity 已创建 MCP registry，或显式传 `-AntigravityConfig`
+- Antigravity 自定义 registry 没有更新
+  - 安装器始终创建或更新 `%USERPROFILE%\.gemini\config\mcp_config.json`
+  - 如果本机还使用额外的非标准 registry，请显式传 `-AntigravityConfig`
 
 - `AGENTMEM_ANTIGRAVITY.md` 不存在
   - 先重新运行 `agentmem install --strict`
   - 如果 Antigravity registry 路径不标准，带上 `--antigravity-config`
-  - 这个文件是 AgentMemory 为 Antigravity 生成的规则面，用来区分 `obsiguide.md`、Obsidian Vault 和 `agentmem` working memory 的边界
+  - 这个文件是 AgentMemory 为 Antigravity 生成的窄规则面，只负责 working-memory 恢复、证据验证和里程碑记录边界
 
 - `agy plugin list` 中没有 `agentmem`
   - 重新执行 `agentmem install --strict`；安装器会调用官方 `agy plugin install` 激活 hooks plugin
@@ -191,7 +196,9 @@ bootstrap 成功后，再做这四项 live acceptance：
 
 - `/admin` 没有起来
   - 先运行 `agentmem status`
-  - 再检查 `logs/workbench/` 下最新 `worker-*.err.log`
+  - 新开一次受管 Agent 会话可触发安全按需启动
+  - 检查 `%USERPROFILE%\.agentmem\worker-status.json`、`worker.pid`、`logs\worker-autostart.log` 与 `logs\worker.err.log`
+  - 手动 workbench 启动问题再检查仓库 `logs/workbench/` 下最新 `worker-*.err.log`
 
 - `OpenCode` 成功写入了 `opencode.jsonc` 但仍无效果
   - 先确认 `%USERPROFILE%\.config\opencode\plugins\agentmem-plugin.mjs` 存在

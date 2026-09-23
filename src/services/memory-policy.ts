@@ -109,6 +109,7 @@ const STATE_KEYWORDS = /\b(current|latest|status|state|mode|config|fact|owner|po
 const PROCEDURE_KEYWORDS = /\b(how|steps|procedure|workflow|run|bootstrap|install|release|diagnose|debug|fix|use)\b/i;
 const SUMMARY_KEYWORDS = /\b(summary|digest|overview|recent|what happened|context)\b/i;
 const HISTORY_KEYWORDS = /\b(previous|history|before|earlier|yesterday|last|as of|timeline)\b/i;
+const SUBSTANTIVE_OBSERVATION_KEYWORDS = /\b(pass(?:ed|es)?|fail(?:ed|ure)?|error|exception|warn(?:ing)?|verified|validated|confirmed|found|detected|discovered|revealed|resolved|fixed|regression|root cause|decision|risk|blocked|unsupported|mismatch|deprecated|removed|created|updated|changed|missing|corrupt(?:ed|ion)?|vulnerab(?:le|ility)|no matches?|no results?|not found|clean working tree|working tree (?:was|is) clean)\b|通过|失败|错误|异常|警告|验证|确认|发现|修复|回归|根因|决策|风险|阻塞|不支持|不匹配|缺失|损坏|漏洞|无匹配|未发现|工作区(?:是|为)?干净/i;
 
 export function selectDigestObservations(
   observations: Observation[],
@@ -270,7 +271,13 @@ export function decideObservationWritePolicy(
   const hasFacts = Array.isArray(observation.facts) && observation.facts.length > 0;
   const hasFiles = Array.isArray(observation.files_modified) && observation.files_modified.length > 0;
   const hasNarrative = String(observation.narrative || '').trim().length >= 24;
-  const lowSignal = isLowSignalTitle(observation.title) && !hasFacts && !hasFiles && !hasNarrative;
+  const lowSignalTitle = isLowSignalTitle(observation.title);
+  const evidenceText = [
+    observation.title,
+    observation.narrative,
+    ...(Array.isArray(observation.facts) ? observation.facts : []),
+  ].join('\n');
+  const hasSubstantiveOutcome = SUBSTANTIVE_OBSERVATION_KEYWORDS.test(evidenceText);
 
   if (!String(observation.title || '').trim()) {
     return {
@@ -286,10 +293,10 @@ export function decideObservationWritePolicy(
     };
   }
 
-  if (lowSignal) {
+  if (lowSignalTitle && !hasFiles && !hasSubstantiveOutcome) {
     return {
-      action: 'record_low_signal',
-      reasons: ['Low-signal tool activity is preserved as ledger evidence but should not be promoted.'],
+      action: 'skip',
+      reasons: ['Routine read, status, search, view, run, or raw-execution activity has no modified files or substantive outcome.'],
     };
   }
 

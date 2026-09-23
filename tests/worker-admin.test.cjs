@@ -106,6 +106,7 @@ async function startWorkerWithEnv(dbPath, port, extraEnv) {
       ...process.env,
       AGENTMEM_DB_PATH: dbPath,
       AGENTMEM_DAILY_DIGEST_DISABLED: extraEnv.AGENTMEM_DAILY_DIGEST_DISABLED || 'true',
+      AGENTMEM_RUNTIME_DIR: `${dbPath}.runtime`,
       AGENTMEM_ENV_PATH: extraEnv.AGENTMEM_ENV_PATH || path.join(os.tmpdir(), `agentmemory-worker-env-${randomUUID()}.env`),
       AGENTMEM_PORT: String(port),
       ...extraEnv,
@@ -309,6 +310,13 @@ async function stopWorker(child, port) {
 }
 
 function cleanupDb(dbPath) {
+  const runtimeDir = `${dbPath}.runtime`;
+  if (fs.existsSync(runtimeDir)) {
+    for (const name of ['worker.pid', 'worker-status.json']) {
+      fs.rmSync(path.join(runtimeDir, name), { force: true });
+    }
+    fs.rmdirSync(runtimeDir);
+  }
   for (const suffix of ['', '-shm', '-wal']) {
     const target = `${dbPath}${suffix}`;
     if (fs.existsSync(target)) {
@@ -333,6 +341,88 @@ async function waitForPostTaskReviews(port, projectPath, expectedCount = 1) {
   }
 
   throw new Error('Timed out waiting for post-task reviews.');
+}
+
+test('test workers keep lifecycle files separate from an inherited user runtime', async () => {
+  const dbPath = makeDbPath();
+  const port = makePort();
+  const userRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmemory-user-runtime-'));
+  const sentinels = { 'worker.pid': '12345\n', 'worker-status.json': '{"state":"running","pid":12345}\n' };
+  for (const [name, content] of Object.entries(sentinels)) {
+    fs.writeFileSync(path.join(userRuntime, name), content);
+  }
+  const previousRuntime = process.env.AGENTMEM_RUNTIME_DIR;
+  let child;
+  try {
+    process.env.AGENTMEM_RUNTIME_DIR = userRuntime;
+    child = await startWorker(dbPath, port);
+    const runtimeDir = `${dbPath}.runtime`;
+    assert.equal(fs.readFileSync(path.join(runtimeDir, 'worker.pid'), 'utf8').trim(), String(child.pid));
+    const status = JSON.parse(fs.readFileSync(path.join(runtimeDir, 'worker-status.json'), 'utf8'));
+    assert.equal(status.port, port);
+    assert.equal(status.state, 'running');
+    await stopWorker(child, port);
+    child = null;
+    assert.equal(fs.existsSync(path.join(runtimeDir, 'worker.pid')), false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(runtimeDir, 'worker-status.json'), 'utf8')).state, 'stopped');
+    for (const [name, content] of Object.entries(sentinels)) {
+      assert.equal(fs.readFileSync(path.join(userRuntime, name), 'utf8'), content);
+    }
+  } finally {
+    if (child) await stopWorker(child, port);
+    if (previousRuntime === undefined) delete process.env.AGENTMEM_RUNTIME_DIR;
+    else process.env.AGENTMEM_RUNTIME_DIR = previousRuntime;
+    cleanupDb(dbPath);
+    for (const name of Object.keys(sentinels)) fs.rmSync(path.join(userRuntime, name), { force: true });
+    fs.rmdirSync(userRuntime);
+  }
+});
+
+for (const mode of ['missing credentials', 'LLM HTTP failure']) {
+  test(`worker fallback skips successful raw logs but retains tool failures: ${mode}`, async () => {
+    const dbPath = makeDbPath();
+    const port = makePort();
+    const mock = mode === 'LLM HTTP failure' ? await startMockReleaseServer({ error: 'unavailable' }, 503) : null;
+    let child;
+    try {
+      child = await startWorkerWithEnv(dbPath, port, {
+        AGENTMEM_LLM_API_KEY: '', DEEPSEEK_API_KEY: '', EMBEDDING_API_URL: '',
+        AGENTMEM_LLM_API_URL: mock ? mock.baseUrl : 'https://example.invalid/v1',
+        AGENTMEM_LLM_HEADERS: '',
+      });
+      const sessionId = randomUUID();
+      for (const success of [true, false]) {
+        const response = await fetch(`http://127.0.0.1:${port}/tools`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId, project_path: 'E:/Repo/Fallback', agent_id: 'codex',
+            tool_name: 'Read', input: 'README.md',
+            output: success ? 'Documentation contents' : 'ENOENT: README.md not found', success,
+          }),
+        });
+        assert.equal(response.status, 200);
+        await response.json();
+      }
+      // The failure is queued last: its presence proves the successful log was processed.
+      let records = [];
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        const response = await fetch(`http://127.0.0.1:${port}/admin/api/records`);
+        records = (await response.json()).records;
+        if (records.some((record) => record.title === 'Tool failure: Read')) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(records.length, 1);
+      assert.equal(records[0].title, 'Tool failure: Read');
+      assert.match(records[0].narrative, /ENOENT: README.md not found/);
+      assert.match(records[0].narrative, mock ? /Summarization failed/ : /Missing LLM API credentials/);
+      if (mock) assert.equal(mock.requests.length, 2);
+    } finally {
+      if (child) await stopWorker(child, port);
+      if (mock) await mock.close();
+      cleanupDb(dbPath);
+    }
+  });
 }
 
 test('worker serves admin UI and admin APIs', async () => {

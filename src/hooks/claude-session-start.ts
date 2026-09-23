@@ -5,6 +5,7 @@ import {
   hasProjectContextData,
   renderProjectContextView,
 } from '../services/context-view';
+import { fetchAgentMemoryWorker } from './worker-client';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -14,8 +15,11 @@ async function main() {
   const projectPath = path.resolve(process.cwd()).replace(/\\/g, '/');
 
   try {
-    const response = await fetch(`http://localhost:${PORT}/context?project_path=${encodeURIComponent(projectPath)}&limit=10`);
-    if (!response.ok) {
+    const response = await fetchAgentMemoryWorker(
+      PORT,
+      `/context?project_path=${encodeURIComponent(projectPath)}&limit=10`
+    );
+    if (!response?.ok) {
       // Fail silently to avoid breaking the agent's startup
       return;
     }

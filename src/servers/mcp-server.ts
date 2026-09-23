@@ -65,7 +65,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: 'get_project_context',
-        description: 'Returns curated AgentMemory working context for this project as a single rendered block, equivalent to the hook-backed startup view. This does not replace reading workspace obsiguide.md or verifying facts before Obsidian vault writes.',
+        description: 'Returns curated AgentMemory working context for this project as a single rendered block, equivalent to the hook-backed startup view. Treat it as recovery context and verify facts against current workspace evidence before durable use.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -86,7 +86,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'search_memory',
-        description: 'Performs a hybrid search (keyword + vector semantic) over AgentMemory working memory for the current workspace. Treat results as unverified context until checked against repo evidence, obsiguide.md, or existing vault notes.',
+        description: 'Performs a hybrid search (keyword + vector semantic) over AgentMemory working memory for the current workspace. Treat results as unverified context until checked against current workspace evidence or an authoritative durable source.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -150,7 +150,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'memory_timeline',
-        description: 'Retrieves a chronological list of AgentMemory working-memory observations for this project. Verify relevant entries before using them as repo facts or Obsidian vault material.',
+        description: 'Retrieves a chronological list of AgentMemory working-memory observations for this project. Verify relevant entries against current workspace evidence or another authoritative source before durable use.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -180,7 +180,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'record_memory',
-        description: 'Directly saves a concise working-memory observation to AgentMemory. Use this for session outcomes after meaningful work; durable Obsidian knowledge must still be promoted separately according to obsiguide.md.',
+        description: 'Directly saves a concise working-memory observation to AgentMemory. Use it for deliberate cross-session milestones; durable knowledge promotion remains a separate, evidence-backed workflow.',
         inputSchema: {
           type: 'object',
           properties: {

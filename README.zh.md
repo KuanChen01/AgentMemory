@@ -131,7 +131,7 @@ agentmem uninstall --strict
 
 您可以在终端中的任何工作路径直接调用全局快捷命令：
 
-*   **启动 Worker 服务**：`agentmem start`（前台运行；使用期间请保持这个终端窗口处于运行状态）
+*   **手动启动 Worker**：`agentmem start`（可选的前台控制方式；worker 不在线时，lifecycle hook 默认会安全地后台拉起）
 *   **停止后台服务**：`agentmem stop`
 *   **查询运行状态**：`agentmem status`
 *   **查看当前版本**：`agentmem version`
@@ -215,7 +215,7 @@ AgentMemory 现在把记忆拆成显式层次：
 
 现在的 policy brain 已经显式化，不再把策略分散在 hooks 和临时调用点里：
 
-*   `memory-policy.ts` 集中承载读取决策、低信号 ledger 写入决策，以及 procedural skill candidate 的 draft promotion gate。
+*   `memory-policy.ts` 集中承载读取决策，只在既没有 modified-file 证据、也没有实质结果时抑制日常 read/status/search/view/run 工具噪音，同时负责 procedural skill candidate 的 draft promotion gate；显式 `record_memory` 里程碑、失败、已验证发现和测试结果仍可记录。
 *   `memory-orchestrator.ts` 是共享的 Stage 2 读取编排层，worker startup context、MCP `get_project_context` 和任务级 query 都复用它。
 *   `memory-query.ts` 现在复用这条共享 orchestrator 路径，决定该读哪些 layers、何时查 procedural memory，并附带 bounded context、temporal diagnostics 和 decision trace。
 
@@ -244,6 +244,8 @@ AgentMemory 现在把记忆拆成显式层次：
 *   `generated_at`
 
 这一阶段的 structured state 仍然是 **explicit-write only**：observation、hook 日志和 LLM 摘要不会自动晋升为 state。Procedural skill candidate 同样保持 **reviewable before promotion**：可以显式提升成 draft skill，但不会自动启用。
+
+所有 lifecycle hook 都采用 fail-open。普通 worker 请求使用覆盖响应头及完整正文的超时（默认 `1500ms`，可通过 `AGENTMEM_HOOK_TIMEOUT_MS` 调整）。只有所有连接尝试均明确被拒绝（`ECONNREFUSED`）才会触发一次带跨进程锁的后台 worker 启动，并使用独立的启动宽限时间（默认 `5000ms`，可通过 `AGENTMEM_HOOK_STARTUP_TIMEOUT_MS` 调整）。请求超时、连接重置及其它语义不确定的错误不会重发，因为 worker 可能已经接收了 `POST /tools`。设置 `AGENTMEM_HOOK_AUTOSTART=false` 可关闭 hook 自动启动。运行诊断写入 `%USERPROFILE%\.agentmem\worker-status.json`、`worker.pid` 与 `logs\worker-autostart.log`；集成测试通过 `AGENTMEM_RUNTIME_DIR` 隔离这些文件。摘要不可用时，成功的原始执行日志因缺少提取后的结果或文件证据而跳过，真实工具失败仍会记录。
 
 #### Workbench 专用诊断 API
 
@@ -297,7 +299,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 7. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
 8. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
 9. 如需深挖原始 observation，再切到 `Observation Ledger`
-10. 使用 `agentmem status` 检查 worker 是否可达，完成后使用 `agentmem stop` 停止服务
+10. 使用 `agentmem status` 检查 worker 是否可达并查看最近运行状态。仍可用 `agentmem stop` 停止服务；若未设置 `AGENTMEM_HOOK_AUTOSTART=false`，下一次受管 lifecycle hook 会再次自动拉起 worker
 
 ---
 
@@ -394,7 +396,7 @@ args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
 ```
 
 #### 4. Antigravity CLI
-`agentmem install` 现在也会更新当前生效的 Antigravity MCP 注册表。安装器会先检查 Antigravity 直接使用的 registry：`%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`，再依次检查 `antigravity-ide`、`antigravity` 和 `.gemini\config\mcp_config.json`，最后才回退到 `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json` 这类 Gemini-compatible plugin registry。如果你的机器把注册表放在别处，可以显式传入：
+`agentmem install` 会固定更新 Antigravity 官方全局 MCP registry：`%USERPROFILE%\.gemini\config\mcp_config.json`。迁移期间，如果已存在旧的 `antigravity-cli`、`antigravity-ide`、`antigravity` direct registry，或 `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json` 下的 Gemini-compatible plugin registry，也会同步更新；若本机还有额外的自定义 registry，可显式传入：
 
 ```bash
 agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
@@ -414,20 +416,19 @@ agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
 }
 ```
 
-安装器还会在 `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem` 创建并激活 Antigravity plugin。它通过 `PreInvocation`、`PostToolUse` 和 `Stop` 自动注入 `ProjectContextView`、把工具工作记录为 canonical `antigravity` 并关闭 session；MCP registry 同时注入 `AGENTMEM_AGENT_ID=antigravity`，因此显式 `record_memory` 即使省略 `agent_id` 也不会再落到 `mcp-client`。`%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` 继续作为 plugin rule 的可读兼容副本。
+安装器会先在 `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem` 生成 plugin 源，再通过 `agy plugin install` 激活。Antigravity 1.1.12 会把 imported plugin 放到 `%USERPROFILE%\.gemini\config\plugins\agentmem`，并写入 `import_manifest.json`。plugin 打包 `mcp_config.json`、`PreInvocation` / `PostToolUse` / `Stop` hooks，以及带 frontmatter 的 rule。官方全局 MCP registry 是 `%USERPROFILE%\.gemini\config\mcp_config.json`，并注入 `AGENTMEM_AGENT_ID=antigravity`，因此显式 `record_memory` 即使省略 `agent_id` 也不会再落到 `mcp-client`。`%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` 继续作为 plugin rule 的可读兼容副本。
 
 推荐的 Antigravity 工作流：
 
-1. 先读当前 workspace 根目录 `obsiguide.md`；如果缺失但存在 `obsiguide.template.md`，先按模板创建并用已验证 repo evidence 填好关键字段，再做 feature work。
-2. 让 `PreInvocation` hook 自动注入启动上下文；只有需要进一步展开时才调用 `get_project_context`、`search_memory` 或 `memory_timeline`，并把结果先用 repo evidence 和 `obsiguide.md` 验证。
-3. 写入 `E:\Kuan\Vault` 前，必须检查当前 repo evidence、`obsiguide.md` 和现有 vault notes；不要把 AgentMemory 原始摘要或 session recap 直接倒入 vault。
-4. 普通工具工作由 `PostToolUse` 自动记录，`Stop` 自动关闭 session；只有需要单独标记里程碑时才显式调用 `record_memory(agent_id="antigravity")`。
-5. 如果启动后还需要进一步展开细节，再用 `memory_timeline`、`search_memory` 和 `get_memory_details` 做 drill-down。
+1. 让 `PreInvocation` hook 自动注入启动上下文。
+2. 只有需要进一步展开时才调用 `get_project_context`、`search_memory` 或 `memory_timeline`，并把结果先用当前 workspace 文件、diff、命令、测试或产物验证。
+3. 普通工具工作由 `PostToolUse` 自动记录，`Stop` 自动关闭 session；只有明确的跨会话里程碑才显式调用 `record_memory(agent_id="antigravity")`。
+4. 不要把 AgentMemory 原始摘要或 session recap 当作 durable truth，也不要仅因为任务结束就记录琐碎输出。
 
 这样 Antigravity 也具备与其他 hook-backed agent 一致的自动读写生命周期。
 
 #### 5. Grok（`~/.grok/config.toml`）
-`agentmem install` 会为 Grok 注册带 `AGENTMEM_AGENT_ID=grok` 的 stdio MCP server，生成受管的全局 `~/.grok/AGENTS.md` Vault 规则、默认 `~/.grok/agents/agentmem.md` profile，并在 `~/.grok/hooks/agentmem.json` 写入全局 lifecycle hooks。
+`agentmem install` 会为 Grok 注册带 `AGENTMEM_AGENT_ID=grok` 的 stdio MCP server，生成默认 `~/.grok/agents/agentmem.md` profile，并在 `~/.grok/hooks/agentmem.json` 写入全局 lifecycle hooks；它不再创建或依赖全局 `~/.grok/AGENTS.md`。
 
 ```toml
 [agent]
@@ -442,7 +443,7 @@ args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
 env = { AGENTMEM_AGENT_ID = "grok" }
 ```
 
-全局 `AGENTS.md` 会被每个 Grok profile 加载，包含 `obsiguide.md` bootstrap、AgentMemory / Vault 边界、证据优先级、durable note 与收尾报告规则。默认 profile 会启用 `AGENTS.md` 加载，并把 `get_project_context` 作为首个记忆读取入口。Grok 的被动 hook stdout 不能注入模型，因此启动恢复由 profile 负责；`SessionStart`、`PostToolUse`、`PostToolUseFailure`、`Stop` 与 `SessionEnd` hooks 则负责注册 session、记录工具工作和关闭 session。安装器只关闭 Grok 的 Claude-hook compatibility，避免现有 Claude post-tool hook 把 Grok 记录误标为 `claudecode`；Claude skills 与 MCP compatibility 仍然启用。
+默认 profile 会关闭全局 `AGENTS.md` 加载，并把 `get_project_context` 作为首个记忆读取入口。Grok 的被动 hook stdout 不能注入模型，因此启动恢复由 profile 负责；`SessionStart`、`PostToolUse`、`PostToolUseFailure`、`Stop` 与 `SessionEnd` hooks 则负责注册 session、记录工具工作和关闭 session。安装器只关闭 Grok 的 Claude-hook compatibility，避免现有 Claude post-tool hook 把 Grok 记录误标为 `claudecode`；Claude skills 与 MCP compatibility 仍然启用。
 
 ### ✅ Smoke 验证清单
 

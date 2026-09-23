@@ -1,5 +1,7 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import {
   DailyDigestSchedulerConfig,
@@ -61,6 +63,11 @@ app.use(express.json({ limit: '10mb' })); // Support large logs
 const PORT = process.env.AGENTMEM_PORT || 38888;
 const dbManager = new DatabaseManager();
 let dailyDigestScheduler: DailyDigestSchedulerHandle | null = null;
+const workerRuntimeDir = process.env.AGENTMEM_RUNTIME_DIR || path.join(os.homedir(), '.agentmem');
+const workerPidPath = path.join(workerRuntimeDir, 'worker.pid');
+const workerStatusPath = path.join(workerRuntimeDir, 'worker-status.json');
+let workerStartedAt = '';
+let workerRuntimeRegistered = false;
 
 // Queue to process tool executions sequentially in the background
 interface QueuedToolLog {
@@ -78,6 +85,58 @@ interface QueuedToolLog {
 const logQueue: QueuedToolLog[] = [];
 let isProcessingQueue = false;
 const ADMIN_HTML = renderAdminPageHtml(5000);
+
+function writeWorkerRuntimeStatus(state: 'running' | 'stopped', exitCode?: number) {
+  try {
+    fs.mkdirSync(workerRuntimeDir, { recursive: true });
+    fs.writeFileSync(
+      workerStatusPath,
+      `${JSON.stringify({
+        exitCode,
+        pid: process.pid,
+        port: Number(PORT),
+        repoRoot: path.resolve(__dirname, '../..'),
+        startedAt: workerStartedAt,
+        state,
+        updatedAt: new Date().toISOString(),
+      }, null, 2)}\n`,
+      'utf8'
+    );
+  } catch {
+    // Runtime diagnostics must not prevent the worker from serving requests.
+  }
+}
+
+function registerWorkerRuntime() {
+  workerStartedAt = new Date().toISOString();
+  fs.mkdirSync(workerRuntimeDir, { recursive: true });
+  fs.writeFileSync(workerPidPath, `${process.pid}\n`, 'utf8');
+  writeWorkerRuntimeStatus('running');
+  workerRuntimeRegistered = true;
+}
+
+function unregisterWorkerRuntime(exitCode: number = 0) {
+  if (!workerRuntimeRegistered) return;
+  try {
+    if (fs.existsSync(workerPidPath) && fs.readFileSync(workerPidPath, 'utf8').trim() === String(process.pid)) {
+      fs.unlinkSync(workerPidPath);
+    }
+  } catch {
+    // A stale PID file is reported by the CLI status command on the next run.
+  }
+  writeWorkerRuntimeStatus('stopped', exitCode);
+  workerRuntimeRegistered = false;
+}
+
+process.on('exit', (exitCode) => unregisterWorkerRuntime(exitCode));
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    dailyDigestScheduler?.stop();
+    dbManager.close();
+    unregisterWorkerRuntime(0);
+    process.exit(0);
+  });
+}
 
 function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
@@ -266,9 +325,14 @@ async function startServer() {
   await dbManager.initialize();
   console.log('AgentMemory SQLite database initialized.');
   applyDailyDigestSchedulerConfig(await dbManager.getDailyDigestSchedulerConfig());
-  
-  app.listen(PORT, () => {
-    console.log(`AgentMemory worker service running on port ${PORT}`);
+
+  await new Promise<void>((resolve, reject) => {
+    const server = app.listen(PORT, () => {
+      registerWorkerRuntime();
+      console.log(`AgentMemory worker service running on port ${PORT}`);
+      resolve();
+    });
+    server.once('error', reject);
   });
 }
 
@@ -1234,16 +1298,21 @@ ${log.output.substring(0, 20000)}
 
 // Fallback logic if LLM fails or API keys are missing
 async function saveMockObservation(log: QueuedToolLog, reason: string) {
+  // Without a summary, successful raw executions contain no extracted outcome
+  // or file evidence. A summarizer diagnostic must not promote them into memory.
+  if (log.success) return;
+
   const textToEmbed = `Raw observation for ${log.tool_name}. ${reason}`;
   const embedding = await getEmbedding(textToEmbed);
+  const failedOutput = log.output.trim().slice(0, 500);
 
   const observation: Observation = {
     id: log.id,
     session_id: log.session_id,
     project_path: log.project_path,
     agent_id: log.agent_id,
-    title: `Raw Execution: ${log.tool_name}`,
-    narrative: `Background processing details: ${reason}. Input was truncated if large.`,
+    title: `Tool failure: ${log.tool_name}`,
+    narrative: `Tool execution failed while memory summarization was unavailable. ${reason}.${failedOutput ? ` Output: ${failedOutput}` : ''}`,
     facts: [`Executed ${log.tool_name}`, `Success status: ${log.success}`],
     concepts: ['tool_execution'],
     files_read: [],

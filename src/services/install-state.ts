@@ -21,6 +21,7 @@ export type ManagedTargetKind =
   | 'antigravity-plugins-config'
   | 'antigravity-plugin-manifest'
   | 'antigravity-plugin-hooks'
+  | 'antigravity-plugin-mcp'
   | 'antigravity-plugin-rule';
 
 export interface InstallStateRecord {

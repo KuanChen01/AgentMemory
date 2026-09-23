@@ -39,6 +39,13 @@ async function withDatabase(run) {
         fs.rmSync(target, { force: true });
       }
     }
+    const runtimeDir = `${dbPath}.runtime`;
+    if (fs.existsSync(runtimeDir)) {
+      for (const name of ['worker.pid', 'worker-status.json']) {
+        fs.rmSync(path.join(runtimeDir, name), { force: true });
+      }
+      fs.rmdirSync(runtimeDir);
+    }
   }
 }
 
@@ -143,6 +150,7 @@ async function startWorker(dbPath, port) {
       ...process.env,
       AGENTMEM_DB_PATH: dbPath,
       AGENTMEM_PORT: String(port),
+      AGENTMEM_RUNTIME_DIR: `${dbPath}.runtime`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
