@@ -6,10 +6,7 @@ set "PS_EXE=pwsh"
 where pwsh >nul 2>nul
 if errorlevel 1 set "PS_EXE=powershell"
 
-if "%~1"=="" (
-  %PS_EXE% -ExecutionPolicy Bypass -File "%SCRIPT%" -Action menu
-  exit /b %ERRORLEVEL%
-)
+if "%~1"=="" goto menu
 
 set "ACTION=%~1"
 shift
@@ -59,3 +56,13 @@ exit /b 1
 :run
 %PS_EXE% -ExecutionPolicy Bypass -File "%SCRIPT%" %PS_ARGS%
 exit /b %ERRORLEVEL%
+
+:menu
+%PS_EXE% -ExecutionPolicy Bypass -File "%SCRIPT%" -Action menu
+set "RESULT=%ERRORLEVEL%"
+if not "%RESULT%"=="0" (
+  echo.
+  echo Workbench failed. Press any key to close this window.
+  pause >nul
+)
+exit /b %RESULT%

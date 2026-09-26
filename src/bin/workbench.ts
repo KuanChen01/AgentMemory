@@ -99,8 +99,13 @@ async function main() {
     : await waitForWorkbenchReady(urls.overviewUrl);
 
   if (!ready.ready) {
+    const workerError = logs && fs.existsSync(logs.stderrPath)
+      ? fs.readFileSync(logs.stderrPath, 'utf8').split(/\r?\n/).find((line) => line.trim())
+      : undefined;
     throw new Error(
-      `AgentMemory workbench did not become ready on port ${options.port}. Last probe: ${ready.probe.status} ${ready.probe.error || ''}`.trim()
+      `AgentMemory workbench did not become ready on port ${options.port}. Last probe: ${ready.probe.status} ${ready.probe.error || ''}`.trim() +
+      (workerError ? ` Worker error: ${workerError}.` : '') +
+      (logs ? ` Worker log: ${logs.stderrPath}` : '')
     );
   }
 
