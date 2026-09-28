@@ -26,6 +26,7 @@ import { getEmbedding } from '../services/embedding';
 import { resolveAgentId } from '../services/agent-id';
 import { resolveMemoryQuery } from '../services/memory-query';
 import { orchestrateMemoryRead } from '../services/memory-orchestrator';
+import { renderMemoryTimeline } from '../services/memory-timeline';
 import {
   promoteProceduralSkillCandidate,
   recordProceduralSkillFeedback,
@@ -150,13 +151,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'memory_timeline',
-        description: 'Retrieves a chronological list of AgentMemory working-memory observations for this project. Verify relevant entries against current workspace evidence or another authoritative source before durable use.',
+        description: 'Retrieves a bounded, newest-first page of AgentMemory observations for this project. Use offset to continue. Verify relevant entries against current workspace evidence.',
         inputSchema: {
           type: 'object',
           properties: {
             project_path: {
               type: 'string',
               description: 'Optional. Absolute path of the project workspace. Defaults to the current working directory.',
+            },
+            limit: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 40,
+              description: 'Optional. Entries per page, default and maximum 40.',
+            },
+            offset: {
+              type: 'integer',
+              minimum: 0,
+              description: 'Optional. Number of newest entries to skip for the next page.',
             },
           },
         },
@@ -503,18 +515,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
         const timeline = await dbManager.getTimeline(projectPath);
 
-        if (timeline.length === 0) {
-          return {
-            content: [{ type: 'text', text: 'No memory timeline recorded yet for this project.' }],
-          };
-        }
-
-        const lines = timeline.map(
-          (t) => `- [${t.created_at || 'unknown'}] [ID: ${t.id}] [Agent: ${t.agent_id}] ${t.title}`
-        );
-        const output = `Chronological timeline (${timeline.length} entries):\n\n${lines.join('\n')}\n\nUse get_memory_details to view detailed narratives.`;
-
-        return { content: [{ type: 'text', text: output }] };
+        return { content: [{ type: 'text', text: renderMemoryTimeline(timeline, args?.limit, args?.offset) }] };
         }
 
         case 'get_memory_details': {

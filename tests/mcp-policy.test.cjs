@@ -155,6 +155,26 @@ test('MCP read tools return a disabled message when read policy is off', async (
   });
 });
 
+test('MCP memory_timeline exposes bounded pages', async () => {
+  await withSeededDatabase(async (db, dbPath) => {
+    await db.saveObservation({
+      id: randomUUID(), session_id: randomUUID(), project_path: 'E:/Repo/A', agent_id: 'grok',
+      title: 'Second memory', narrative: 'A second timeline entry.', facts: [], concepts: [],
+      files_read: [], files_modified: [], embedding: [0, 1, 0],
+    });
+    const child = await startMcpServer(dbPath);
+    try {
+      const first = await callTool(child, 10, 'memory_timeline', { project_path: 'E:/Repo/A', limit: 1 });
+      const second = await callTool(child, 11, 'memory_timeline', { project_path: 'E:/Repo/A', limit: 1, offset: 1 });
+      assert.match(first.result.content[0].text, /1-1 of 2/);
+      assert.match(first.result.content[0].text, /offset=1/);
+      assert.match(second.result.content[0].text, /2-2 of 2/);
+    } finally {
+      await stopMcpServer(child);
+    }
+  });
+});
+
 test('MCP record_memory does not write when write policy is off', async () => {
   await withSeededDatabase(async (db, dbPath) => {
     await db.updateRuntimePolicy({ readEnabled: true, writeEnabled: false });

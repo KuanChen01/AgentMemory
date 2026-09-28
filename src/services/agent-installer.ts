@@ -51,6 +51,7 @@ export interface InstallPaths {
   opencodeStartHook: string;
   opencodePostHook: string;
   codexStartHook: string;
+  codexPromptHook: string;
   codexPostHook: string;
   grokHook: string;
   grokConfigPath: string;
@@ -296,7 +297,7 @@ export function renderAntigravityGuidance(): string {
 These rules are managed by AgentMemory. Use them as the Antigravity CLI rule surface whenever AgentMemory is installed.
 
 ## Startup
-- AgentMemory's \`PreInvocation\` hook injects startup context automatically. Use \`get_project_context\`, \`search_memory\`, or \`memory_timeline\` only for explicit drill-down when more detail is needed.
+- AgentMemory automatically retrieves task-relevant memory on substantive requests. On difficult or tangled work, repeated failures, or unclear past decisions, proactively call \`query_memory\` or \`search_memory\` again with the current problem; do not wait for the user to ask you to remember.
 - Treat all AgentMemory results as unverified working memory until checked against current workspace files, diffs, commands, tests, artifacts, or another authoritative source.
 
 ## Working-memory boundary
@@ -385,6 +386,18 @@ export function ensureAntigravityMcpServer(jsonText: string, mcpServerPath: stri
   return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 
+export function removeMatchingAntigravityMcpServer(jsonText: string, mcpServerPath: string): string {
+  const parsed = JSON.parse(stripComments(jsonText || '{}') || '{}');
+  const actual = String(parsed?.mcpServers?.agentmem?.args?.[0] || '').replace(/\\/g, '/').toLowerCase();
+  const expected = mcpServerPath.replace(/\\/g, '/').toLowerCase();
+  const hasLegacyVault = !!parsed?.mcpServers?.agentvault;
+  if ((!actual || actual !== expected) && !hasLegacyVault) return jsonText;
+  if (actual === expected) delete parsed.mcpServers.agentmem;
+  delete parsed.mcpServers.agentvault;
+  pruneEmptyObject(parsed, 'mcpServers');
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
 export function resolveInstallPaths(repoRoot: string, homeDir: string = os.homedir()): InstallPaths {
   const normalizedRepoRoot = repoRoot.replace(/\\/g, '/');
   const antigravityPluginRoot = path.join(homeDir, '.agentmem', 'antigravity-plugins');
@@ -401,6 +414,7 @@ export function resolveInstallPaths(repoRoot: string, homeDir: string = os.homed
     opencodeStartHook: `${normalizedRepoRoot}/dist/hooks/opencode-session-start.js`,
     opencodePostHook: `${normalizedRepoRoot}/dist/hooks/opencode-post-tool.js`,
     codexStartHook: `${normalizedRepoRoot}/dist/hooks/codex-session-start.js`,
+    codexPromptHook: `${normalizedRepoRoot}/dist/hooks/codex-user-prompt.js`,
     codexPostHook: `${normalizedRepoRoot}/dist/hooks/codex-post-tool.js`,
     grokHook: `${normalizedRepoRoot}/dist/hooks/grok-hook.js`,
     grokConfigPath: path.join(homeDir, '.grok', 'config.toml'),
@@ -573,7 +587,7 @@ function hasMarkerInJson(value: unknown, markers: string[]): boolean {
 
 function cleanupHookConfig(
   payload: Record<string, any>,
-  eventName: 'SessionStart' | 'SubagentStart' | 'PostToolUse',
+  eventName: 'SessionStart' | 'SubagentStart' | 'PostToolUse' | 'UserPromptSubmit',
   markers: string[]
 ) {
   if (!isObject(payload.hooks)) {
@@ -609,6 +623,7 @@ function cleanupCodexHooksConfig(hooksConfig: Record<string, any>) {
   cleanupHookConfig(hooksConfig, 'SessionStart', ['codex-session-start.js']);
   cleanupHookConfig(hooksConfig, 'SubagentStart', ['codex-session-start.js']);
   cleanupHookConfig(hooksConfig, 'PostToolUse', ['codex-post-tool.js']);
+  cleanupHookConfig(hooksConfig, 'UserPromptSubmit', ['codex-user-prompt.js']);
   return hooksConfig;
 }
 
@@ -670,7 +685,7 @@ function detectCodexConfigLegacy(toml: string): boolean {
 }
 
 function detectCodexHooksLegacy(hooksConfig: Record<string, any>): boolean {
-  return hasMarkerInJson(hooksConfig?.hooks, ['codex-session-start.js', 'codex-post-tool.js']);
+  return hasMarkerInJson(hooksConfig?.hooks, ['codex-session-start.js', 'codex-post-tool.js', 'codex-user-prompt.js']);
 }
 
 function detectGrokConfigLegacy(toml: string): boolean {
@@ -1072,6 +1087,11 @@ function installCodex(context: InstallContext): InstallResult {
     'codex-post-tool.js',
     `node "${context.paths.codexPostHook}"`
   );
+  hooksConfig.hooks.UserPromptSubmit = mergeManagedHookEntries(
+    hooksConfig.hooks.UserPromptSubmit,
+    'codex-user-prompt.js',
+    `node "${context.paths.codexPromptHook}"`
+  );
 
   const warnings = [
     ...applyManagedTextWrite(
@@ -1098,6 +1118,35 @@ function installCodex(context: InstallContext): InstallResult {
     message: `Registered hooks and MCP server in ${CODEX_DISPLAY_NAME} (${codexConfigPath}, ${codexHooksPath})`,
     warnings,
   };
+}
+
+function cleanDuplicateAntigravityRegistries(context: InstallContext, extraPath: string): string[] {
+  const home = context.homeDir;
+  const candidates = [
+    extraPath,
+    path.join(home, '.gemini', 'antigravity-cli', 'mcp_config.json'),
+    path.join(home, '.gemini', 'antigravity-ide', 'mcp_config.json'),
+    path.join(home, '.gemini', 'antigravity', 'mcp_config.json'),
+    ...Object.values(context.state.targets)
+      .filter((record) => record.kind === 'antigravity-config')
+      .map((record) => record.path),
+  ];
+  const pluginsRoot = path.join(home, '.gemini', 'config', 'plugins');
+  if (fs.existsSync(pluginsRoot)) {
+    candidates.push(...fs.readdirSync(pluginsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== 'agentmem')
+      .map((entry) => path.join(pluginsRoot, entry.name, 'mcp_config.json')));
+  }
+  const warnings: string[] = [];
+  for (const targetPath of new Set(candidates.map((candidate) => path.resolve(candidate)))) {
+    if (targetPath === path.resolve(context.paths.antigravityOfficialConfigPath) || !fs.existsSync(targetPath)) continue;
+    const original = fs.readFileSync(targetPath, 'utf8');
+    const cleaned = removeMatchingAntigravityMcpServer(original, context.paths.mcpServerPath);
+    if (cleaned !== original) warnings.push(...applyManagedTextWrite(
+      context, 'antigravity-config', targetPath, cleaned, true
+    ));
+  }
+  return warnings;
 }
 
 function installAntigravity(context: InstallContext, overridePath?: string): InstallResult {
@@ -1150,7 +1199,7 @@ function installAntigravity(context: InstallContext, overridePath?: string): Ins
 
   const warnings = [
     ...writeMcpRegistry(officialPath),
-    ...(configPath !== officialPath ? writeMcpRegistry(configPath) : []),
+    ...cleanDuplicateAntigravityRegistries(context, configPath),
     ...stalePluginsConfigWarnings,
     ...applyManagedTextWrite(
       context,
@@ -1176,13 +1225,11 @@ function installAntigravity(context: InstallContext, overridePath?: string): Ins
       fs.existsSync(context.paths.antigravityPluginHooksPath) &&
         fs.readFileSync(context.paths.antigravityPluginHooksPath, 'utf8').includes('antigravity-hook.js')
     ),
-    ...applyManagedTextWrite(
+    ...applyManagedDelete(
       context,
       'antigravity-plugin-mcp',
       context.paths.antigravityPluginMcpPath,
-      renderAntigravityPluginMcpConfig(context.paths.mcpServerPath),
-      fs.existsSync(context.paths.antigravityPluginMcpPath) &&
-        detectAntigravityLegacy(readJsonFile(context.paths.antigravityPluginMcpPath, true))
+      fs.existsSync(context.paths.antigravityPluginMcpPath)
     ),
     ...applyManagedTextWrite(
       context,
@@ -1194,6 +1241,13 @@ function installAntigravity(context: InstallContext, overridePath?: string): Ins
     ),
   ];
   runAntigravityPluginCommand(['install', context.paths.antigravityPluginDir]);
+  const importedMcpPath = path.join(context.paths.antigravityImportedPluginDir, 'mcp_config.json');
+  if (fs.existsSync(importedMcpPath)) {
+    const imported = fs.readFileSync(importedMcpPath, 'utf8');
+    if (removeMatchingAntigravityMcpServer(imported, context.paths.mcpServerPath) !== imported) {
+      fs.unlinkSync(importedMcpPath);
+    }
+  }
   try {
     runAntigravityPluginCommand(['enable', 'agentmem']);
   } catch (error: any) {
@@ -1207,7 +1261,7 @@ function installAntigravity(context: InstallContext, overridePath?: string): Ins
     agent: 'antigravity',
     ok: true,
     targetPath: officialPath,
-    message: `Registered MCP identity in Antigravity (${officialPath}) and installed the AgentMemory plugin via agy plugin install (${context.paths.antigravityPluginDir})`,
+    message: `Registered one AgentMemory MCP server in Antigravity (${officialPath}) and installed its hook plugin (${context.paths.antigravityPluginDir})`,
     warnings,
   };
 }
@@ -1601,6 +1655,9 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   if (!JSON.stringify(codexHooks).includes(paths.codexPostHook)) {
     issues.push(`${CODEX_DISPLAY_NAME} PostToolUse hook is missing (${codexHooksPath}).`);
   }
+  if (!JSON.stringify(codexHooks).includes(paths.codexPromptHook)) {
+    issues.push(`${CODEX_DISPLAY_NAME} UserPromptSubmit hook is missing (${codexHooksPath}).`);
+  }
 
   const grokToml = fs.existsSync(paths.grokConfigPath) ? fs.readFileSync(paths.grokConfigPath, 'utf8') : '';
   if (!grokToml.includes(paths.mcpServerPath) || !/AGENTMEM_AGENT_ID\s*=\s*"grok"/.test(grokToml)) {
@@ -1638,10 +1695,7 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   }
 
   if (antigravityConfigPath) {
-    const registriesToCheck = Array.from(new Set([
-      paths.antigravityOfficialConfigPath,
-      antigravityConfigPath,
-    ]));
+    const registriesToCheck = [paths.antigravityOfficialConfigPath];
     for (const registryPath of registriesToCheck) {
       if (!fs.existsSync(registryPath)) {
         if (registryPath === paths.antigravityOfficialConfigPath) {
@@ -1685,16 +1739,8 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
         issues.push(`Antigravity AgentMemory hooks do not point at the built bridge (${paths.antigravityPluginHooksPath}).`);
       }
     }
-    if (!fs.existsSync(paths.antigravityPluginMcpPath)) {
-      issues.push(`Antigravity AgentMemory plugin MCP config is missing (${paths.antigravityPluginMcpPath}).`);
-    } else {
-      const pluginMcp = readJsonFile(paths.antigravityPluginMcpPath, true);
-      if (
-        pluginMcp?.mcpServers?.agentmem?.args?.[0] !== paths.mcpServerPath ||
-        pluginMcp?.mcpServers?.agentmem?.env?.AGENTMEM_AGENT_ID !== 'antigravity'
-      ) {
-        issues.push(`Antigravity AgentMemory plugin MCP config is missing agentmem or AGENTMEM_AGENT_ID (${paths.antigravityPluginMcpPath}).`);
-      }
+    if (fs.existsSync(paths.antigravityPluginMcpPath)) {
+      issues.push(`Antigravity AgentMemory plugin still contains a duplicate MCP config (${paths.antigravityPluginMcpPath}).`);
     }
     if (!fs.existsSync(paths.antigravityPluginRulePath)) {
       issues.push(`Antigravity AgentMemory plugin rule is missing (${paths.antigravityPluginRulePath}).`);

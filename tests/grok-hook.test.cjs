@@ -9,7 +9,8 @@ const hookPath = path.resolve(__dirname, '..', 'dist', 'hooks', 'grok-hook.js');
 function runHook(mode, payload, port) {
   return new Promise((resolve, reject) => {
     const child = spawn('node', [hookPath, mode], {
-      env: { ...process.env, AGENTMEM_PORT: String(port) },
+      env: { ...process.env, AGENTMEM_PORT: String(port), AGENTMEM_HOOK_TIMEOUT_MS: '5000',
+        AGENTMEM_HOOK_AUTOSTART: 'false' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stderr = '';
@@ -24,7 +25,8 @@ function runClaudeHookFromGrok(payload, port) {
   const claudeHookPath = path.resolve(__dirname, '..', 'dist', 'hooks', 'claude-post-tool.js');
   return new Promise((resolve, reject) => {
     const child = spawn('node', [claudeHookPath], {
-      env: { ...process.env, AGENTMEM_PORT: String(port), GROK_HOOK_EVENT: 'post_tool_use' },
+      env: { ...process.env, AGENTMEM_PORT: String(port), GROK_HOOK_EVENT: 'post_tool_use',
+        AGENTMEM_HOOK_TIMEOUT_MS: '5000', AGENTMEM_HOOK_AUTOSTART: 'false' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stderr = '';

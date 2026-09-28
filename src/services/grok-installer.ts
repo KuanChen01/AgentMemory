@@ -147,6 +147,7 @@ export function ensureGrokConfigToml(toml: string, mcpServerPath: string): strin
       'command = "node"',
       `args = [ ${JSON.stringify(mcpServerPath)} ]`,
       'env = { AGENTMEM_AGENT_ID = "grok" }',
+      'tool_timeout_sec = 30',
     ],
   });
 
@@ -188,7 +189,11 @@ agents_md: false
 
 # AgentMemory Grok Profile
 
-For startup recovery, make \`get_project_context\` the first AgentMemory memory read. The configured MCP identity is canonical \`grok\`.
+For each substantive new task, proactively read task-relevant AgentMemory context. If the task is difficult, tangled, repeatedly failing, or depends on earlier decisions, call \`query_memory\` or \`search_memory\` with the concrete problem without waiting for a user reminder. The configured MCP identity is canonical \`grok\`.
+
+Prefer focused queries for a specific question. Use \`memory_timeline\` only when the order of past events matters; read one bounded page and follow its offset only if needed.
+
+For session startup recovery, \`get_project_context\` remains available when broad project context is needed.
 
 Normal tool activity is captured by hooks. For a deliberate milestone, call \`record_memory\` with concise verified facts, files read or modified, decisions, and validation.
 
@@ -251,6 +256,7 @@ export function renderGrokHooksConfig(grokHookPath: string): string {
   return `${JSON.stringify({
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: command('session-start'), timeout: 15 }] }],
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: command('user-prompt-submit'), timeout: 8 }] }],
       PostToolUse: [{ matcher: '.*', hooks: [{ type: 'command', command: command('post-tool-use'), timeout: 15 }] }],
       PostToolUseFailure: [{ matcher: '.*', hooks: [{ type: 'command', command: command('post-tool-use-failure'), timeout: 15 }] }],
       Stop: [{ hooks: [{ type: 'command', command: command('stop'), timeout: 15 }] }],

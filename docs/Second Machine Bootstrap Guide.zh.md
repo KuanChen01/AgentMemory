@@ -33,10 +33,10 @@
 
 1. 已安装 `Node.js 18+`
 2. 已安装五个目标 agent
-3. 已把 `Antigravity` 的 Gemini-compatible plugin registry 建好
+3. 已安装可用的 `Antigravity` CLI；安装器会创建官方全局 MCP registry
 4. 已拿到可用的 `AGENTMEM_LLM_API_KEY`
 
-如果第 3 项尚未建立，bootstrap 会严格失败，并提示你传入：
+如果旧安装使用了额外的 Antigravity MCP registry，可在升级时指定其路径，让安装器清理其中指向本项目的重复项：
 
 ```powershell
 --antigravity-config "C:\path\to\mcp_config.json"
@@ -101,7 +101,7 @@ AGENTMEM_PORT=38888
 .\bootstrap-second-machine.cmd -NoOpen
 ```
 
-显式指定 Antigravity registry：
+显式指定需要清理的旧 Antigravity registry：
 
 ```powershell
 .\bootstrap-second-machine.cmd -AntigravityConfig "C:\Users\YourName\.gemini\antigravity-cli\mcp_config.json"
@@ -125,7 +125,6 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md`
 - `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\plugin.json`
 - `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\hooks.json`
-- `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem\mcp_config.json`
 - `%USERPROFILE%\.gemini\config\mcp_config.json`
 - `%USERPROFILE%\.gemini\config\plugins\agentmem\plugin.json`
 - `%USERPROFILE%\.gemini\config\import_manifest.json`
@@ -139,7 +138,7 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.grok\hooks\agentmem.json`
 - `%USERPROFILE%\.config\opencode\opencode.jsonc`
 - `%USERPROFILE%\.config\opencode\plugins\agentmem-plugin.mjs`
-- `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json`，或安装器探测到的其它 Antigravity `mcp_config.json`
+- 旧 `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json` 等 registry 中，指向同一 AgentMemory 服务的重复项会被移除；其它 MCP 项保留
 
 ## Cleanup and Reinstall
 
@@ -169,21 +168,21 @@ agentmem uninstall --strict --purge-all
 bootstrap 成功后，再做这四项 live acceptance：
 
 1. `Claude Code` 新开一个会话，确认能看到 `SessionStart` 恢复内容
-2. `ChatGPT desktop（Codex runtime）` 新开一个会话，确认能看到 `SessionStart` 恢复内容；配置仍位于 `%USERPROFILE%\.codex\config.toml` 与 `%USERPROFILE%\.codex\hooks.json`
+2. `ChatGPT desktop（Codex runtime）` 新开一个会话，确认能看到 `SessionStart` 恢复内容；提交实质性任务时确认 `UserPromptSubmit` 自动查找相关记忆。配置仍位于 `%USERPROFILE%\.codex\config.toml` 与 `%USERPROFILE%\.codex\hooks.json`
 3. `OpenCode` 新开一个会话并执行一次工具，确认插件桥接仍能恢复并写入
-4. `agy plugin list` 能看到已导入的 `agentmem` plugin；新开 Antigravity 会话后，`PreInvocation` 自动注入 context、`PostToolUse` 自动写入且记录的 `agent_id` / `project_path` 分别为 `antigravity` 和当前 workspace，`Stop` 会关闭 session
-5. `grok mcp doctor agentmem` 通过，`grok inspect --json` 显示默认 `agentmem` profile、Grok lifecycle hooks 与本机 MCP server；执行一次非 AgentMemory 工具后，Observation Ledger 仅产生 `agent_id=grok` 的记录
+4. `agy plugin list` 能看到已导入的 `agentmem` plugin；MCP 列表中只有一个 `agentmem`。新开 Antigravity 会话后，`PreInvocation` 自动检索当前任务、`PostToolUse` 自动写入且记录的 `agent_id` / `project_path` 分别为 `antigravity` 和当前 workspace，`Stop` 会关闭 session
+5. `grok mcp doctor agentmem` 通过，`grok inspect --json` 显示默认 `agentmem` profile、Grok lifecycle hooks 与本机 MCP server；实质性任务会预查记忆，首次工具结果后注入。执行一次非 AgentMemory 工具后，Observation Ledger 仅产生 `agent_id=grok` 的记录
 6. 对任意受管理 repo，确认 Antigravity 与 Grok 会把 `agentmem` search/timeline 结果视为未验证工作记忆，并在 durable use 前用当前 workspace 文件、diff、命令、测试或产物验证
 
 ## Troubleshooting
 
-- Antigravity 自定义 registry 没有更新
-  - 安装器始终创建或更新 `%USERPROFILE%\.gemini\config\mcp_config.json`
-  - 如果本机还使用额外的非标准 registry，请显式传 `-AntigravityConfig`
+- Antigravity 中仍显示多个 `agentmem`
+  - 安装器只在 `%USERPROFILE%\.gemini\config\mcp_config.json` 注册一个 `agentmem`
+  - 如果旧配置位于额外的非标准 registry，请带 `-AntigravityConfig` 重跑，让安装器清理指向同一 AgentMemory 服务的重复项；然后新开 Antigravity 会话
 
 - `AGENTMEM_ANTIGRAVITY.md` 不存在
   - 先重新运行 `agentmem install --strict`
-  - 如果 Antigravity registry 路径不标准，带上 `--antigravity-config`
+  - 如果旧 Antigravity registry 路径不标准，带上 `--antigravity-config` 清理重复项
   - 这个文件是 AgentMemory 为 Antigravity 生成的窄规则面，只负责 working-memory 恢复、证据验证和里程碑记录边界
 
 - `agy plugin list` 中没有 `agentmem`

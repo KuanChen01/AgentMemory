@@ -155,6 +155,7 @@ test('Grok config upsert preserves unrelated settings and enables the managed id
   assert.match(updated, /hooks = false/);
   assert.match(updated, /name = "agentmem"/);
   assert.match(updated, /AGENTMEM_AGENT_ID = "grok"/);
+  assert.match(updated, /tool_timeout_sec = 30/);
   assert.equal((updated.match(/\[mcp_servers\.agentmem\]/g) || []).length, 1);
   assert.doesNotMatch(updated, /\[mcp_servers\.agentmem\.env\]/);
   assert.equal((updated.match(/AGENTMEM_AGENT_ID\s*=\s*"grok"/g) || []).length, 1);
@@ -175,12 +176,14 @@ test('Grok profile and hooks provide lifecycle recovery without global AGENTS de
 
   assert.match(profile, /agents_md: false/);
   assert.match(profile, /get_project_context/);
+  assert.match(profile, /memory_timeline.*only when the order/);
   assert.match(profile, /AgentMemory Grok Profile/);
   assert.match(rules, /AgentMemory Grok Rules/);
   assert.doesNotMatch(rules, /obsiguide\.md/);
   assert.doesNotMatch(rules, /E:\\Kuan\\Vault/);
   assert.equal(hasGrokGlobalRules(rules), true);
   assert.match(hooks, /SessionStart/);
+  assert.match(hooks, /UserPromptSubmit/);
   assert.match(hooks, /PostToolUseFailure/);
   assert.match(hooks, /SessionEnd/);
   assert.match(hooks, /grok-hook\.js/);
@@ -316,12 +319,8 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
     assert.match(pluginText, /opencode-post-tool\.js/);
 
     const antigravityConfig = JSON.parse(fs.readFileSync(antigravityConfigPath, 'utf8'));
-    assert.deepEqual(antigravityConfig.mcpServers.agentmem, {
-      command: 'node',
-      args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
-      env: { AGENTMEM_AGENT_ID: 'antigravity' },
-      disabled: false,
-    });
+    assert.equal(antigravityConfig.mcpServers.agentmem, undefined);
+    assert.equal(antigravityConfig.mcpServers.other.command, 'python');
 
     const officialConfig = JSON.parse(
       fs.readFileSync(path.join(tempHome, '.gemini', 'config', 'mcp_config.json'), 'utf8')
@@ -354,10 +353,7 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
     assert.match(hooksText, /PostToolUse/);
     assert.match(hooksText, /Stop/);
     assert.match(hooksText, /antigravity-hook\.js/);
-    assert.match(
-      fs.readFileSync(path.join(pluginDir, 'mcp_config.json'), 'utf8'),
-      /AGENTMEM_AGENT_ID/
-    );
+    assert.equal(fs.existsSync(path.join(pluginDir, 'mcp_config.json')), false);
     assert.match(
       fs.readFileSync(path.join(pluginDir, 'rules', 'agentmem.md'), 'utf8'),
       /^---\r?\nname: agentmem/
@@ -426,13 +422,8 @@ test('agentmem install migrates stale Antigravity CLI agentvault registry', asyn
     await runCli(tempHome, ['install', '--strict']);
 
     const antigravityConfig = JSON.parse(fs.readFileSync(antigravityConfigPath, 'utf8'));
-    assert.equal(antigravityConfig.mcpServers.agentvault, undefined);
-    assert.deepEqual(antigravityConfig.mcpServers.agentmem, {
-      command: 'node',
-      args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
-      env: { AGENTMEM_AGENT_ID: 'antigravity' },
-      disabled: false,
-    });
+    assert.equal(antigravityConfig.mcpServers?.agentvault, undefined);
+    assert.equal(antigravityConfig.mcpServers?.agentmem, undefined);
     assert.equal(
       fs.existsSync(path.join(tempHome, '.agentmem', 'AGENTMEM_ANTIGRAVITY.md')),
       true

@@ -1,13 +1,17 @@
 import dotenv from 'dotenv';
+import { randomUUID } from 'crypto';
 import os from 'os';
 import path from 'path';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
 import { fetchAgentMemoryWorker } from './worker-client';
+import {
+  activeRecallTurn, beginRecallTurn, clearRecallSession, markStuckRecall, noteToolFailure, recallForTask, takePreparedRecall,
+} from './auto-recall';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
 const PORT = process.env.AGENTMEM_PORT || 38888;
-type HookMode = 'session-start' | 'post-tool-use' | 'post-tool-use-failure' | 'stop' | 'session-end';
+type HookMode = 'session-start' | 'user-prompt-submit' | 'post-tool-use' | 'post-tool-use-failure' | 'stop' | 'session-end';
 
 export interface GrokHookPayload {
   cwd?: string;
@@ -17,6 +21,8 @@ export interface GrokHookPayload {
   result?: unknown;
   response?: unknown;
   sessionId?: string;
+  prompt?: string;
+  promptId?: string;
   success?: boolean;
   toolInput?: unknown;
   toolName?: string;
@@ -88,6 +94,16 @@ async function main() {
     return;
   }
 
+  if (mode === 'user-prompt-submit') {
+    const prompt = String(payload.prompt || payload.userPrompt || '');
+    const turnId = String(payload.promptId || payload.prompt_id || randomUUID());
+    if (turnId && prompt) {
+      const context = await recallForTask(resolveGrokProjectPath(payload), prompt);
+      beginRecallTurn(`grok:${resolveGrokSessionId(payload)}`, turnId, prompt, context);
+    }
+    return;
+  }
+
   if (mode === 'post-tool-use' || mode === 'post-tool-use-failure') {
     const event = extractGrokToolEvent(payload, mode === 'post-tool-use-failure');
     if (!event || shouldSkipAgentMemoryToolLog(event.toolName)) return;
@@ -100,11 +116,30 @@ async function main() {
       output: serialize(event.output),
       success: event.success,
     });
+    const sessionKey = `grok:${resolveGrokSessionId(payload)}`;
+    const turnId = activeRecallTurn(sessionKey) || String(payload.promptId || payload.prompt_id || '');
+    if (turnId) {
+      const prepared = takePreparedRecall(sessionKey, turnId);
+      const stuckQuery = noteToolFailure(sessionKey, turnId, event.success, serialize(event.output));
+      let stuckContext = '';
+      if (stuckQuery) {
+        markStuckRecall(sessionKey, turnId);
+        stuckContext = await recallForTask(resolveGrokProjectPath(payload), stuckQuery, 2);
+      }
+      const context = [prepared, stuckContext].filter(Boolean).join('\n');
+      if (context) process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: mode === 'post-tool-use-failure' ? 'PostToolUseFailure' : 'PostToolUse',
+          additionalContext: context,
+        },
+      }));
+    }
     return;
   }
 
   if (mode === 'stop' || mode === 'session-end') {
     await postJson('/sessions/close', { id: resolveGrokSessionId(payload) });
+    if (mode === 'session-end') clearRecallSession(`grok:${resolveGrokSessionId(payload)}`);
   }
 }
 

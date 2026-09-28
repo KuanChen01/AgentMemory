@@ -387,10 +387,7 @@ test('agentmem uninstall cleans every Antigravity registry touched during instal
     const officialRegistryPath = path.join(tempHome, '.gemini', 'config', 'mcp_config.json');
 
     await runCli(tempHome, ['install']);
-    assert.equal(
-      JSON.parse(fs.readFileSync(legacyRegistryPath, 'utf8')).mcpServers.agentmem.env.AGENTMEM_AGENT_ID,
-      'antigravity'
-    );
+    assert.equal(JSON.parse(fs.readFileSync(legacyRegistryPath, 'utf8')).mcpServers.agentmem, undefined);
     assert.equal(
       JSON.parse(fs.readFileSync(officialRegistryPath, 'utf8')).mcpServers.agentmem.env.AGENTMEM_AGENT_ID,
       'antigravity'

@@ -416,12 +416,12 @@ Generic shape:
 }
 ```
 
-The installer builds the Antigravity plugin under `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem`, then activates it with `agy plugin install`. Antigravity 1.1.12 stages the imported plugin to `%USERPROFILE%\.gemini\config\plugins\agentmem` and records it in `import_manifest.json`. The plugin bundles `mcp_config.json`, `PreInvocation` / `PostToolUse` / `Stop` hooks, and a frontmatter rule. The official global MCP registry is `%USERPROFILE%\.gemini\config\mcp_config.json` and receives `AGENTMEM_AGENT_ID=antigravity`, so explicit `record_memory` calls that omit `agent_id` no longer fall back to `mcp-client`. `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` remains as a readable compatibility copy of the plugin rule.
+The installer builds the Antigravity plugin under `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem`, then activates it with `agy plugin install`. Antigravity stages the imported plugin to `%USERPROFILE%\.gemini\config\plugins\agentmem` and records it in `import_manifest.json`. The plugin bundles `PreInvocation` / `PostToolUse` / `Stop` hooks and a frontmatter rule; it does not declare a second MCP server. The single AgentMemory MCP registration lives in `%USERPROFILE%\.gemini\config\mcp_config.json` with `AGENTMEM_AGENT_ID=antigravity`. The installer removes older duplicate registrations that point to this AgentMemory server. `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` remains as a readable compatibility copy of the plugin rule.
 
 Preferred Antigravity workflow:
 
-1. Let the `PreInvocation` hook inject startup context automatically.
-2. Use `get_project_context`, `search_memory`, or `memory_timeline` only for explicit drill-down, then verify relevant results against current workspace files, diffs, commands, tests, or artifacts.
+1. Let the `PreInvocation` hook retrieve task-relevant memory automatically for substantive requests.
+2. For difficult work, repeated failures, or unclear past decisions, call `query_memory` or `search_memory` with the concrete problem. Use `memory_timeline` only when event order matters; it returns at most 40 entries per page. Verify relevant results against current workspace files, diffs, commands, tests, or artifacts.
 3. Normal tool work is recorded automatically by `PostToolUse`, and `Stop` closes the session. Use explicit `record_memory(agent_id="antigravity")` only for a deliberate cross-session milestone.
 4. Do not treat raw AgentMemory summaries or session recaps as durable truth, and do not record trivial output merely because a task is ending.
 

@@ -210,14 +210,16 @@ async function ensureWorkerAvailable(port: string | number): Promise<boolean> {
 export async function fetchAgentMemoryWorker(
   port: string | number,
   endpoint: string,
-  init?: RequestInit
+  init?: RequestInit,
+  timeoutMs: number = resolveHookTimeoutMs(),
+  autoStart: boolean = true
 ): Promise<Response | null> {
-  const firstAttempt = await attemptWorkerFetch(port, endpoint, init, resolveHookTimeoutMs());
-  if (firstAttempt.response || !firstAttempt.unavailable || !shouldAutoStartWorker()) {
+  const firstAttempt = await attemptWorkerFetch(port, endpoint, init, timeoutMs);
+  if (firstAttempt.response || !firstAttempt.unavailable || !autoStart || !shouldAutoStartWorker()) {
     return firstAttempt.response;
   }
 
   if (!await ensureWorkerAvailable(port)) return null;
-  const retry = await attemptWorkerFetch(port, endpoint, init, resolveHookTimeoutMs());
+  const retry = await attemptWorkerFetch(port, endpoint, init, timeoutMs);
   return retry.response;
 }

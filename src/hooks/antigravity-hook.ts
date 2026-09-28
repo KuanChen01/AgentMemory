@@ -8,6 +8,10 @@ import {
 } from '../services/context-view';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
 import { fetchAgentMemoryWorker } from './worker-client';
+import {
+  beginRecallTurn, clearRecallSession, hasRecallTurn, latestAntigravityPrompt, markStuckRecall, noteToolFailure,
+  recallForTask, setPreparedRecall, takePreparedRecall,
+} from './auto-recall';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -237,8 +241,11 @@ async function postJson(endpoint: string, payload: unknown): Promise<Response | 
 }
 
 async function handlePreInvocation(payload: AntigravityHookPayload) {
+  const latest = latestAntigravityPrompt(payload.transcriptPath);
+  const sessionKey = `antigravity:${resolveAntigravitySessionId(payload)}`;
   if (typeof payload.invocationNum === 'number' && payload.invocationNum > 0) {
-    jsonOutput({});
+    const pending = latest ? takePreparedRecall(sessionKey, latest.turnId) : '';
+    jsonOutput(pending ? { injectSteps: [{ ephemeralMessage: pending }] } : {});
     return;
   }
 
@@ -250,6 +257,20 @@ async function handlePreInvocation(payload: AntigravityHookPayload) {
     agent_id: 'antigravity',
     status: 'active',
   });
+
+  if (latest) {
+    if (!hasRecallTurn(sessionKey, latest.turnId)) {
+      const context = await recallForTask(projectPath, latest.prompt);
+      beginRecallTurn(sessionKey, latest.turnId, latest.prompt, context);
+    }
+    const prepared = takePreparedRecall(sessionKey, latest.turnId);
+    if (prepared) {
+      jsonOutput({ injectSteps: [{ ephemeralMessage: prepared }] });
+      return;
+    }
+    jsonOutput({});
+    return;
+  }
 
   try {
     const response = await fetchAgentMemoryWorker(
@@ -292,11 +313,22 @@ async function handlePostToolUse(payload: AntigravityHookPayload) {
     output: serializeOutput(event.output),
     success: event.success,
   });
+  const latest = latestAntigravityPrompt(payload.transcriptPath);
+  if (latest) {
+    const sessionKey = `antigravity:${resolveAntigravitySessionId(payload)}`;
+    const stuckQuery = noteToolFailure(sessionKey, latest.turnId, event.success, serializeOutput(event.output));
+    if (stuckQuery) {
+      markStuckRecall(sessionKey, latest.turnId);
+      const context = await recallForTask(resolveAntigravityProjectPath(payload), stuckQuery, 2);
+      setPreparedRecall(sessionKey, latest.turnId, context);
+    }
+  }
   jsonOutput({});
 }
 
 async function handleStop(payload: AntigravityHookPayload) {
   await postJson('/sessions/close', { id: resolveAntigravitySessionId(payload) });
+  clearRecallSession(`antigravity:${resolveAntigravitySessionId(payload)}`);
   jsonOutput({});
 }
 
