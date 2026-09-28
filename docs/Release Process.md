@@ -40,7 +40,7 @@ npm run release:bump -- --next patch
 5. 运行 `node --test tests/*.test.cjs`。
 6. 提交版本变更与分发产物，commit message 统一使用 `chore: release vX.Y.Z`。
 7. 运行 `git tag vX.Y.Z`。
-8. 运行 `git push origin master --follow-tags`。
+8. 运行 `git push origin master`，再运行 `git push origin vX.Y.Z`。上一步创建的是轻量 tag，`--follow-tags` 不会推送它。
 9. 在 GitHub 上创建标题为 `vX.Y.Z` 的 Release，保留默认源码归档，并填写 release notes。
 10. 发布后至少检查一次 GitHub Release 页面、tag 和源码归档是否正常；如果版本包含 bootstrap/install 路径变更，再补一次二机 bootstrap smoke。
 
