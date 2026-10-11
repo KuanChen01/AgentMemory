@@ -70,9 +70,11 @@ npm install
 npm run build
 ```
 
+The project `.npmrc` disables dependency install scripts so SQLite uses its bundled native binary. Current dependencies require no install scripts; `npm run build` still runs explicitly. Platforms without a bundled binary require a separate native build with suitable tools.
+
 Link the executable globally to register the `agentmem` CLI:
 ```bash
-npm link
+npm link --ignore-scripts
 ```
 
 #### 3. Configuration
@@ -155,7 +157,7 @@ cd AgentMemory
 .\bootstrap-second-machine.cmd
 ```
 
-The bootstrap script runs `npm install`, `npm run build`, creates or validates `%USERPROFILE%\.agentmem\.env`, runs `npm link`, configures all five agents, probes or starts the worker, and opens `/admin`.
+The bootstrap script runs `npm install --ignore-scripts`, `npm run build`, creates or validates `%USERPROFILE%\.agentmem\.env`, runs `npm link --ignore-scripts`, configures all five agents, probes or starts the worker, and opens `/admin`.
 
 If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a blank scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
 

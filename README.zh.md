@@ -70,9 +70,11 @@ npm install
 npm run build
 ```
 
+仓库 `.npmrc` 关闭依赖安装脚本，直接使用 SQLite 随包原生二进制。当前依赖无需安装脚本；显式 `npm run build` 仍正常执行。没有随包二进制的平台需另行准备工具并构建原生模块。
+
 全局注册快捷命令：
 ```bash
-npm link
+npm link --ignore-scripts
 ```
 
 #### 3. 配置密钥
@@ -155,7 +157,7 @@ cd AgentMemory
 .\bootstrap-second-machine.cmd
 ```
 
-这个入口会自动执行 `npm install`、`npm run build`、创建或校验 `%USERPROFILE%\.agentmem\.env`、执行 `npm link`、配置五个 agent、探测或拉起 worker，并打开 `/admin`。
+这个入口会自动执行 `npm install --ignore-scripts`、`npm run build`、创建或校验 `%USERPROFILE%\.agentmem\.env`、执行 `npm link --ignore-scripts`、配置五个 agent、探测或拉起 worker，并打开 `/admin`。
 
 如果 `%USERPROFILE%\.agentmem\.env` 不存在，bootstrap 会先写一个“空 API key + 默认 URL/model”的安全模板，然后立即停止，不会假装成功。你只需要填好 `AGENTMEM_LLM_*` 后重新运行。
 

@@ -212,7 +212,7 @@ export async function runWindowsBootstrap(options: BootstrapOptions): Promise<Bo
     );
   }
 
-  await runCommand('npm', ['link'], repoRoot);
+  await runCommand('npm', ['link', '--ignore-scripts'], repoRoot);
   installAgentMemory({
     antigravityConfigPath: options.antigravityConfigPath,
     homeDir,

@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0 -or $nodeMajor -lt 22) {
 }
 
 Write-Host "Installing npm dependencies..."
-npm install
+npm install --ignore-scripts
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }

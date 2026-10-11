@@ -2,6 +2,8 @@
 
 AgentMemory uses `better-sqlite3@13.0.3` and requires Node.js 22 or newer. Both known machines use Node 24 (24.13.0 and 24.14.0). The Windows x64 installation was verified locally; the other machine still needs its own native-module and service checks.
 
+The repository `.npmrc` sets `ignore-scripts=true`, and bootstrap also passes it explicitly during install/link. The current dependencies need no install lifecycle scripts. This uses bundled SQLite binaries and avoids npm's implicit `node-gyp rebuild` for `better-sqlite3@13.0.3`, reproduced on a clean Windows install and tracked in [upstream issue #1516](https://github.com/WiseLibs/better-sqlite3/issues/1516). Explicit `npm run build` remains enabled. If copying files manually, preserve `.npmrc`; without it, use `npm ci --ignore-scripts` and `npm link --ignore-scripts`.
+
 ## Behavior
 
 - Native SQLite manages file locks through the operating system. Ending a process releases its locks; uncommitted transactions roll back on recovery.
