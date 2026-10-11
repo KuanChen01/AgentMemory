@@ -306,13 +306,14 @@ Daily digest reads use the same read gate as startup context, and manual digest 
 ### 🔌 Agent Integration Specifications
 
 #### 1. OpenCode (`~/.config/opencode/opencode.jsonc`)
-`agentmem install` now writes both the `mcp.agentmem` block and the generated bridge plugin `%USERPROFILE%/.config/opencode/plugins/agentmem-plugin.mjs`. The resulting config shape is:
+`agentmem install` registers `mcp.agentmem`, generates the global bridge plugin, and merges a marked AgentMemory rules block into `~/.config/opencode/AGENTS.md`. The plugin retrieves task memory through `chat.message`, injects startup context and task memory through `experimental.chat.system.transform`, and records normal tool activity through `tool.execute.after`, with a second retrieval after repeated failures. The MCP identity is fixed to `AGENTMEM_AGENT_ID=opencode`. The config shape is:
 ```jsonc
 {
   "mcp": {
     "agentmem": {
       "type": "local",
       "command": ["node", "path/to/AgentMemory/dist/servers/mcp-server.js"],
+      "environment": { "AGENTMEM_AGENT_ID": "opencode" },
       "enabled": true
     }
   },
@@ -321,6 +322,14 @@ Daily digest reads use the same read gate as startup context, and manual digest 
   ]
 }
 ```
+
+AgentMemory does not copy or take ownership of the Vault `vault-sync` skill. If the skill is currently installed only in the Codex skills directory, expose the same skill folder at OpenCode's supported global agent skill path:
+```powershell
+New-Item -ItemType Junction `
+  -Path "$env:USERPROFILE\.agents\skills\vault-sync" `
+  -Target "$env:USERPROFILE\.codex\skills\vault-sync"
+```
+OpenCode can then discover and load the same `SKILL.md` with its `skill` tool; the global rules recommend it only for verified, durable project outcomes.
 
 #### 2. Claude Code
 Claude Code uses two different files:

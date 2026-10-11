@@ -306,13 +306,14 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 ### 🔌 智能体手动集成配置
 
 #### 1. OpenCode 客户端 (`~/.config/opencode/opencode.jsonc`)
-`agentmem install` 现在会同时写入 `mcp.agentmem` 和自动生成的桥接插件 `%USERPROFILE%/.config/opencode/plugins/agentmem-plugin.mjs`。落盘后的结构如下：
+`agentmem install` 会注册 `mcp.agentmem`，生成全局桥接插件，并在 `~/.config/opencode/AGENTS.md` 中合并一段带标记的 AgentMemory 规则。插件使用 `chat.message` 检索当前任务记忆、使用 `experimental.chat.system.transform` 注入项目启动上下文和任务记忆，并通过 `tool.execute.after` 记录普通工具活动及在重复失败时补充检索。MCP identity 固定为 `AGENTMEM_AGENT_ID=opencode`。配置结构如下：
 ```jsonc
 {
   "mcp": {
     "agentmem": {
       "type": "local",
       "command": ["node", "您的开发路径/AgentMemory/dist/servers/mcp-server.js"],
+      "environment": { "AGENTMEM_AGENT_ID": "opencode" },
       "enabled": true
     }
   },
@@ -321,6 +322,14 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
   ]
 }
 ```
+
+AgentMemory 不复制或接管 Vault 的 `vault-sync` 技能。若技能目前只安装在 Codex 技能目录，可将同一个技能目录暴露到 OpenCode 支持的全局 agent 技能路径：
+```powershell
+New-Item -ItemType Junction `
+  -Path "$env:USERPROFILE\.agents\skills\vault-sync" `
+  -Target "$env:USERPROFILE\.codex\skills\vault-sync"
+```
+这样 OpenCode 能通过 `skill` 工具发现并按需加载同一份 `SKILL.md`；全局规则只在项目结果已验证且具有长期价值时提示使用它。
 
 #### 2. Claude Code 客户端
 Claude Code 当前使用两份不同配置文件：

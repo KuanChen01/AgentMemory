@@ -16,6 +16,7 @@ export type ManagedTargetKind =
   | 'opencode-config'
   | 'opencode-displaced-json'
   | 'opencode-plugin'
+  | 'opencode-rules'
   | 'antigravity-config'
   | 'antigravity-guidance'
   | 'antigravity-plugins-config'

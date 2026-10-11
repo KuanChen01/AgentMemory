@@ -138,6 +138,7 @@ bootstrap 成功后，关键落点应为：
 - `%USERPROFILE%\.grok\hooks\agentmem.json`
 - `%USERPROFILE%\.config\opencode\opencode.jsonc`
 - `%USERPROFILE%\.config\opencode\plugins\agentmem-plugin.mjs`
+- `%USERPROFILE%\.config\opencode\AGENTS.md`（仅含 AgentMemory managed block，保留其它全局规则）
 - 旧 `%USERPROFILE%\.gemini\antigravity-cli\mcp_config.json` 等 registry 中，指向同一 AgentMemory 服务的重复项会被移除；其它 MCP 项保留
 
 ## Cleanup and Reinstall
@@ -151,11 +152,11 @@ agentmem uninstall --strict
 这条命令会：
 
 1. 停掉本地 worker 并清理 `worker.pid`
-2. 移除五个 agent 中由 AgentMemory 管理的 hooks / MCP 注册 / OpenCode 插件
+2. 移除五个 agent 中由 AgentMemory 管理的 hooks / MCP 注册 / OpenCode 插件与全局规则 block
 3. 删除 `%USERPROFILE%\.agentmem\.env` 与 `agentmemory.db`
 4. 在有干净基线备份时恢复原配置；如果该文件是旧安装遗留或你在安装后又手改过，则只做“定向清理 AgentMemory 项”，不会强行覆盖你的后续改动
 
-安装、升级和重复安装都不会生成 `%USERPROFILE%\.grok\AGENTS.md` 或其它用户级全局 Agent 规则；如果旧 `~/.grok/AGENTS.md` 中仍有 AgentMemory managed block，安装器只移除该遗留 block，并保留用户自己的内容。
+安装器不会生成 `%USERPROFILE%\.grok\AGENTS.md`；OpenCode 使用原生 `%USERPROFILE%\.config\opencode\AGENTS.md`，并只合并或移除带标记的 AgentMemory block，其它全局规则会被保留。如果旧 `~/.grok/AGENTS.md` 中仍有 AgentMemory managed block，Grok 清理逻辑也只移除该 block。
 
 如果还要连备份与安装状态一起清掉，再执行：
 
@@ -165,11 +166,11 @@ agentmem uninstall --strict --purge-all
 
 ## Manual Acceptance
 
-bootstrap 成功后，再做这四项 live acceptance：
+bootstrap 成功后，再做以下 live acceptance：
 
 1. `Claude Code` 新开一个会话，确认能看到 `SessionStart` 恢复内容
 2. `ChatGPT desktop（Codex runtime）` 新开一个会话，确认能看到 `SessionStart` 恢复内容；提交实质性任务时确认 `UserPromptSubmit` 自动查找相关记忆。配置仍位于 `%USERPROFILE%\.codex\config.toml` 与 `%USERPROFILE%\.codex\hooks.json`
-3. `OpenCode` 新开一个会话并执行一次工具，确认插件桥接仍能恢复并写入
+3. `OpenCode` 重启后新开会话，确认项目上下文和任务相关记忆进入模型上下文；执行普通工具后在 AgentMemory Observation Ledger 中确认 `agent_id=opencode` 且 `project_path` 对应当前工作区。连续两次出现同类工具失败后，插件会尝试补充一次相关记忆。
 4. `agy plugin list` 能看到已导入的 `agentmem` plugin；MCP 列表中只有一个 `agentmem`。新开 Antigravity 会话后，`PreInvocation` 自动检索当前任务、`PostToolUse` 自动写入且记录的 `agent_id` / `project_path` 分别为 `antigravity` 和当前 workspace，`Stop` 会关闭 session
 5. `grok mcp doctor agentmem` 通过，`grok inspect --json` 显示默认 `agentmem` profile、Grok lifecycle hooks 与本机 MCP server；实质性任务会预查记忆，首次工具结果后注入。执行一次非 AgentMemory 工具后，Observation Ledger 仅产生 `agent_id=grok` 的记录
 6. 对任意受管理 repo，确认 Antigravity 与 Grok 会把 `agentmem` search/timeline 结果视为未验证工作记忆，并在 durable use 前用当前 workspace 文件、diff、命令、测试或产物验证
@@ -201,4 +202,7 @@ bootstrap 成功后，再做这四项 live acceptance：
 
 - `OpenCode` 成功写入了 `opencode.jsonc` 但仍无效果
   - 先确认 `%USERPROFILE%\.config\opencode\plugins\agentmem-plugin.mjs` 存在
-  - 再确认其中指向的是当前 checkout 的 `dist/hooks/opencode-session-start.js` 与 `dist/hooks/opencode-post-tool.js`
+  - 确认插件指向当前 checkout 的 `dist/hooks/opencode-session-start.js`、`dist/hooks/opencode-user-prompt.js` 与 `dist/hooks/opencode-post-tool.js`
+  - 确认 `mcp.agentmem.environment.AGENTMEM_AGENT_ID` 为 `opencode`，且 `%USERPROFILE%\.config\opencode\AGENTS.md` 有 AgentMemory managed block
+  - 完全退出并重启 OpenCode，使新插件文件生效
+  - 如需使用 Vault，同一份 `vault-sync` 技能可通过 junction 暴露在 `%USERPROFILE%\.agents\skills\vault-sync\SKILL.md`；OpenCode 的 `skill` 工具应能列出 `vault-sync`

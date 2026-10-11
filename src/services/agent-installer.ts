@@ -29,6 +29,8 @@ import {
 type ManagedAgent = 'claude' | 'opencode' | 'codex' | 'grok' | 'antigravity' | 'runtime' | 'cli';
 
 const CODEX_DISPLAY_NAME = 'ChatGPT desktop (Codex runtime)';
+const OPENCODE_RULES_START = '<!-- AgentMemory OpenCode Rules: START -->';
+const OPENCODE_RULES_END = '<!-- AgentMemory OpenCode Rules: END -->';
 
 export interface InstallOptions {
   antigravityConfigPath?: string;
@@ -49,6 +51,7 @@ export interface InstallPaths {
   claudeStartHook: string;
   claudePostHook: string;
   opencodeStartHook: string;
+  opencodePromptHook: string;
   opencodePostHook: string;
   codexStartHook: string;
   codexPromptHook: string;
@@ -94,6 +97,7 @@ interface OpenCodePaths {
   configTargetPath: string;
   pluginPath: string;
   pluginsDir: string;
+  globalRulesPath: string;
 }
 
 interface UninstallTextTargetOptions {
@@ -184,28 +188,98 @@ export function stripComments(jsonc: string): string {
   return result;
 }
 
+function renderOpenCodeGlobalRulesBody(): string {
+  return `# AgentMemory OpenCode Rules
+
+- For each substantive task, use injected AgentMemory context; on tangled work, repeated failures, or unclear prior decisions, call query_memory or search_memory with the current problem.
+- Treat AgentMemory results as unverified working memory and check them against the current workspace before relying on them.
+- Tool activity is captured automatically. Use record_memory only for a deliberate cross-session milestone, not routine progress.
+- For a verified, durable project outcome, load and follow the vault-sync skill when it is available. Do not sync read-only investigations or temporary debugging to Vault.
+`;
+}
+
+function renderOpenCodeGlobalRules(): string {
+  return `${OPENCODE_RULES_START}\n${renderOpenCodeGlobalRulesBody().trimEnd()}\n${OPENCODE_RULES_END}\n`;
+}
+
+function hasOpenCodeGlobalRules(text: string): boolean {
+  const start = text.indexOf(OPENCODE_RULES_START);
+  const end = text.indexOf(OPENCODE_RULES_END);
+  return start >= 0 && end > start;
+}
+
+function mergeOpenCodeGlobalRules(existing: string): string {
+  const normalized = existing.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const start = normalized.indexOf(OPENCODE_RULES_START);
+  const end = normalized.indexOf(OPENCODE_RULES_END);
+  const managedRules = renderOpenCodeGlobalRules().trimEnd();
+
+  if (start >= 0 && end > start) {
+    const afterEnd = end + OPENCODE_RULES_END.length;
+    return `${normalized.slice(0, start)}${managedRules}${normalized.slice(afterEnd)}`
+      .replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  }
+  if (!normalized.trim()) return `${managedRules}\n`;
+  return `${normalized.trimEnd()}\n\n${managedRules}\n`;
+}
+
+function removeOpenCodeGlobalRules(existing: string): string {
+  const normalized = existing.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const start = normalized.indexOf(OPENCODE_RULES_START);
+  const end = normalized.indexOf(OPENCODE_RULES_END);
+  if (start >= 0 && end > start) {
+    const afterEnd = end + OPENCODE_RULES_END.length;
+    return `${normalized.slice(0, start)}${normalized.slice(afterEnd)}`
+      .replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return existing;
+}
+
 export function renderOpenCodePlugin(paths: {
   startHookPath: string;
+  promptHookPath?: string;
   postHookPath: string;
 }): string {
   const serializedStart = JSON.stringify(paths.startHookPath);
+  const serializedPrompt = JSON.stringify(paths.promptHookPath || paths.startHookPath);
   const serializedPost = JSON.stringify(paths.postHookPath);
 
   return `import { spawn } from "node:child_process";
 
 const START_HOOK = ${serializedStart};
+const PROMPT_HOOK = ${serializedPrompt};
 const POST_HOOK = ${serializedPost};
+const startedSessions = new Set();
+const activeContext = new Map();
+const MAX_SESSIONS = 200;
 
 function runHook(scriptPath, options = {}) {
   return new Promise((resolve) => {
-    const child = spawn("node", [scriptPath], {
-      cwd: options.cwd || process.cwd(),
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-
+    let child;
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      try { child?.kill(); } catch {}
+      finish({ ok: false, stdout, stderr: stderr || "AgentMemory hook timed out" });
+    }, options.timeoutMs || 10000);
+
+    try {
+      child = spawn("node", [scriptPath], {
+        cwd: options.cwd || process.cwd(),
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (error) {
+      finish({ ok: false, stdout, stderr: String(error && error.message ? error.message : error) });
+      return;
+    }
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -213,9 +287,10 @@ function runHook(scriptPath, options = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    child.stdin.on("error", () => {});
 
     child.on("error", (error) => {
-      resolve({
+      finish({
         ok: false,
         stdout,
         stderr: stderr || String(error && error.message ? error.message : error),
@@ -223,7 +298,7 @@ function runHook(scriptPath, options = {}) {
     });
 
     child.on("close", (code) => {
-      resolve({
+      finish({
         ok: code === 0,
         stdout,
         stderr,
@@ -237,30 +312,88 @@ function runHook(scriptPath, options = {}) {
   });
 }
 
+function sessionKey(sessionID) {
+  return String(sessionID || "global-session");
+}
+
+function remember(map, key, value) {
+  if (!key || !value) return;
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_SESSIONS) map.delete(map.keys().next().value);
+}
+
+function readHookResponse(result) {
+  if (!result?.ok || !result.stdout?.trim()) return null;
+  try { return JSON.parse(result.stdout); } catch { return null; }
+}
+
+function textFromParts(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts.filter((part) => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text).join("\\n").trim();
+}
+
 export default async function AgentMemoryPlugin({ directory }) {
   const cwd = directory || process.cwd();
   return {
-    async event({ event }) {
-      if (!event || event.type !== "session.created") {
-        return;
+    async "chat.message"(input, output) {
+      if (output?.message?.role !== "user") return;
+      const prompt = textFromParts(output.parts);
+      const key = sessionKey(input?.sessionID);
+      const isNewSession = !startedSessions.has(key);
+      if (isNewSession) {
+        startedSessions.add(key);
+        while (startedSessions.size > MAX_SESSIONS) {
+          startedSessions.delete(startedSessions.values().next().value);
+        }
       }
 
-      const result = await runHook(START_HOOK, { cwd });
-      if (result.stdout && result.stdout.trim()) {
-        process.stdout.write(result.stdout);
+      let startupResult = null;
+      let promptResult = null;
+      const work = [];
+      if (isNewSession) {
+        work.push(runHook(START_HOOK, { cwd }).then((result) => { startupResult = result; }));
       }
-      if (!result.ok && result.stderr && result.stderr.trim()) {
-        process.stderr.write(result.stderr);
+      if (prompt) {
+        work.push(runHook(PROMPT_HOOK, {
+          cwd,
+          stdin: JSON.stringify({
+            prompt,
+            cwd,
+            session_id: input?.sessionID,
+            turn_id: input?.messageID || output?.message?.id,
+          }),
+        }).then((result) => { promptResult = result; }));
       }
+      await Promise.all(work);
+
+      const contexts = [];
+      if (startupResult?.ok && startupResult.stdout?.trim()) {
+        contexts.push("AgentMemory project startup context:\\n" + startupResult.stdout.trim());
+      }
+      const prepared = readHookResponse(promptResult);
+      if (prepared?.additionalContext) {
+        contexts.push("AgentMemory task-relevant context:\\n" + prepared.additionalContext);
+      }
+      remember(activeContext, key, contexts);
     },
 
-    async "tool.execute.after"(context, executionDetails) {
+    async "experimental.chat.system.transform"(input, output) {
+      const key = sessionKey(input?.sessionID);
+      const contexts = activeContext.get(key) || [];
+      if (contexts.length) output.system.push(contexts.join("\\n\\n"));
+    },
+
+    async "tool.execute.after"(input, executionDetails) {
       const payload = {
-        tool_name: context?.tool || "unknown-tool",
-        input: executionDetails?.args || executionDetails?.input || {},
-        output: executionDetails?.output || executionDetails?.result || "",
-        success: executionDetails?.success !== false,
-        session_id: context?.sessionID || context?.sessionId || "global-session",
+        tool_name: input?.tool || "unknown-tool",
+        input: input?.args || {},
+        output: executionDetails?.output ?? (executionDetails ? "" : "Tool execution failed"),
+        success: executionDetails !== undefined && executionDetails !== null,
+        result: executionDetails,
+        session_id: input?.sessionID || "global-session",
+        project_path: cwd,
       };
 
       const result = await runHook(POST_HOOK, {
@@ -268,9 +401,18 @@ export default async function AgentMemoryPlugin({ directory }) {
         stdin: JSON.stringify(payload),
       });
 
-      if (!result.ok && result.stderr && result.stderr.trim()) {
-        process.stderr.write(result.stderr);
+      const prepared = readHookResponse(result);
+      if (prepared?.additionalContext) {
+        const key = sessionKey(input?.sessionID);
+        const contexts = activeContext.get(key) || [];
+        contexts.push("AgentMemory stuck-state context:\\n" + prepared.additionalContext);
+        remember(activeContext, key, contexts);
       }
+    },
+
+    async dispose() {
+      startedSessions.clear();
+      activeContext.clear();
     },
   };
 }
@@ -412,6 +554,7 @@ export function resolveInstallPaths(repoRoot: string, homeDir: string = os.homed
     claudeStartHook: `${normalizedRepoRoot}/dist/hooks/claude-session-start.js`,
     claudePostHook: `${normalizedRepoRoot}/dist/hooks/claude-post-tool.js`,
     opencodeStartHook: `${normalizedRepoRoot}/dist/hooks/opencode-session-start.js`,
+    opencodePromptHook: `${normalizedRepoRoot}/dist/hooks/opencode-user-prompt.js`,
     opencodePostHook: `${normalizedRepoRoot}/dist/hooks/opencode-post-tool.js`,
     codexStartHook: `${normalizedRepoRoot}/dist/hooks/codex-session-start.js`,
     codexPromptHook: `${normalizedRepoRoot}/dist/hooks/codex-user-prompt.js`,
@@ -508,6 +651,7 @@ function resolveOpenCodePaths(homeDir: string): OpenCodePaths {
     : configJsonPath;
   const pluginsDir = path.join(configDir, 'plugins');
   const pluginPath = path.join(pluginsDir, 'agentmem-plugin.mjs');
+  const globalRulesPath = path.join(configDir, 'AGENTS.md');
 
   return {
     configJsonPath,
@@ -515,6 +659,7 @@ function resolveOpenCodePaths(homeDir: string): OpenCodePaths {
     configTargetPath,
     pluginPath,
     pluginsDir,
+    globalRulesPath,
   };
 }
 
@@ -997,6 +1142,7 @@ function installOpenCode(context: InstallContext): InstallResult {
     opencodePaths.configTargetPath,
     opencodePaths.configTargetPath.endsWith('.jsonc')
   );
+  const existingAgentMemServer = existingConfig?.mcp?.agentmem || existingConfig?.mcp?.servers?.agentmem;
   const legacyBefore = detectOpenCodeLegacy(existingConfig);
   const opencodeConfig = cleanupOpenCodeConfig(existingConfig);
 
@@ -1004,8 +1150,13 @@ function installOpenCode(context: InstallContext): InstallResult {
     opencodeConfig.mcp = {};
   }
   opencodeConfig.mcp.agentmem = {
+    ...(isObject(existingAgentMemServer) ? existingAgentMemServer : {}),
     type: 'local',
     command: ['node', context.paths.mcpServerPath],
+    environment: {
+      ...(isObject(existingAgentMemServer?.environment) ? existingAgentMemServer.environment : {}),
+      AGENTMEM_AGENT_ID: 'opencode',
+    },
     enabled: true,
   };
 
@@ -1033,9 +1184,21 @@ function installOpenCode(context: InstallContext): InstallResult {
       opencodePaths.pluginPath,
       renderOpenCodePlugin({
         startHookPath: context.paths.opencodeStartHook,
+        promptHookPath: context.paths.opencodePromptHook,
         postHookPath: context.paths.opencodePostHook,
       }),
       fs.existsSync(opencodePaths.pluginPath)
+    ),
+    ...applyManagedTextWrite(
+      context,
+      'opencode-rules',
+      opencodePaths.globalRulesPath,
+      mergeOpenCodeGlobalRules(fs.existsSync(opencodePaths.globalRulesPath)
+        ? fs.readFileSync(opencodePaths.globalRulesPath, 'utf8')
+        : ''),
+      hasOpenCodeGlobalRules(fs.existsSync(opencodePaths.globalRulesPath)
+        ? fs.readFileSync(opencodePaths.globalRulesPath, 'utf8')
+        : '')
     ),
   ];
 
@@ -1058,7 +1221,7 @@ function installOpenCode(context: InstallContext): InstallResult {
     agent: 'opencode',
     ok: true,
     targetPath: opencodePaths.configTargetPath,
-    message: `Registered plugin, generated hook bridge, and MCP server in OpenCode (${opencodePaths.configTargetPath}, ${opencodePaths.pluginPath})`,
+    message: `Registered the AgentMemory plugin, global rules, and MCP server in OpenCode (${opencodePaths.configTargetPath}, ${opencodePaths.pluginPath}, ${opencodePaths.globalRulesPath})`,
     warnings,
   };
 }
@@ -1386,17 +1549,25 @@ function uninstallOpenCode(context: InstallContext): UninstallResult {
     opencodePaths.pluginPath,
     fs.existsSync(opencodePaths.pluginPath)
   );
+  const rulesCleanup = uninstallManagedTextTarget(context, {
+    cleanup: removeOpenCodeGlobalRules,
+    hasManagedContent: hasOpenCodeGlobalRules,
+    kind: 'opencode-rules',
+    removeWhenEmpty: true,
+    targetPath: opencodePaths.globalRulesPath,
+  });
 
   return {
-    action: `${configCleanup.action}+${pluginCleanup.action}`,
+    action: `${configCleanup.action}+${pluginCleanup.action}+${rulesCleanup.action}`,
     agent: 'opencode',
     ok: true,
     targetPath: opencodePaths.configTargetPath,
-    message: `Uninstalled AgentMemory from OpenCode (${opencodePaths.configTargetPath}, ${opencodePaths.pluginPath})`,
+    message: `Uninstalled AgentMemory from OpenCode (${opencodePaths.configTargetPath}, ${opencodePaths.pluginPath}, ${opencodePaths.globalRulesPath})`,
     warnings: [
       ...configCleanup.warnings,
       ...displacedCleanup.warnings,
       ...pluginCleanup.warnings,
+      ...rulesCleanup.warnings,
     ],
   };
 }
@@ -1685,13 +1856,34 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   if (opencodeConfig?.mcp?.agentmem?.command?.[1] !== paths.mcpServerPath) {
     issues.push(`OpenCode MCP server is missing or points somewhere else (${opencodePaths.configTargetPath}).`);
   }
+  if (opencodeConfig?.mcp?.agentmem?.environment?.AGENTMEM_AGENT_ID !== 'opencode') {
+    issues.push(`OpenCode MCP server is missing AGENTMEM_AGENT_ID=opencode (${opencodePaths.configTargetPath}).`);
+  }
+  for (const hookPath of [paths.opencodeStartHook, paths.opencodePromptHook, paths.opencodePostHook]) {
+    if (!fs.existsSync(hookPath)) {
+      issues.push(`OpenCode AgentMemory hook script is missing (${hookPath}).`);
+    }
+  }
   if (!fs.existsSync(opencodePaths.pluginPath)) {
     issues.push(`OpenCode bridge plugin is missing (${opencodePaths.pluginPath}).`);
   } else {
     const pluginText = fs.readFileSync(opencodePaths.pluginPath, 'utf8');
-    if (!pluginText.includes(paths.opencodeStartHook) || !pluginText.includes(paths.opencodePostHook)) {
-      issues.push(`OpenCode bridge plugin does not point at the built hook scripts (${opencodePaths.pluginPath}).`);
+    if (
+      !pluginText.includes(paths.opencodeStartHook) ||
+      !pluginText.includes(paths.opencodePromptHook) ||
+      !pluginText.includes(paths.opencodePostHook) ||
+      !pluginText.includes('chat.message') ||
+      !pluginText.includes('experimental.chat.system.transform') ||
+      !pluginText.includes('tool.execute.after')
+    ) {
+      issues.push(`OpenCode bridge plugin is missing the current prompt, system-context, or tool-capture hooks (${opencodePaths.pluginPath}).`);
     }
+  }
+  if (!fs.existsSync(opencodePaths.globalRulesPath) ||
+    !hasOpenCodeGlobalRules(fs.readFileSync(opencodePaths.globalRulesPath, 'utf8'))) {
+    issues.push(`OpenCode global AgentMemory rules are missing (${opencodePaths.globalRulesPath}).`);
+  } else if (!fs.readFileSync(opencodePaths.globalRulesPath, 'utf8').includes('vault-sync')) {
+    issues.push(`OpenCode global AgentMemory rules do not reference the Vault sync skill (${opencodePaths.globalRulesPath}).`);
   }
 
   if (antigravityConfigPath) {
