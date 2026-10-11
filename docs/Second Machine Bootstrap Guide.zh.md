@@ -31,7 +31,7 @@
 
 第二台电脑需要先具备这些前提：
 
-1. 已安装 `Node.js 18+`
+1. 已安装 `Node.js 22+`（推荐 Node 24；已有 WASM 安装需先按 [Native SQLite Migration](Native%20SQLite%20Migration.md) 完成停机备份）
 2. 已安装五个目标 agent
 3. 已安装可用的 `Antigravity` CLI；安装器会创建官方全局 MCP registry
 4. 已拿到可用的 `AGENTMEM_LLM_API_KEY`

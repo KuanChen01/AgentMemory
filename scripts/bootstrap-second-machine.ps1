@@ -12,6 +12,11 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 Set-Location $RepoRoot
 
+$nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
+if ($LASTEXITCODE -ne 0 -or $nodeMajor -lt 22) {
+  throw "AgentMemory requires Node.js 22 or newer. Check node --version and the node executable on PATH."
+}
+
 Write-Host "Installing npm dependencies..."
 npm install
 if ($LASTEXITCODE -ne 0) {

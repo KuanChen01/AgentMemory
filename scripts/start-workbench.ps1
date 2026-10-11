@@ -3,7 +3,8 @@ param(
   [string]$Action = 'menu',
   [int]$Port = 38888,
   [switch]$NoOpen,
-  [switch]$OpenOnReuse
+  [switch]$OpenOnReuse,
+  [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +108,12 @@ function Write-WorkbenchStatus([object]$Status, [string]$Message = $null) {
 }
 
 function Invoke-WorkbenchBuild() {
+  if ($SkipBuild) {
+    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'dist/bin/workbench.js'))) {
+      throw "No built workbench found. Run npm run build before using -SkipBuild."
+    }
+    return
+  }
   Write-Host "Building AgentMemory workbench..."
   npm run build
   if ($LASTEXITCODE -ne 0) {

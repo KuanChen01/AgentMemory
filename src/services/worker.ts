@@ -356,6 +356,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
 
     res.json({
       policy,
+      database: dbManager.getDatabaseDiagnostics(),
       stats: {
         observations,
         sessions,

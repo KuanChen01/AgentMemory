@@ -30,6 +30,8 @@ function makeCliEnv(tempHome) {
 
   return {
     ...process.env,
+    // These CLI fixtures have no worker. Never send shutdown to the user port.
+    AGENTMEM_PORT: '0',
     AGENTMEM_SKIP_ANTIGRAVITY_PLUGIN_ACTIVATION: '1',
     AGENTMEM_SKIP_GLOBAL_UNLINK: '1',
     HOME: tempHome,

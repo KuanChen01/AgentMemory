@@ -8,6 +8,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
   if (shouldUseExternalEmbedding && apiKey && embeddingUrl) {
     try {
       const response = await fetch(embeddingUrl, {
+        signal: AbortSignal.timeout(10000),
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

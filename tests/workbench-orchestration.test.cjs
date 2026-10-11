@@ -23,12 +23,16 @@ function removeDir(target) {
 }
 
 function makeProcessEnv(tempHome) {
+  fs.mkdirSync(path.join(tempHome, '.agentmem'), { recursive: true });
   const parsed = path.parse(tempHome);
   const homedrive = parsed.root.replace(/[\\\/]+$/, '');
   const homepath = tempHome.slice(parsed.root.length - 1);
 
   return {
     ...process.env,
+    AGENTMEM_DB_PATH: path.join(tempHome, '.agentmem', 'agentmemory.db'),
+    AGENTMEM_RUNTIME_DIR: path.join(tempHome, '.agentmem'),
+    AGENTMEM_ENV_PATH: path.join(tempHome, '.agentmem', '.env'),
     HOME: tempHome,
     USERPROFILE: tempHome,
     HOMEDRIVE: homedrive,
@@ -187,14 +191,14 @@ test('workbench orchestration smoke covers start, status, restart, and stop on a
   const port = await findFreePort();
 
   try {
-    const startResult = await runPowerShell(['-Action', 'start', '-Port', String(port), '-NoOpen'], { env });
+    const startResult = await runPowerShell(['-Action', 'start', '-Port', String(port), '-NoOpen', '-SkipBuild'], { env });
     assert.equal(startResult.stdout.includes('已启动 workbench。'), true);
     assert.equal(startResult.stdout.includes('State : ACTIVE'), true);
 
     const statusResult = await runPowerShell(['-Action', 'status', '-Port', String(port)], { env });
     assert.equal(statusResult.stdout.includes('State : ACTIVE'), true);
 
-    const restartResult = await runPowerShell(['-Action', 'restart', '-Port', String(port), '-NoOpen'], { env });
+    const restartResult = await runPowerShell(['-Action', 'restart', '-Port', String(port), '-NoOpen', '-SkipBuild'], { env });
     assert.equal(restartResult.stdout.includes('已重启 workbench。'), true);
     assert.equal(restartResult.stdout.includes('State : ACTIVE'), true);
 

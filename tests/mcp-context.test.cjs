@@ -253,7 +253,7 @@ async function listTools(child, requestId) {
 
 async function startDatabaseLockHolder(dbPath) {
   const code = `
-const { Database } = require('node-sqlite3-wasm');
+const { Database } = require('./dist/services/sqlite');
 const db = new Database(${JSON.stringify(dbPath)});
 db.run('CREATE TABLE IF NOT EXISTS lock_holder (id TEXT PRIMARY KEY)');
 db.run('BEGIN EXCLUSIVE');

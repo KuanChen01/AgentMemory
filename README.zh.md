@@ -9,7 +9,7 @@ AgentMemory 是一个免编译、轻量化的全局持久化智能体记忆系�
 ### 🌟 核心特性
 
 *   **跨 Agent 记忆共享**：允许不同的 AI 编码助理共享同一个项目的历史诊断事实、设计决策和排障记录。
-*   **免编译与轻量化**：基于纯 JS 实现的 Feature Hashing 局部敏感向量编码和 WebAssembly 版本的 SQLite (`node-sqlite3-wasm`)，完美避开了复杂的 C++ 本地编译依赖（如 `node-gyp`）。
+*   **原生 SQLite 与轻量向量编码**：使用 `better-sqlite3`，支持 WAL、有限锁重试和事务写入，并保留纯 JS Feature Hashing 向量编码。支持的 Windows x64/ARM64 环境使用随包原生二进制；其它平台可能需要编译工具。
 *   **混合检索检索**：集成 SQLite FTS5 的 BM25 全文关键字匹配与 Cosine Similarity 向量相似度算法，提供高相关的召回效果。
 *   **异步后台摘要**：在后台队列中通过 DeepSeek Flash API 异步提炼繁杂的工具执行日志，最大化节省上下文 Token。
 *   **每日记忆总结**：按项目每日运行一次总结任务，过滤低信号 observation，写入紧凑的事实、决策、命令、开放问题和下一步列表，并把最近成功总结注入启动上下文。
@@ -58,7 +58,8 @@ graph TD
 ### 🚀 快速上手
 
 #### 1. 环境依赖
-*   Node.js (v18+)
+*   Node.js (v22+；推荐 Node 24)
+*   从旧 WASM 安装升级时，先按照 [Native SQLite Migration](docs/Native%20SQLite%20Migration.md) 停止旧 Worker/MCP、备份数据库，再统一切换。
 
 #### 2. 安装与构建
 克隆本仓库并执行编译：

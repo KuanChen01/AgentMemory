@@ -9,7 +9,7 @@ AgentMemory is a compilation-free, lightweight, and universal persistent memory 
 ### 🌟 Features
 
 *   **Cross-Agent Memory Sharing**: Shares historical session facts, architectural decisions, and bug-fixing notes across different development assistants.
-*   **Compilation-Free & Lightweight**: Built with a pure JavaScript in-memory Feature Hashing Vectorizer and WebAssembly SQLite (`node-sqlite3-wasm`), bypassing complex C++ native compiler dependencies (`node-gyp`).
+*   **Native SQLite & Lightweight Embeddings**: Uses `better-sqlite3` with WAL, bounded lock retries, and atomic writes, alongside a pure JavaScript Feature Hashing Vectorizer. Supported Windows x64/ARM64 installs use bundled native binaries; other platforms may require build tools.
 *   **Hybrid Search**: Combines SQLite FTS5 BM25 keyword matching with Cosine Similarity vector retrieval for highly relevant results.
 *   **Background Summarization**: Uses the DeepSeek Flash API to summarize session tool logs asynchronously in the background.
 *   **Daily Memory Digests**: Runs a daily per-project synthesis job that filters low-signal observations, writes compact fact/decision/action digests, and feeds recent digests into startup context.
@@ -58,7 +58,8 @@ graph TD
 ### 🚀 Getting Started
 
 #### 1. Prerequisites
-*   Node.js (v18+)
+*   Node.js (v22+; Node 24 recommended)
+*   Upgrading an existing WASM-backed installation: follow [Native SQLite Migration](docs/Native%20SQLite%20Migration.md) to stop older Worker/MCP processes and back up the database before switching.
 
 #### 2. Installation
 Clone the repository and build the distribution files:

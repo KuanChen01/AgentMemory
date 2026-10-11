@@ -4,7 +4,7 @@
 
 - 正式版本只允许从 `master` 发布。功能分支可以开发、联调和验收，但不能直接打正式 tag 或 GitHub Release。
 - 版本号采用严格 `SemVer`：`vMAJOR.MINOR.PATCH`。
-- v1 阶段的正式分发渠道固定为 **GitHub Release + 默认源码归档**，不同时维护 npm 正式包和 Windows 安装器。
+- 当前正式分发渠道固定为 **GitHub Release + 默认源码归档**，不同时维护 npm 正式包和 Windows 安装器。
 - 当前版本的单一事实来源是仓库根 `package.json`；`package-lock.json` 的根版本必须和它保持一致。运行时与 MCP 对外暴露的版本都从这套元数据读取，不再各自硬编码。
 
 ## Maintainer Commands

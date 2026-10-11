@@ -1,5 +1,4 @@
-// @ts-ignore
-import { Database } from 'node-sqlite3-wasm';
+import { Database, retrySqliteBusy } from './sqlite';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
@@ -419,18 +418,30 @@ export class DatabaseManager {
 
   // Open connection and run migrations
   public async initialize(): Promise<void> {
+    if (this.db) return;
     try {
       this.db = new Database(this.dbPath);
-      // Enable WAL mode
-      this.db.run('PRAGMA journal_mode = WAL;');
-      await this.runMigrations();
+      const version = await retrySqliteBusy(() => this.db.get('PRAGMA user_version').user_version);
+      if (version > 1) throw new Error(`Unsupported database schema version: ${version}`);
+      await retrySqliteBusy(() => this.db.configure());
+      if (version < 1) {
+        await this.write(() => {
+          // A different process may have migrated while we waited for the lock.
+          const currentVersion = this.db.get('PRAGMA user_version').user_version;
+          if (currentVersion > 1) throw new Error(`Unsupported database schema version: ${currentVersion}`);
+          if (currentVersion < 1) {
+            this.runMigrations();
+            this.db.run('PRAGMA user_version = 1');
+          }
+        });
+      }
     } catch (err: any) {
       this.close();
       throw new Error(`Database initialization failed: ${err.message}`);
     }
   }
 
-  private async runMigrations(): Promise<void> {
+  private runMigrations(): void {
     if (!this.db) throw new Error('Database not initialized');
 
     // 1. Sessions table
@@ -627,72 +638,77 @@ export class DatabaseManager {
   // Create or update a session
   public async saveSession(session: Session): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
-    const normalizedAgentId = normalizeAgentId(session.agent_id);
-    this.db.run(
-      `INSERT INTO sessions (id, project_path, agent_id, status)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
-      [session.id, session.project_path, normalizedAgentId, session.status]
-    );
+
+    return this.write(() => {
+      const normalizedAgentId = normalizeAgentId(session.agent_id);
+      this.db.run(
+        `INSERT INTO sessions (id, project_path, agent_id, status)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
+        [session.id, session.project_path, normalizedAgentId, session.status]
+      );
+    });
   }
 
   // Save observation
   public async saveObservation(obs: Observation): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const factsStr = JSON.stringify(obs.facts);
-    const conceptsStr = JSON.stringify(obs.concepts);
-    const filesReadStr = JSON.stringify(obs.files_read);
-    const filesModStr = JSON.stringify(obs.files_modified);
-    const embeddingStr = JSON.stringify(obs.embedding);
-    const normalizedAgentId = normalizeAgentId(obs.agent_id);
+    return this.write(() => {
+      const factsStr = JSON.stringify(obs.facts);
+      const conceptsStr = JSON.stringify(obs.concepts);
+      const filesReadStr = JSON.stringify(obs.files_read);
+      const filesModStr = JSON.stringify(obs.files_modified);
+      const embeddingStr = JSON.stringify(obs.embedding);
+      const normalizedAgentId = normalizeAgentId(obs.agent_id);
 
-    // Insert into primary table
-    if (obs.created_at) {
-      this.db.run(
-        `INSERT INTO observations (id, session_id, project_path, agent_id, title, narrative, facts, concepts, files_read, files_modified, embedding, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          obs.id,
-          obs.session_id,
-          obs.project_path,
-          normalizedAgentId,
-          obs.title,
-          obs.narrative,
-          factsStr,
-          conceptsStr,
-          filesReadStr,
-          filesModStr,
-          embeddingStr,
-          obs.created_at,
-        ]
-      );
-    } else {
-      this.db.run(
-        `INSERT INTO observations (id, session_id, project_path, agent_id, title, narrative, facts, concepts, files_read, files_modified, embedding)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          obs.id,
-          obs.session_id,
-          obs.project_path,
-          normalizedAgentId,
-          obs.title,
-          obs.narrative,
-          factsStr,
-          conceptsStr,
-          filesReadStr,
-          filesModStr,
-          embeddingStr,
-        ]
-      );
-    }
+      // Insert into primary table
+      if (obs.created_at) {
+        this.db.run(
+          `INSERT INTO observations (id, session_id, project_path, agent_id, title, narrative, facts, concepts, files_read, files_modified, embedding, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            obs.id,
+            obs.session_id,
+            obs.project_path,
+            normalizedAgentId,
+            obs.title,
+            obs.narrative,
+            factsStr,
+            conceptsStr,
+            filesReadStr,
+            filesModStr,
+            embeddingStr,
+            obs.created_at,
+          ]
+        );
+      } else {
+        this.db.run(
+          `INSERT INTO observations (id, session_id, project_path, agent_id, title, narrative, facts, concepts, files_read, files_modified, embedding)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            obs.id,
+            obs.session_id,
+            obs.project_path,
+            normalizedAgentId,
+            obs.title,
+            obs.narrative,
+            factsStr,
+            conceptsStr,
+            filesReadStr,
+            filesModStr,
+            embeddingStr,
+          ]
+        );
+      }
 
-    // Insert into FTS virtual table
-    this.db.run(
-      `INSERT INTO observations_fts (observation_id, title, narrative, facts, concepts, files_modified)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [obs.id, obs.title, obs.narrative, factsStr, conceptsStr, filesModStr]
-    );
+      // Insert into FTS virtual table
+      this.db.run(
+        `INSERT INTO observations_fts (observation_id, title, narrative, facts, concepts, files_modified)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [obs.id, obs.title, obs.narrative, factsStr, conceptsStr, filesModStr]
+      );
+    });
   }
 
   // Get project timeline (chronological observations)
@@ -857,63 +873,63 @@ export class DatabaseManager {
   public async saveDailyMemoryDigest(input: DailyMemoryDigestInput): Promise<DailyMemoryDigest> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
-    const id = randomUUID();
-    const generatedAt = input.generated_at || new Date().toISOString();
-    const sourceObservationIds = JSON.stringify(input.source_observation_ids);
-    const digestJson = input.digest === null ? null : JSON.stringify(input.digest);
-    const sourceCount = input.source_count ?? input.source_observation_ids.length;
+    return this.write(() => {
+      const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+      const id = randomUUID();
+      const generatedAt = input.generated_at || new Date().toISOString();
+      const sourceObservationIds = JSON.stringify(input.source_observation_ids);
+      const digestJson = input.digest === null ? null : JSON.stringify(input.digest);
+      const sourceCount = input.source_count ?? input.source_observation_ids.length;
 
-    this.db.run(
-      `INSERT INTO daily_memory_digests (
-        id,
-        project_path,
-        local_date,
-        status,
-        digest_json,
-        source_observation_ids,
-        source_count,
-        model,
-        prompt_version,
-        generated_at,
-        reviewed_at,
-        last_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(project_path, local_date) DO UPDATE SET
-        status = excluded.status,
-        digest_json = excluded.digest_json,
-        source_observation_ids = excluded.source_observation_ids,
-        source_count = excluded.source_count,
-        model = excluded.model,
-        prompt_version = excluded.prompt_version,
-        generated_at = excluded.generated_at,
-        reviewed_at = excluded.reviewed_at,
-        last_error = excluded.last_error,
-        updated_at = CURRENT_TIMESTAMP`,
-      [
-        id,
-        normalizedProjectPath,
-        input.local_date,
-        input.status,
-        digestJson,
-        sourceObservationIds,
-        sourceCount,
-        input.model ?? null,
-        input.prompt_version,
-        generatedAt,
-        input.reviewed_at ?? null,
-        input.last_error ?? null,
-      ]
-    );
+      this.db.run(
+        `INSERT INTO daily_memory_digests (
+          id,
+          project_path,
+          local_date,
+          status,
+          digest_json,
+          source_observation_ids,
+          source_count,
+          model,
+          prompt_version,
+          generated_at,
+          reviewed_at,
+          last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_path, local_date) DO UPDATE SET
+          status = excluded.status,
+          digest_json = excluded.digest_json,
+          source_observation_ids = excluded.source_observation_ids,
+          source_count = excluded.source_count,
+          model = excluded.model,
+          prompt_version = excluded.prompt_version,
+          generated_at = excluded.generated_at,
+          reviewed_at = excluded.reviewed_at,
+          last_error = excluded.last_error,
+          updated_at = CURRENT_TIMESTAMP`,
+        [
+          id,
+          normalizedProjectPath,
+          input.local_date,
+          input.status,
+          digestJson,
+          sourceObservationIds,
+          sourceCount,
+          input.model ?? null,
+          input.prompt_version,
+          generatedAt,
+          input.reviewed_at ?? null,
+          input.last_error ?? null,
+        ]
+      );
 
-    const digest = await this.getDailyMemoryDigest({
-      projectPath: normalizedProjectPath,
-      localDate: input.local_date,
+      const digestRow = this.db.get('SELECT * FROM daily_memory_digests WHERE project_path = ? AND local_date = ?', [normalizedProjectPath, input.local_date]);
+      const digest = digestRow ? this.parseDailyMemoryDigest(digestRow) : null;
+      if (!digest) {
+        throw new Error('Daily memory digest was not saved');
+      }
+      return digest;
     });
-    if (!digest) {
-      throw new Error('Daily memory digest was not saved');
-    }
-    return digest;
   }
 
   public async getDailyMemoryDigest(
@@ -995,55 +1011,57 @@ export class DatabaseManager {
   public async saveProceduralSkill(input: ProceduralSkillInput): Promise<ProceduralSkill> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
-    const id = randomUUID();
-    const status = normalizeProceduralSkillStatus(input.status);
-    const confidence = normalizeConfidence(input.confidence);
-    const sourceObservationIds = JSON.stringify(input.source_observation_ids || []);
-    const stepsJson = JSON.stringify((input.steps || []).map((step) => String(step)).filter(Boolean));
-    const tagsJson = JSON.stringify((input.tags || []).map((tag) => String(tag)).filter(Boolean));
-    const embeddingJson = JSON.stringify(Array.isArray(input.embedding) ? input.embedding : []);
-    const createdAt = new Date().toISOString();
+    return this.write(() => {
+      const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+      const id = randomUUID();
+      const status = normalizeProceduralSkillStatus(input.status);
+      const confidence = normalizeConfidence(input.confidence);
+      const sourceObservationIds = JSON.stringify(input.source_observation_ids || []);
+      const stepsJson = JSON.stringify((input.steps || []).map((step) => String(step)).filter(Boolean));
+      const tagsJson = JSON.stringify((input.tags || []).map((tag) => String(tag)).filter(Boolean));
+      const embeddingJson = JSON.stringify(Array.isArray(input.embedding) ? input.embedding : []);
+      const createdAt = new Date().toISOString();
 
-    this.db.run(
-      `INSERT INTO procedural_skills (
-        id,
-        project_path,
-        title,
-        summary,
-        trigger_text,
-        steps_json,
-        tags_json,
-        status,
-        confidence,
-        source_digest_id,
-        source_observation_ids,
-        embedding,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        normalizedProjectPath,
-        input.title,
-        input.summary,
-        input.trigger_text,
-        stepsJson,
-        tagsJson,
-        status,
-        confidence,
-        input.source_digest_id ?? null,
-        sourceObservationIds,
-        embeddingJson,
-        createdAt,
-        createdAt,
-      ]
-    );
+      this.db.run(
+        `INSERT INTO procedural_skills (
+          id,
+          project_path,
+          title,
+          summary,
+          trigger_text,
+          steps_json,
+          tags_json,
+          status,
+          confidence,
+          source_digest_id,
+          source_observation_ids,
+          embedding,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          normalizedProjectPath,
+          input.title,
+          input.summary,
+          input.trigger_text,
+          stepsJson,
+          tagsJson,
+          status,
+          confidence,
+          input.source_digest_id ?? null,
+          sourceObservationIds,
+          embeddingJson,
+          createdAt,
+          createdAt,
+        ]
+      );
 
-    this.recordProceduralSkillStatusEvent(id, normalizedProjectPath, status, createdAt);
+      this.recordProceduralSkillStatusEvent(id, normalizedProjectPath, status, createdAt);
 
-    const row = this.db.get(`SELECT * FROM procedural_skills WHERE id = ?`, [id]) as any;
-    return this.parseProceduralSkill(row);
+      const row = this.db.get(`SELECT * FROM procedural_skills WHERE id = ?`, [id]) as any;
+      return this.parseProceduralSkill(row);
+    });
   }
 
   public async getProceduralSkillById(id: string): Promise<ProceduralSkill | null> {
@@ -1136,36 +1154,40 @@ export class DatabaseManager {
   public async setProceduralSkillStatus(id: string, status: ProceduralSkillStatus): Promise<ProceduralSkill> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const existing = await this.getProceduralSkillById(id);
-    if (!existing) {
-      throw new Error(`Procedural skill not found: ${id}`);
-    }
+    return this.write(() => {
+      const existingRow = this.db.get('SELECT * FROM procedural_skills WHERE id = ?', [id]);
+      const existing = existingRow ? this.parseProceduralSkill(existingRow) : null;
+      if (!existing) {
+        throw new Error(`Procedural skill not found: ${id}`);
+      }
 
-    const normalizedStatus = normalizeProceduralSkillStatus(status);
-    if (
-      existing.status === normalizedStatus &&
-      ((normalizedStatus === 'retired' && existing.retired_at) || normalizedStatus !== 'retired')
-    ) {
-      return existing;
-    }
+      const normalizedStatus = normalizeProceduralSkillStatus(status);
+      if (
+        existing.status === normalizedStatus &&
+        ((normalizedStatus === 'retired' && existing.retired_at) || normalizedStatus !== 'retired')
+      ) {
+        return existing;
+      }
 
-    const statusChangedAt = new Date().toISOString();
-    const retiredAt = normalizedStatus === 'retired' ? statusChangedAt : null;
-    this.db.run(
-      `UPDATE procedural_skills
-       SET status = ?,
-           retired_at = ?,
-           updated_at = ?
-       WHERE id = ?`,
-      [normalizedStatus, retiredAt, statusChangedAt, id]
-    );
-    this.recordProceduralSkillStatusEvent(id, existing.project_path, normalizedStatus, statusChangedAt);
+      const statusChangedAt = new Date().toISOString();
+      const retiredAt = normalizedStatus === 'retired' ? statusChangedAt : null;
+      this.db.run(
+        `UPDATE procedural_skills
+         SET status = ?,
+             retired_at = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [normalizedStatus, retiredAt, statusChangedAt, id]
+      );
+      this.recordProceduralSkillStatusEvent(id, existing.project_path, normalizedStatus, statusChangedAt);
 
-    const skill = await this.getProceduralSkillById(id);
-    if (!skill) {
-      throw new Error(`Procedural skill not found: ${id}`);
-    }
-    return skill;
+      const skillRow = this.db.get('SELECT * FROM procedural_skills WHERE id = ?', [id]);
+      const skill = skillRow ? this.parseProceduralSkill(skillRow) : null;
+      if (!skill) {
+        throw new Error(`Procedural skill not found: ${id}`);
+      }
+      return skill;
+    });
   }
 
   public async recordProceduralSkillFeedback(
@@ -1173,64 +1195,67 @@ export class DatabaseManager {
   ): Promise<ProceduralSkillFeedback> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const skill = await this.getProceduralSkillById(input.skill_id);
-    if (!skill) {
-      throw new Error(`Procedural skill not found: ${input.skill_id}`);
-    }
+    return this.write(() => {
+      const skillRow = this.db.get('SELECT * FROM procedural_skills WHERE id = ?', [input.skill_id]);
+      const skill = skillRow ? this.parseProceduralSkill(skillRow) : null;
+      if (!skill) {
+        throw new Error(`Procedural skill not found: ${input.skill_id}`);
+      }
 
-    const id = randomUUID();
-    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
-    if (this.normalizeProjectPath(skill.project_path) !== normalizedProjectPath) {
-      throw new Error(
-        `Procedural skill ${skill.id} belongs to ${skill.project_path}, not ${normalizedProjectPath}.`
-      );
-    }
+      const id = randomUUID();
+      const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+      if (this.normalizeProjectPath(skill.project_path) !== normalizedProjectPath) {
+        throw new Error(
+          `Procedural skill ${skill.id} belongs to ${skill.project_path}, not ${normalizedProjectPath}.`
+        );
+      }
 
-    const outcome = normalizeProceduralSkillFeedbackOutcome(input.outcome);
-    const feedbackCreatedAt = new Date().toISOString();
-    this.db.run(
-      `INSERT INTO procedural_skill_feedback (
-        id,
-        skill_id,
-        project_path,
-        outcome,
-        task_text,
-        notes,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        input.skill_id,
-        normalizedProjectPath,
-        outcome,
-        input.task_text || '',
-        input.notes || '',
-        feedbackCreatedAt,
-      ]
-    );
-
-    const countField = outcome === 'success' ? 'success_count' : outcome === 'failure' ? 'failure_count' : null;
-    if (countField) {
+      const outcome = normalizeProceduralSkillFeedbackOutcome(input.outcome);
+      const feedbackCreatedAt = new Date().toISOString();
       this.db.run(
-        `UPDATE procedural_skills
-         SET ${countField} = ${countField} + 1,
-             last_used_at = ?,
-             updated_at = ?
-         WHERE id = ?`,
-        [feedbackCreatedAt, feedbackCreatedAt, input.skill_id]
+        `INSERT INTO procedural_skill_feedback (
+          id,
+          skill_id,
+          project_path,
+          outcome,
+          task_text,
+          notes,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          input.skill_id,
+          normalizedProjectPath,
+          outcome,
+          input.task_text || '',
+          input.notes || '',
+          feedbackCreatedAt,
+        ]
       );
-    } else {
-      this.db.run(
-        `UPDATE procedural_skills
-         SET last_used_at = ?,
-             updated_at = ?
-         WHERE id = ?`,
-        [feedbackCreatedAt, feedbackCreatedAt, input.skill_id]
-      );
-    }
 
-    const row = this.db.get(`SELECT * FROM procedural_skill_feedback WHERE id = ?`, [id]) as any;
-    return this.parseProceduralSkillFeedback(row);
+      const countField = outcome === 'success' ? 'success_count' : outcome === 'failure' ? 'failure_count' : null;
+      if (countField) {
+        this.db.run(
+          `UPDATE procedural_skills
+           SET ${countField} = ${countField} + 1,
+               last_used_at = ?,
+               updated_at = ?
+           WHERE id = ?`,
+          [feedbackCreatedAt, feedbackCreatedAt, input.skill_id]
+        );
+      } else {
+        this.db.run(
+          `UPDATE procedural_skills
+           SET last_used_at = ?,
+               updated_at = ?
+           WHERE id = ?`,
+          [feedbackCreatedAt, feedbackCreatedAt, input.skill_id]
+        );
+      }
+
+      const row = this.db.get(`SELECT * FROM procedural_skill_feedback WHERE id = ?`, [id]) as any;
+      return this.parseProceduralSkillFeedback(row);
+    });
   }
 
   public async listProceduralSkillFeedback(
@@ -1351,66 +1376,68 @@ export class DatabaseManager {
   public async savePostTaskReview(input: PostTaskReviewInput): Promise<PostTaskReview> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
-    const generatedAt = input.generated_at || new Date().toISOString();
+    return this.write(() => {
+      const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+      const generatedAt = input.generated_at || new Date().toISOString();
 
-    this.db.run(
-      `INSERT INTO post_task_reviews (
-        id,
-        project_path,
-        source_observation_id,
-        source_session_id,
-        source_agent_id,
-        source_title,
-        query_text,
-        status,
-        matched_skill_titles_json,
-        recommendation_states_json,
-        bounded_context_json,
-        decision_trace_json,
-        temporal_diagnostics_json,
-        generated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(source_observation_id) DO UPDATE SET
-        query_text = excluded.query_text,
-        matched_skill_titles_json = excluded.matched_skill_titles_json,
-        recommendation_states_json = excluded.recommendation_states_json,
-        bounded_context_json = excluded.bounded_context_json,
-        decision_trace_json = excluded.decision_trace_json,
-        temporal_diagnostics_json = excluded.temporal_diagnostics_json,
-        generated_at = excluded.generated_at,
-        updated_at = CURRENT_TIMESTAMP`,
-      [
-        randomUUID(),
-        normalizedProjectPath,
-        input.source_observation_id,
-        input.source_session_id,
-        normalizeAgentId(input.source_agent_id),
-        input.source_title,
-        input.query_text,
-        'open',
-        JSON.stringify(input.matched_skill_titles || []),
-        JSON.stringify(input.recommendation_states || []),
-        JSON.stringify(input.bounded_context ?? null),
-        JSON.stringify(input.decision_trace ?? null),
-        JSON.stringify(input.temporal_diagnostics ?? null),
-        generatedAt,
-      ]
-    );
+      this.db.run(
+        `INSERT INTO post_task_reviews (
+          id,
+          project_path,
+          source_observation_id,
+          source_session_id,
+          source_agent_id,
+          source_title,
+          query_text,
+          status,
+          matched_skill_titles_json,
+          recommendation_states_json,
+          bounded_context_json,
+          decision_trace_json,
+          temporal_diagnostics_json,
+          generated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_observation_id) DO UPDATE SET
+          query_text = excluded.query_text,
+          matched_skill_titles_json = excluded.matched_skill_titles_json,
+          recommendation_states_json = excluded.recommendation_states_json,
+          bounded_context_json = excluded.bounded_context_json,
+          decision_trace_json = excluded.decision_trace_json,
+          temporal_diagnostics_json = excluded.temporal_diagnostics_json,
+          generated_at = excluded.generated_at,
+          updated_at = CURRENT_TIMESTAMP`,
+        [
+          randomUUID(),
+          normalizedProjectPath,
+          input.source_observation_id,
+          input.source_session_id,
+          normalizeAgentId(input.source_agent_id),
+          input.source_title,
+          input.query_text,
+          'open',
+          JSON.stringify(input.matched_skill_titles || []),
+          JSON.stringify(input.recommendation_states || []),
+          JSON.stringify(input.bounded_context ?? null),
+          JSON.stringify(input.decision_trace ?? null),
+          JSON.stringify(input.temporal_diagnostics ?? null),
+          generatedAt,
+        ]
+      );
 
-    const row = this.db.get(
-      `SELECT *
-       FROM post_task_reviews
-       WHERE source_observation_id = ?
-       LIMIT 1`,
-      [input.source_observation_id]
-    ) as any;
+      const row = this.db.get(
+        `SELECT *
+         FROM post_task_reviews
+         WHERE source_observation_id = ?
+         LIMIT 1`,
+        [input.source_observation_id]
+      ) as any;
 
-    if (!row) {
-      throw new Error('Post-task review was not saved');
-    }
+      if (!row) {
+        throw new Error('Post-task review was not saved');
+      }
 
-    return this.parsePostTaskReview(row);
+      return this.parsePostTaskReview(row);
+    });
   }
 
   public async listPostTaskReviews(query: PostTaskReviewQuery): Promise<PostTaskReview[]> {
@@ -1461,78 +1488,80 @@ export class DatabaseManager {
   public async saveStateFact(input: StateFactInput): Promise<StateFact> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
-    const entityType = input.entity_type || 'project';
-    const entityKey = input.entity_key || normalizedProjectPath;
-    const factKey = input.fact_key;
-    const effectiveAt = input.effective_at || new Date().toISOString();
-    const recordedAt = new Date().toISOString();
-    const valueJson = JSON.stringify(input.value);
+    return this.write(() => {
+      const normalizedProjectPath = this.normalizeProjectPath(input.project_path);
+      const entityType = input.entity_type || 'project';
+      const entityKey = input.entity_key || normalizedProjectPath;
+      const factKey = input.fact_key;
+      const effectiveAt = input.effective_at || new Date().toISOString();
+      const recordedAt = new Date().toISOString();
+      const valueJson = JSON.stringify(input.value);
 
-    const previousActive = this.db.get(
-      `SELECT id
-       FROM state_facts
-       WHERE LOWER(project_path) = LOWER(?)
-         AND LOWER(entity_type) = LOWER(?)
-         AND LOWER(entity_key) = LOWER(?)
-         AND LOWER(fact_key) = LOWER(?)
-         AND effective_at <= ?
-         AND (superseded_at IS NULL OR superseded_at > ?)
-       ORDER BY effective_at DESC, recorded_at DESC
-       LIMIT 1`,
-      [normalizedProjectPath, entityType, entityKey, factKey, effectiveAt, effectiveAt]
-    ) as any;
+      const previousActive = this.db.get(
+        `SELECT id
+         FROM state_facts
+         WHERE LOWER(project_path) = LOWER(?)
+           AND LOWER(entity_type) = LOWER(?)
+           AND LOWER(entity_key) = LOWER(?)
+           AND LOWER(fact_key) = LOWER(?)
+           AND effective_at <= ?
+           AND (superseded_at IS NULL OR superseded_at > ?)
+         ORDER BY effective_at DESC, recorded_at DESC
+         LIMIT 1`,
+        [normalizedProjectPath, entityType, entityKey, factKey, effectiveAt, effectiveAt]
+      ) as any;
 
-    const nextActive = this.db.get(
-      `SELECT effective_at
-       FROM state_facts
-       WHERE LOWER(project_path) = LOWER(?)
-         AND LOWER(entity_type) = LOWER(?)
-         AND LOWER(entity_key) = LOWER(?)
-         AND LOWER(fact_key) = LOWER(?)
-         AND effective_at > ?
-       ORDER BY effective_at ASC, recorded_at ASC
-       LIMIT 1`,
-      [normalizedProjectPath, entityType, entityKey, factKey, effectiveAt]
-    ) as any;
+      const nextActive = this.db.get(
+        `SELECT effective_at
+         FROM state_facts
+         WHERE LOWER(project_path) = LOWER(?)
+           AND LOWER(entity_type) = LOWER(?)
+           AND LOWER(entity_key) = LOWER(?)
+           AND LOWER(fact_key) = LOWER(?)
+           AND effective_at > ?
+         ORDER BY effective_at ASC, recorded_at ASC
+         LIMIT 1`,
+        [normalizedProjectPath, entityType, entityKey, factKey, effectiveAt]
+      ) as any;
 
-    const id = randomUUID();
-    this.db.run(
-      `INSERT INTO state_facts (
-        id,
-        project_path,
-        entity_type,
-        entity_key,
-        fact_key,
-        value_json,
-        effective_at,
-        recorded_at,
-        superseded_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        normalizedProjectPath,
-        entityType,
-        entityKey,
-        factKey,
-        valueJson,
-        effectiveAt,
-        recordedAt,
-        nextActive?.effective_at || null,
-      ]
-    );
-
-    if (previousActive?.id) {
+      const id = randomUUID();
       this.db.run(
-        `UPDATE state_facts
-         SET superseded_at = ?
-         WHERE id = ?`,
-        [effectiveAt, previousActive.id]
+        `INSERT INTO state_facts (
+          id,
+          project_path,
+          entity_type,
+          entity_key,
+          fact_key,
+          value_json,
+          effective_at,
+          recorded_at,
+          superseded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          normalizedProjectPath,
+          entityType,
+          entityKey,
+          factKey,
+          valueJson,
+          effectiveAt,
+          recordedAt,
+          nextActive?.effective_at || null,
+        ]
       );
-    }
 
-    const row = this.db.get(`SELECT * FROM state_facts WHERE id = ?`, [id]) as any;
-    return this.parseStateFact(row);
+      if (previousActive?.id) {
+        this.db.run(
+          `UPDATE state_facts
+           SET superseded_at = ?
+           WHERE id = ?`,
+          [effectiveAt, previousActive.id]
+        );
+      }
+
+      const row = this.db.get(`SELECT * FROM state_facts WHERE id = ?`, [id]) as any;
+      return this.parseStateFact(row);
+    });
   }
 
   public async getStateFacts(query: StateFactQuery): Promise<StateFact[]> {
@@ -1748,68 +1777,83 @@ export class DatabaseManager {
     }
   }
 
+  public getDatabaseDiagnostics() {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.db.diagnostics();
+  }
+
+  private async write<T>(operation: () => T): Promise<T> {
+    if (!this.db) throw new Error('Database not initialized');
+    return retrySqliteBusy(() => this.db.transaction(operation));
+  }
+
   private async persistRuntimePolicy(
     policy: Pick<RuntimeMemoryPolicy, 'readEnabled' | 'writeEnabled'>
   ): Promise<RuntimeMemoryPolicy> {
     if (!this.db) throw new Error('Database not initialized');
 
-    this.db.run(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(key) DO UPDATE SET
-         value = excluded.value,
-         updated_at = CURRENT_TIMESTAMP`,
-      [
-        RUNTIME_MEMORY_POLICY_KEY,
-        JSON.stringify({
-          readEnabled: policy.readEnabled,
-          writeEnabled: policy.writeEnabled,
-        }),
-      ]
-    );
+    return this.write(() => {
+      this.db.run(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = CURRENT_TIMESTAMP`,
+        [
+          RUNTIME_MEMORY_POLICY_KEY,
+          JSON.stringify({
+            readEnabled: policy.readEnabled,
+            writeEnabled: policy.writeEnabled,
+          }),
+        ]
+      );
 
-    const row = this.db.get(
-      `SELECT value, updated_at FROM app_settings WHERE key = ?`,
-      [RUNTIME_MEMORY_POLICY_KEY]
-    ) as any;
-    const parsed = JSON.parse(row.value);
+      const row = this.db.get(
+        `SELECT value, updated_at FROM app_settings WHERE key = ?`,
+        [RUNTIME_MEMORY_POLICY_KEY]
+      ) as any;
+      const parsed = JSON.parse(row.value);
 
-    return {
-      readEnabled: parsed.readEnabled !== false,
-      writeEnabled: parsed.writeEnabled !== false,
-      updatedAt: row.updated_at,
-    };
+      return {
+        readEnabled: parsed.readEnabled !== false,
+        writeEnabled: parsed.writeEnabled !== false,
+        updatedAt: row.updated_at,
+      };
+    });
   }
 
   private async persistDailyDigestSchedulerConfig(
     config: Omit<DailyDigestSchedulerConfig, 'updatedAt'>
   ): Promise<DailyDigestSchedulerConfig> {
     if (!this.db) throw new Error('Database not initialized');
-    const normalized = normalizeDailyDigestSchedulerConfig(config);
 
-    this.db.run(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(key) DO UPDATE SET
-         value = excluded.value,
-         updated_at = CURRENT_TIMESTAMP`,
-      [
-        DAILY_DIGEST_SCHEDULER_CONFIG_KEY,
-        JSON.stringify({
-          enabled: normalized.enabled,
-          lookback_days: normalized.lookback_days,
-          schedule_time: normalized.schedule_time,
-          time_zone: normalized.time_zone,
-        }),
-      ]
-    );
+    return this.write(() => {
+      const normalized = normalizeDailyDigestSchedulerConfig(config);
 
-    const row = this.db.get(
-      `SELECT value, updated_at FROM app_settings WHERE key = ?`,
-      [DAILY_DIGEST_SCHEDULER_CONFIG_KEY]
-    ) as any;
+      this.db.run(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = CURRENT_TIMESTAMP`,
+        [
+          DAILY_DIGEST_SCHEDULER_CONFIG_KEY,
+          JSON.stringify({
+            enabled: normalized.enabled,
+            lookback_days: normalized.lookback_days,
+            schedule_time: normalized.schedule_time,
+            time_zone: normalized.time_zone,
+          }),
+        ]
+      );
 
-    return this.parseDailyDigestSchedulerConfigRow(row);
+      const row = this.db.get(
+        `SELECT value, updated_at FROM app_settings WHERE key = ?`,
+        [DAILY_DIGEST_SCHEDULER_CONFIG_KEY]
+      ) as any;
+
+      return this.parseDailyDigestSchedulerConfigRow(row);
+    });
   }
 
   private parseDailyDigestSchedulerConfigRow(row: any): DailyDigestSchedulerConfig {
