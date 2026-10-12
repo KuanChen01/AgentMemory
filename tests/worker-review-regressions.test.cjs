@@ -161,3 +161,15 @@ test('an attempted skip cannot erase actual failed tool evidence', async () => {
     assert.match(view.memories[0].narrative,/quota exhausted; 0 settled; checkpoint retained/);
   });
 });
+test('truncated synthesis input cannot be skipped as proven routine work', async () => {
+  await fixture(async ({post,get,settled,setMemory}) => {
+    setMemory({record_kind:'skip',title:'Read large file',narrative:'',facts:[]});
+    await post('/tools',{session_id:'partial-input',project_path:'E:/Large',agent_id:'codex',tool_name:'exec_command',success:true,
+      input:'read large config',output:'x'.repeat(80000)+' 部署写明并发上限八个，第九个连接永久挂起'});
+    await settled(1);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.memories.length,1); assert.equal(view.memories[0].kind,'context');
+    assert.match(view.memories[0].narrative,/unshown content remains unknown/);
+  });
+});
