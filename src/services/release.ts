@@ -146,13 +146,14 @@ export function buildReleasePlan(
   const nextVersion = bumpSemVer(manifest.version, increment);
   const nextTag = `${manifest.tagPrefix}${nextVersion}`;
   const manualSteps = [
-    `Switch to ${manifest.stableBranch} and make sure the working tree is clean.`,
+    `Confirm feature PRs are reviewed and merged, then create a release preparation branch from origin/${manifest.stableBranch} with a clean working tree.`,
     `Run npm run release:bump -- --next ${increment}.`,
     'Run npm run build.',
     'Run node --test tests/*.test.cjs.',
-    `Commit the version bump and refreshed dist output with message "chore: release ${nextTag}".`,
-    `Create the tag with git tag ${nextTag}.`,
-    `Push the commit and tag to origin/${manifest.stableBranch}.`,
+    `Commit the version bump with message "chore: release ${nextTag}"; dist output remains a local build artifact.`,
+    `Push the preparation branch and open a PR targeting ${manifest.stableBranch}; review the current head and merge only after approval.`,
+    `Switch to ${manifest.stableBranch}, fast-forward to the reviewed merge, and verify the version and commit before git tag ${nextTag}.`,
+    `Push only the release tag with git push origin ${nextTag}.`,
     `Create a GitHub Release titled ${nextTag} and publish the default source archives plus release notes.`,
   ];
 

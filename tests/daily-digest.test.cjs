@@ -132,6 +132,8 @@ test('runDailyMemoryDigest stores a structured digest from selected project obse
     assert.equal(result.digest.digest.summary, 'Daily digest service was implemented and verified.');
     assert.equal(result.selection.excluded.some((entry) => entry.id === lowSignal.id), true);
     assert.equal(llmCalls.length, 1);
+    assert.equal('max_tokens' in llmCalls[0], false);
+    assert.equal(llmCalls[0].thinking, undefined);
     assert.match(llmCalls[0].messages[0].content, /developer memory synthesis assistant/i);
     assert.match(llmCalls[0].messages[1].content, /Implemented daily digest service/);
     assert.doesNotMatch(llmCalls[0].messages[1].content, /Read README\.md file/);

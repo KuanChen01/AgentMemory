@@ -124,6 +124,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     llmApiKeyInput: document.getElementById("llmApiKeyInput"),
     llmHeadersInput: document.getElementById("llmHeadersInput"),
     llmDisableJsonModeInput: document.getElementById("llmDisableJsonModeInput"),
+    llmBudgetStatus: document.getElementById("llmBudgetStatus"),
+    llmOutputBudgetEnabledInput: document.getElementById("llmOutputBudgetEnabledInput"),
+    llmObservationMaxTokensInput: document.getElementById("llmObservationMaxTokensInput"),
+    llmDigestMaxTokensInput: document.getElementById("llmDigestMaxTokensInput"),
+    llmBudgetHint: document.getElementById("llmBudgetHint"),
     llmSaveStatus: document.getElementById("llmSaveStatus"),
     llmReloadButton: document.getElementById("llmReloadButton"),
     llmSaveButton: document.getElementById("llmSaveButton"),
@@ -574,13 +579,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.llmEnvStatus.textContent = config.exists
       ? t("llm.envExists")
       : t("llm.envMissing");
+    els.llmBudgetStatus.textContent = config.outputBudgetEnabled
+      ? t("llm.budgetActive", { observation: config.observationMaxTokens, digest: config.digestMaxTokens })
+      : t("llm.budgetOff");
 
     if (!state.isSavingLlm && !state.isTestingLlm) {
       els.llmApiUrlInput.value = config.apiUrl || "";
       els.llmModelInput.value = config.model || "";
       els.llmHeadersInput.value = config.headers || "";
       els.llmDisableJsonModeInput.checked = !!config.disableJsonMode;
+      els.llmOutputBudgetEnabledInput.checked = !!config.outputBudgetEnabled;
+      els.llmObservationMaxTokensInput.value = String(config.observationMaxTokens || 1024);
+      els.llmDigestMaxTokensInput.value = String(config.digestMaxTokens || 3072);
     }
+    renderLlmBudgetFields();
     els.llmSaveButton.disabled = state.isSavingLlm;
     els.llmReloadButton.disabled = state.isSavingLlm;
     els.llmTestButton.disabled = state.isSavingLlm || state.isTestingLlm;
@@ -589,12 +601,29 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
+  function renderLlmBudgetFields() {
+    const enabled = els.llmOutputBudgetEnabledInput.checked;
+    const busy = state.isSavingLlm || state.isTestingLlm;
+    els.llmOutputBudgetEnabledInput.disabled = busy;
+    els.llmObservationMaxTokensInput.disabled = !enabled || busy;
+    els.llmDigestMaxTokensInput.disabled = !enabled || busy;
+    els.llmBudgetHint.textContent = t(enabled ? "llm.budgetEnabledHint" : "llm.budgetDisabledHint");
+  }
+
   function getLlmFormPayload(includeApiKey) {
+    const outputBudgetEnabled = els.llmOutputBudgetEnabledInput.checked;
+    const budgetValue = (input, fallback) => {
+      const value = Number(input.value);
+      return outputBudgetEnabled || (Number.isInteger(value) && value >= 256 && value <= 8192) ? value : fallback;
+    };
     const payload = {
       apiUrl: els.llmApiUrlInput.value.trim(),
       disableJsonMode: !!els.llmDisableJsonModeInput.checked,
       headers: els.llmHeadersInput.value.trim(),
       model: els.llmModelInput.value.trim(),
+      outputBudgetEnabled,
+      observationMaxTokens: budgetValue(els.llmObservationMaxTokensInput, state.llmConfig?.observationMaxTokens || 1024),
+      digestMaxTokens: budgetValue(els.llmDigestMaxTokensInput, state.llmConfig?.digestMaxTokens || 3072),
     };
     const apiKey = els.llmApiKeyInput.value.trim();
     if (includeApiKey && apiKey) {
@@ -1655,6 +1684,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   async function saveLlmSettings() {
+    if (els.llmOutputBudgetEnabledInput.checked) {
+      for (const input of [els.llmObservationMaxTokensInput, els.llmDigestMaxTokensInput]) {
+        if (!input.reportValidity() || !input.value) {
+          els.llmSaveStatus.textContent = t("llm.invalidBudget");
+          input.focus();
+          return;
+        }
+      }
+    }
     const payloadToSave = getLlmFormPayload(true);
     state.isSavingLlm = true;
     renderLlmConfig();
@@ -2283,6 +2321,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.llmSaveButton.addEventListener("click", async () => {
       await saveLlmSettings();
     });
+    els.llmOutputBudgetEnabledInput.addEventListener("change", renderLlmBudgetFields);
     els.llmTestButton.addEventListener("click", async () => {
       await runLlmConnectionTest();
     });

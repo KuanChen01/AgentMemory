@@ -172,6 +172,10 @@ AgentMemory 现在把正式版本发布视为仓库内的一条固定维护流�
 
 维护者分步流程见：[docs/Release Process.md](./docs/Release%20Process.md)
 
+双机更新采用“分支上传 → PR 审核 → 合并 → 发布 → 各机独立升级”，共享代码、保留每台电脑的配置与记忆。详细步骤见 [Reviewed Updates](./docs/Reviewed%20Updates.zh.md)。已有 Worker/MCP 必须重启才能加载新代码，源码拉取和 bootstrap 不代表旧进程已更新。
+
+DeepSeek 官方端点的记忆处理使用非思考模式，并记录按机器区分的真实用量。LLM 设置面板提供可选的摘要输出预算，默认关闭；开启后可分别设置工具摘要和日摘要上限。说明见 [LLM Cost Controls](./docs/LLM%20Cost%20Controls.md)。
+
 ---
 
 ### 🧭 `/admin` 管理页
