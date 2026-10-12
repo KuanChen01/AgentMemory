@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import dotenv from 'dotenv';
 import { llmBudgetOptions, recordLlmUsage, readLlmBudgetConfig, MIN_OUTPUT_BUDGET, MAX_OUTPUT_BUDGET } from './llm-budget';
 
 export const DEFAULT_LLM_API_URL = 'https://api.deepseek.com/v1';
@@ -82,22 +83,31 @@ function readEnvText(envPath: string): string {
 }
 
 function parseEnvText(text: string): Record<string, string> {
-  const parsed: Record<string, string> = {};
+  const parsed = dotenv.parse(text);
+  const lastValues = new Map<string, string>();
   for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) continue;
-    const [, key, rawValue] = match;
-    let value = rawValue;
-    if (value.startsWith('"') && value.endsWith('"')) {
-      try { value = JSON.parse(value); } catch { value = value.slice(1, -1); }
-    } else if (value.startsWith("'") && value.endsWith("'")) {
-      value = value.slice(1, -1);
-    }
-    parsed[key] = value;
+    const match = line.trim().match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (match) lastValues.set(match[1], match[2]);
+  }
+  for (const [key, rawValue] of lastValues) {
+    if (!rawValue.startsWith('"') || !rawValue.endsWith('"')) continue;
+    try { parsed[key] = JSON.parse(rawValue); } catch { /* Retain dotenv syntax for non-JSON quoting. */ }
   }
   return parsed;
+}
+
+// Read the JSON-quoted values written by this module the same way at startup
+// and in the admin API. Preserve explicit environment overrides; also repair
+// values inherited from a launcher which already loaded this file via dotenv.
+export function loadAgentMemoryEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const text = readEnvText(getAgentMemoryEnvPath(env));
+  const original = dotenv.parse(text);
+  const parsed = parseEnvText(text);
+  for (const [key, value] of Object.entries(parsed)) {
+    if (env[key] === undefined || (env[key] === original[key] && value !== original[key])) {
+      env[key] = value;
+    }
+  }
 }
 
 function formatEnvValue(value: string): string {

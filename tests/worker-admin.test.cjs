@@ -293,6 +293,7 @@ async function startMockDigestLlmServer() {
 }
 
 async function stopWorker(child, port) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
   try {
     await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
   } catch (error) {
@@ -314,6 +315,13 @@ async function stopWorker(child, port) {
 function cleanupDb(dbPath) {
   const runtimeDir = `${dbPath}.runtime`;
   if (fs.existsSync(runtimeDir)) {
+    const relative = path.relative(os.tmpdir(), path.resolve(runtimeDir));
+    assert.ok(!relative.startsWith('..') && !path.isAbsolute(relative) && /^agentmemory-worker-test-[\w-]+\.db\.runtime$/.test(relative));
+    const logsDir = path.join(runtimeDir, 'logs');
+    if (fs.existsSync(logsDir)) {
+      for (const name of fs.readdirSync(logsDir)) fs.unlinkSync(path.join(logsDir, name));
+      fs.rmdirSync(logsDir);
+    }
     for (const name of ['worker.pid', 'worker-status.json']) {
       fs.rmSync(path.join(runtimeDir, name), { force: true });
     }

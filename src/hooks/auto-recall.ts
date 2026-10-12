@@ -1,12 +1,12 @@
 import { createHash } from 'crypto';
-import dotenv from 'dotenv';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fetchAgentMemoryWorker } from './worker-client';
 import { llmBudgetOptions, recordLlmUsage } from '../services/llm-budget';
+import { loadAgentMemoryEnv } from '../services/llm-config';
 
-dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
+loadAgentMemoryEnv();
 
 const PORT = process.env.AGENTMEM_PORT || 38888;
 const MIN_SCORE = 0.25;

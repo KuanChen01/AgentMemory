@@ -35,6 +35,9 @@ test('raw filtering retains failures, discoveries and modifications but skips ho
   assert.equal(skipRawToolLog({ ...log, tool_name: 'clock.sleep' }), 'housekeeping event');
   assert.equal(skipRawToolLog({ ...log, tool_name: 'mcp__agentmem__record_memory' }), 'AgentMemory self-recording');
   assert.equal(skipRawToolLog({ ...log, output: '', success: false }), null);
+  assert.equal(skipRawToolLog({ ...log, input: undefined, output: undefined }), 'empty successful event');
+  assert.equal(skipRawToolLog({ ...log, input: undefined, output: undefined, success: false }), null);
+  assert.equal(skipRawToolLog({ ...log, input: null, output: null }), 'empty successful event');
 });
 
 test('bounded logs preserve their final verification result as well as command context', () => {

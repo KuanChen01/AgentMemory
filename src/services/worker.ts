@@ -1,5 +1,4 @@
 import express, { Request, Response } from 'express';
-import dotenv from 'dotenv';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -40,7 +39,7 @@ import {
   WRITE_DISABLED_MESSAGE,
 } from './runtime-policy';
 import {
-  getAgentMemoryEnvPath,
+  loadAgentMemoryEnv,
   readLlmConfig,
   saveLlmConfig,
   testLlmConnection,
@@ -49,7 +48,7 @@ import { buildReleaseManifest } from './release';
 import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger, llmBudgetOptions, recordLlmUsage } from './llm-budget';
-import { skipRawToolLog } from './tool-log-policy';
+import { normalizeToolLogText, skipRawToolLog } from './tool-log-policy';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -57,7 +56,7 @@ import {
 } from './daily-digest-scheduler';
 
 // Load environment variables
-dotenv.config({ path: getAgentMemoryEnvPath() });
+loadAgentMemoryEnv();
 
 const app = express();
 app.use(express.json({ limit: '10mb' })); // Support large logs
@@ -996,38 +995,43 @@ app.post('/sessions', async (req, res) => {
 
 // 3. Ingest Hook Logs (Tool Execution Event)
 app.post('/tools', async (req, res) => {
-  const { session_id, project_path, agent_id, tool_name, input, output, success } = req.body;
+  try {
+    const { session_id, project_path, agent_id, tool_name, input, output, success } = req.body;
 
-  if (!session_id || !project_path || !agent_id || !tool_name) {
-    return res.status(400).json({ error: 'Missing required tool payload fields' });
+    if ([session_id, project_path, agent_id, tool_name].some(value => typeof value !== 'string' || !value.trim())) {
+      return res.status(400).json({ error: 'Missing required tool payload fields' });
+    }
+
+    if (!(await isWriteEnabled())) {
+      return sendWriteDisabled(res);
+    }
+
+    const logEntry: QueuedToolLog = {
+      id: uuidv4(),
+      session_id,
+      project_path: normalizeProjectPath(project_path),
+      agent_id,
+      tool_name,
+      input: normalizeToolLogText(input),
+      output: normalizeToolLogText(output),
+      success: !!success,
+      timestamp: Date.now()
+    };
+
+    const skipReason = skipRawToolLog(logEntry);
+    if (skipReason) {
+      return res.json({ success: true, skipped: true, reason: skipReason, queueLength: logQueue.length });
+    }
+
+    logQueue.push(logEntry);
+    res.json({ success: true, queueLength: logQueue.length });
+
+    // Trigger queue processing asynchronously
+    void processQueue();
+  } catch (err: any) {
+    console.error('Error ingesting tool log:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Unable to ingest tool log.' });
   }
-
-  if (!(await isWriteEnabled())) {
-    return sendWriteDisabled(res);
-  }
-
-  const logEntry: QueuedToolLog = {
-    id: uuidv4(),
-    session_id,
-    project_path: normalizeProjectPath(project_path),
-    agent_id,
-    tool_name,
-    input: typeof input === 'string' ? input : JSON.stringify(input),
-    output: typeof output === 'string' ? output : JSON.stringify(output),
-    success: !!success,
-    timestamp: Date.now()
-  };
-
-  const skipReason = skipRawToolLog(logEntry);
-  if (skipReason) {
-    return res.json({ success: true, skipped: true, reason: skipReason, queueLength: logQueue.length });
-  }
-
-  logQueue.push(logEntry);
-  res.json({ success: true, queueLength: logQueue.length });
-
-  // Trigger queue processing asynchronously
-  processQueue();
 });
 
 // 4. Force Session Summary on Close
