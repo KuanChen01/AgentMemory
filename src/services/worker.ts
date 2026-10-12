@@ -1250,7 +1250,7 @@ JSON Schema:
 }`;
 
   const inputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_INPUT_MAX_CHARS, 10000, 1000, 30000);
-  const outputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_MAX_CHARS, 16000, 1000, 60000);
+  const outputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_MAX_CHARS, 20000, 1000, 60000);
   const incompleteSource = log.input.length > inputLimit || log.output.length > outputLimit
     || log.input.includes('[... truncated by AgentMemory ...]') || log.output.includes('[... truncated by AgentMemory ...]');
   const userPrompt = `Session purpose: ${await dbManager.getSessionPurpose(log.session_id)}
@@ -1260,10 +1260,10 @@ Project Location: ${log.project_path}
 Agent: ${log.agent_id}
 
 [TOOL INPUT]
-${boundToolText(log.input, boundedEnvInteger(process.env.AGENTMEM_TOOL_INPUT_MAX_CHARS, 10000, 1000, 30000))}
+${boundToolText(log.input, inputLimit)}
 
 [TOOL OUTPUT]
-${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_MAX_CHARS, 20000, 1000, 60000))}
+${boundToolText(log.output, outputLimit)}
 `;
 
   try {
@@ -1308,7 +1308,7 @@ ${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_M
       parsedObs.skip = false;
       parsedObs.kind = 'context';
       parsedObs.title ||= `Incomplete source for ${log.tool_name}`;
-      parsedObs.narrative += '\nSource was abbreviated before synthesis; unshown content remains unknown. Inspect the original source before resolving value.';
+      parsedObs.narrative += '\nSource may have been abbreviated before synthesis; unshown content remains unknown. Inspect the original source before resolving value.';
     }
     if (parsedObs.skip) {
       console.log(`[Memory] Skipped routine tool event ${log.id} before embedding/review`);
