@@ -190,6 +190,8 @@ async function startMockObservationSummaryServer(observationPayload) {
       });
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({
+        model: 'mock-model',
+        usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140, prompt_cache_hit_tokens: 32, prompt_cache_miss_tokens: 68 },
         choices: [
           {
             message: {
@@ -291,6 +293,7 @@ async function startMockDigestLlmServer() {
 }
 
 async function stopWorker(child, port) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
   try {
     await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
   } catch (error) {
@@ -312,6 +315,13 @@ async function stopWorker(child, port) {
 function cleanupDb(dbPath) {
   const runtimeDir = `${dbPath}.runtime`;
   if (fs.existsSync(runtimeDir)) {
+    const relative = path.relative(os.tmpdir(), path.resolve(runtimeDir));
+    assert.ok(!relative.startsWith('..') && !path.isAbsolute(relative) && /^agentmemory-worker-test-[\w-]+\.db\.runtime$/.test(relative));
+    const logsDir = path.join(runtimeDir, 'logs');
+    if (fs.existsSync(logsDir)) {
+      for (const name of fs.readdirSync(logsDir)) fs.unlinkSync(path.join(logsDir, name));
+      fs.rmdirSync(logsDir);
+    }
     for (const name of ['worker.pid', 'worker-status.json']) {
       fs.rmSync(path.join(runtimeDir, name), { force: true });
     }
@@ -689,6 +699,7 @@ test('worker admin LLM settings save model and test local connection', async () 
     assert.equal(configPayload.config.hasApiKey, true);
     assert.equal(configPayload.config.apiKeyMasked, 'secr...1234');
     assert.equal(configPayload.config.model, 'deepseek-chat');
+    assert.equal(configPayload.config.outputBudgetEnabled, false);
     assert.doesNotMatch(JSON.stringify(configPayload), /secret-token-1234/);
 
     const saveResponse = await fetch(`http://127.0.0.1:${port}/admin/api/llm-config`, {
@@ -699,6 +710,9 @@ test('worker admin LLM settings save model and test local connection', async () 
         disableJsonMode: true,
         headers: '{"X-Test-Header":"agentmemory"}',
         model: 'mock-chat-model',
+        outputBudgetEnabled: true,
+        observationMaxTokens: 1536,
+        digestMaxTokens: 4096,
       }),
     });
     assert.equal(saveResponse.status, 200);
@@ -708,6 +722,9 @@ test('worker admin LLM settings save model and test local connection', async () 
     assert.equal(savePayload.config.model, 'mock-chat-model');
     assert.equal(savePayload.config.disableJsonMode, true);
     assert.equal(savePayload.config.hasApiKey, true);
+    assert.equal(savePayload.config.outputBudgetEnabled, true);
+    assert.equal(savePayload.config.observationMaxTokens, 1536);
+    assert.equal(savePayload.config.digestMaxTokens, 4096);
 
     const envText = fs.readFileSync(envPath, 'utf8');
     assert.match(envText, /AGENTMEM_LLM_API_KEY=secret-token-1234/);
@@ -732,6 +749,21 @@ test('worker admin LLM settings save model and test local connection', async () 
     assert.equal(mockLlm.requests.at(-1).url, '/v1/chat/completions');
     assert.equal(mockLlm.requests.at(-1).body.model, 'mock-chat-model');
     assert.equal(mockLlm.requests.at(-1).headers['x-test-header'], 'agentmemory');
+    const settingsUrl = `http://127.0.0.1:${port}/admin/api/llm-config`;
+    const postSettings = (body) => fetch(settingsUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const invalidResponse = await postSettings({ observationMaxTokens: 0 });
+    assert.equal(invalidResponse.ok, false);
+    assert.equal((await (await fetch(settingsUrl)).json()).config.observationMaxTokens, 1536);
+    const unrelatedSave = await postSettings({ model: 'other-model', disableJsonMode: true });
+    const preserved = (await unrelatedSave.json()).config;
+    assert.equal(preserved.outputBudgetEnabled, true);
+    assert.equal(preserved.digestMaxTokens, 4096);
+    const disabledResponse = await postSettings({ outputBudgetEnabled: false, disableJsonMode: true });
+    const disabledConfig = (await disabledResponse.json()).config;
+    assert.equal(disabledConfig.outputBudgetEnabled, false);
+    assert.equal(disabledConfig.observationMaxTokens, 1536);
+    assert.equal(disabledConfig.digestMaxTokens, 4096);
+    assert.match(fs.readFileSync(envPath, 'utf8'), /AGENTMEM_OUTPUT_BUDGET_ENABLED=false/);
   } finally {
     await stopWorker(child, port);
     await mockLlm.close();
@@ -1012,6 +1044,13 @@ test('worker tool ingestion creates automatic post-task reviews visible in admin
   });
 
   try {
+    const ignored = await fetch(`http://127.0.0.1:${port}/tools`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: randomUUID(), project_path: 'E:/Repo/A', agent_id: 'codex',
+        tool_name: 'clock.sleep', input: '1000', output: 'elapsed 1000', success: true }),
+    });
+    assert.equal((await ignored.json()).skipped, true);
+    assert.equal(mockObservationLlm.requests.length, 0);
     const toolResponse = await fetch(`http://127.0.0.1:${port}/tools`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1041,6 +1080,36 @@ test('worker tool ingestion creates automatic post-task reviews visible in admin
     assert.equal(reviewsPayload.reviews[0].temporal_diagnostics.future_protection, true);
     assert.ok(reviewsPayload.reviews[0].bounded_context.char_budget_used > 0);
     assert.ok(mockObservationLlm.requests.some((request) => request.url === '/v1/chat/completions'));
+    assert.equal('max_tokens' in mockObservationLlm.requests[0].body, false);
+    assert.equal(mockObservationLlm.requests[0].body.thinking, undefined);
+    const usageDir = path.join(`${dbPath}.runtime`, 'logs');
+    const usageFile = fs.readdirSync(usageDir).find((file) => file.startsWith('llm-usage-'));
+    const usage = JSON.parse(fs.readFileSync(path.join(usageDir, usageFile), 'utf8').trim());
+    assert.equal(usage.task, 'observation');
+    assert.equal(usage.completion_tokens, 40);
+    assert.equal(usage.cache_hit_tokens, 32);
+    fs.unlinkSync(path.join(usageDir, usageFile));
+    fs.rmdirSync(usageDir);
+
+    const sendTool = () => fetch(`http://127.0.0.1:${port}/tools`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: randomUUID(), project_path: 'E:/Repo/A', agent_id: 'codex',
+        tool_name: 'shell', input: 'npm run build', output: 'Build verified successfully.', success: true }),
+    });
+    const saveBudget = (enabled) => fetch(`http://127.0.0.1:${port}/admin/api/llm-config`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputBudgetEnabled: enabled, observationMaxTokens: 1536, digestMaxTokens: 4096 }),
+    });
+    assert.equal((await saveBudget(true)).ok, true);
+    await sendTool();
+    await waitForPostTaskReviews(port, 'E:/Repo/A', 2);
+    assert.equal(mockObservationLlm.requests.at(-1).body.max_tokens, 1536);
+    assert.equal((await saveBudget(false)).ok, true);
+    await sendTool();
+    await waitForPostTaskReviews(port, 'E:/Repo/A', 3);
+    assert.equal('max_tokens' in mockObservationLlm.requests.at(-1).body, false);
+    for (const file of fs.readdirSync(usageDir)) fs.unlinkSync(path.join(usageDir, file));
+    fs.rmdirSync(usageDir);
 
     const overviewResponse = await fetch(`http://127.0.0.1:${port}/admin/api/overview`);
     const overviewPayload = await overviewResponse.json();

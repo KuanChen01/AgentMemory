@@ -1,11 +1,12 @@
 import { createHash } from 'crypto';
-import dotenv from 'dotenv';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fetchAgentMemoryWorker } from './worker-client';
+import { llmBudgetOptions, recordLlmUsage } from '../services/llm-budget';
+import { loadAgentMemoryEnv } from '../services/llm-config';
 
-dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
+loadAgentMemoryEnv();
 
 const PORT = process.env.AGENTMEM_PORT || 38888;
 const MIN_SCORE = 0.25;
@@ -150,14 +151,16 @@ async function rewriteChineseQuery(prompt: string, timeoutMs: number): Promise<s
   const key = process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
   if (!key || timeoutMs < 300) return '';
   const baseUrl = (process.env.AGENTMEM_LLM_API_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, '');
+  const model = process.env.AGENTMEM_LLM_MODEL || 'deepseek-chat';
+  const startedAt = Date.now();
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({
-        model: process.env.AGENTMEM_LLM_MODEL || 'deepseek-chat',
+        model,
         temperature: 0,
-        max_tokens: 80,
+        ...llmBudgetOptions(baseUrl, model, 'query_rewrite'),
         messages: [
           { role: 'system', content: 'Convert this task into concise English search terms for coding activity memory. Output only terms, no explanation.' },
           { role: 'user', content: prompt.slice(0, 1000) },
@@ -167,6 +170,7 @@ async function rewriteChineseQuery(prompt: string, timeoutMs: number): Promise<s
     });
     if (!response.ok) return '';
     const data: any = await response.json();
+    recordLlmUsage('query_rewrite', data, Date.now() - startedAt);
     return String(data?.choices?.[0]?.message?.content || '').trim().slice(0, 300);
   } catch { return ''; }
 }

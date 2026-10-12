@@ -127,6 +127,8 @@ test('agentmem release-plan --next minor prints the next tag and release checkli
   assert.match(result.stdout, /npm run build/);
   assert.match(result.stdout, /node --test tests\/\*\.test\.cjs/);
   assert.match(result.stdout, /GitHub Release/);
+  assert.match(result.stdout, /open a PR targeting master/);
+  assert.match(result.stdout, /review the current head and merge only after approval/);
 });
 
 test('agentmem version prints the current product version', async () => {

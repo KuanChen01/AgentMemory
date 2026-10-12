@@ -1,0 +1,123 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const http = require('node:http');
+const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+
+async function fixture(run) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-review-'));
+  const envPath = path.join(root, '.env');
+  const requests = [];
+  const llm = http.createServer(async (req, res) => {
+    let text = ''; for await (const chunk of req) text += chunk;
+    requests.push({ headers: req.headers, body: JSON.parse(text) });
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      title: 'Verified tool event recovery', narrative: 'Verified that a subsequent normal tool event was processed.',
+      facts: ['Verified successful processing'], concepts: ['regression'], files_read: [], files_modified: [],
+    }) } }] }));
+  });
+  await new Promise(resolve => llm.listen(0, '127.0.0.1', resolve));
+  fs.writeFileSync(envPath, `AGENTMEM_LLM_API_URL=http://127.0.0.1:${llm.address().port}/v1\nAGENTMEM_LLM_API_KEY=fixture-only\nAGENTMEM_LLM_MODEL=mock\n`);
+  let worker;
+  let port;
+  const start = async (overrides = {}) => {
+    const env = { ...process.env, AGENTMEM_PORT: String(workerPort), AGENTMEM_ENV_PATH: envPath,
+      AGENTMEM_RUNTIME_DIR: root, AGENTMEM_DB_PATH: path.join(root, 'test.db'),
+      AGENTMEM_DAILY_DIGEST_DISABLED: 'true', EMBEDDING_API_URL: '', AGENTMEM_HOOK_AUTOSTART: 'false' };
+    for (const key of Object.keys(env)) if (key.startsWith('AGENTMEM_LLM_') || key.startsWith('DEEPSEEK_')) delete env[key];
+    Object.assign(env, overrides);
+    worker = spawn(process.execPath, ['dist/services/worker.js'], {
+      cwd: path.resolve(__dirname, '..'), stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(Error('Worker startup timed out')), 8000);
+      worker.once('exit', code => { clearTimeout(timeout); reject(Error(`Worker exited ${code}`)); });
+      worker.stdout.on('data', chunk => { if (chunk.toString().includes('worker service running')) { clearTimeout(timeout); resolve(); } });
+      worker.stderr.on('data', () => {});
+    });
+    port = JSON.parse(fs.readFileSync(path.join(root, 'worker-status.json'))).port;
+  };
+  const reservation = http.createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const workerPort = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const stop = async () => {
+    if (!worker || worker.exitCode !== null || worker.signalCode !== null) return;
+    const exited = new Promise(resolve => worker.once('exit', resolve));
+    worker.kill(); await exited;
+  };
+  const post = (route, body) => fetch(`http://127.0.0.1:${port}${route}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000),
+  });
+  const get = route => fetch(`http://127.0.0.1:${port}${route}`, { signal: AbortSignal.timeout(3000) });
+  const settled = async (expectedRequests) => {
+    for (let i = 0; i < 60; i++) {
+      const overview = await (await get('/admin/api/overview')).json();
+      if (requests.length >= expectedRequests && !overview.queue.processing && overview.queue.pending === 0) return overview;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw Error(`Queue failed to settle; LLM requests ${requests.length}/${expectedRequests}`);
+  };
+  try { await start(); await run({ start, stop, post, get, settled, requests, envPath, worker: () => worker }); }
+  finally {
+    await stop(); await new Promise(resolve => llm.close(resolve));
+    const resolved = path.resolve(root);
+    assert.ok(path.dirname(resolved) === path.resolve(os.tmpdir()) && path.basename(resolved).startsWith('agentmem-review-'));
+    fs.rmSync(resolved, { recursive: true, force: true });
+  }
+}
+
+test('tools tolerates omitted text for success/failure and remains able to write normal events', async () => {
+  await fixture(async ({ post, get, settled, requests, worker }) => {
+    const base = { session_id: 'fixture', project_path: 'E:/Review/Compare', agent_id: 'fixture', tool_name: 'exec_command' };
+    for (const success of [true, false]) {
+      for (const texts of [{}, { input: 'run verification' }, { output: 'verification passed' }]) {
+        const count = requests.length;
+        const response = await post('/tools', { ...base, ...texts, success });
+        assert.equal(response.status, 200);
+        const accepted = await response.json();
+        assert.equal(accepted.success, true);
+        await settled(count + (accepted.skipped ? 0 : 1));
+        assert.equal(worker().exitCode, null);
+      }
+    }
+    const bad = await post('/tools', { ...base, tool_name: 123, success: true });
+    assert.equal(bad.status, 400);
+    const before = (await (await get('/admin/api/overview')).json()).stats.observations;
+    const count = requests.length;
+    await post('/tools', { ...base, session_id: randomUUID(), input: 'verify final write', output: 'verification passed', success: true });
+    const after = await settled(count + 1);
+    assert.equal(after.stats.observations, before + 1);
+    assert.equal(worker().exitCode, null);
+  });
+});
+
+test('saved custom headers reach real mock summary requests after worker restart', async () => {
+  await fixture(async ({ post, get, stop, start, settled, requests, envPath }) => {
+    const headers = JSON.stringify({ 'X-Test-Header': 'review "quoted" \\ value', 'X-Second': 'two' });
+    assert.equal((await post('/admin/api/llm-config', { headers, outputBudgetEnabled: false })).status, 200);
+    await stop(); await start();
+    const config = (await (await get('/admin/api/llm-config')).json()).config;
+    assert.equal(config.headers, headers);
+    assert.equal(config.outputBudgetEnabled, false);
+    await post('/tools', { session_id: 'restart', project_path: 'E:/Review/Headers', agent_id: 'fixture',
+      tool_name: 'exec_command', input: 'verify header persistence', output: 'verification passed', success: true });
+    const overview = await settled(1);
+    assert.equal(requests[0].headers['x-test-header'], 'review "quoted" \\ value');
+    assert.equal(requests[0].headers['x-second'], 'two');
+    assert.equal('max_tokens' in requests[0].body, false);
+    assert.equal(overview.stats.observations, 1);
+    await stop();
+    const inherited = require('dotenv').parse(fs.readFileSync(envPath, 'utf8'));
+    await start({ AGENTMEM_LLM_HEADERS: inherited.AGENTMEM_LLM_HEADERS });
+    await post('/tools', { session_id: 'launcher-restart', project_path: 'E:/Review/Headers', agent_id: 'fixture',
+      tool_name: 'exec_command', input: 'verify inherited headers', output: 'verification passed', success: true });
+    await settled(2);
+    assert.equal(requests[1].headers['x-test-header'], 'review "quoted" \\ value');
+  });
+});

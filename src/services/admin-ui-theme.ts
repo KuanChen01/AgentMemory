@@ -836,6 +836,25 @@ export const ADMIN_UI_THEME = `
     accent-color: var(--accent);
   }
 
+  .budgetSettings {
+    border: 0;
+    padding: 10px 0 0;
+    margin: 6px 0 0;
+    min-width: 0;
+  }
+
+  .budgetFields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: 12px;
+    margin: 12px 0;
+  }
+
+  .budgetFields .textInput:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+  }
+
   .llmControlCard,
   .llmTestCard {
     min-width: 0;

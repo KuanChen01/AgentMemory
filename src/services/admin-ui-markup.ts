@@ -427,6 +427,7 @@ export function renderAdminWorkbenchMarkup(): string {
               <div class="metricBadge"><strong data-i18n="llm.endpoint">Endpoint</strong> <span id="llmCurrentEndpoint">-</span></div>
               <div class="metricBadge"><strong data-i18n="llm.apiKey">API Key</strong> <span id="llmKeyStatus">-</span></div>
               <div class="metricBadge"><strong data-i18n="llm.envFile">Env File</strong> <span id="llmEnvStatus">-</span></div>
+              <div class="metricBadge"><strong data-i18n="llm.outputBudget">Output Budget</strong> <span id="llmBudgetStatus">-</span></div>
             </div>
 
             <div class="stack" style="margin-top: 18px;">
@@ -458,6 +459,25 @@ export function renderAdminWorkbenchMarkup(): string {
                 <input id="llmDisableJsonModeInput" type="checkbox" />
                 <span data-i18n="llm.disableJsonMode">Disable JSON mode for providers that reject response_format</span>
               </label>
+              <fieldset class="budgetSettings">
+                <legend class="fieldLabel" data-i18n="llm.outputBudget">Output Budget</legend>
+                <label class="checkRow">
+                  <input id="llmOutputBudgetEnabledInput" type="checkbox" aria-describedby="llmBudgetHint" />
+                  <span data-i18n="llm.enableOutputBudget">Enable custom summary output limits</span>
+                </label>
+                <p id="llmBudgetHint" class="finePrint" aria-live="polite"></p>
+                <div class="budgetFields">
+                  <label>
+                    <span class="fieldLabel" data-i18n="llm.observationMaxTokens">Tool summary limit (tokens)</span>
+                    <input id="llmObservationMaxTokensInput" class="textInput" type="number" min="256" max="8192" step="1" value="1024" disabled />
+                  </label>
+                  <label>
+                    <span class="fieldLabel" data-i18n="llm.digestMaxTokens">Daily digest limit (tokens)</span>
+                    <input id="llmDigestMaxTokensInput" class="textInput" type="number" min="256" max="8192" step="1" value="3072" disabled />
+                  </label>
+                </div>
+                <p class="finePrint" data-i18n="llm.budgetSaveHint">Save LLM Settings to apply. Turning limits off preserves these values for later.</p>
+              </fieldset>
             </div>
 
             <div class="toolbarFooter">

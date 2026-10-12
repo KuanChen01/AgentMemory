@@ -8,6 +8,7 @@ import {
   DigestObservationSelection,
   selectDigestObservations,
 } from './memory-policy';
+import { llmBudgetOptions, recordLlmUsage } from './llm-budget';
 
 export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest-v1';
 const DEFAULT_DIGEST_TIME_ZONE = 'Asia/Shanghai';
@@ -30,6 +31,8 @@ export interface DailyDigestChatRequest {
   model: string;
   response_format?: { type: 'json_object' };
   temperature: number;
+  max_tokens?: number;
+  thinking?: { type: 'disabled' };
 }
 
 export interface RunDailyMemoryDigestInput {
@@ -171,6 +174,7 @@ function buildDailyDigestChatRequest(
         content: `You are a developer memory synthesis assistant.
 Create one concise daily memory digest from selected AgentMemory observations.
 Return valid JSON only. Do not auto-promote facts into state; list them as candidates.
+Keep the summary under 150 words and each list to at most 5 concise entries.
 Schema:
 {
   "summary": "string",
@@ -201,6 +205,7 @@ Schema:
     ],
     model: llmConfig.model,
     temperature: 0.1,
+    ...llmBudgetOptions(llmConfig.apiUrl, llmConfig.model, 'daily_digest'),
   };
 
   if (!llmConfig.disableJsonMode) {
@@ -222,10 +227,12 @@ async function callDailyDigestLlm(
     headers.Authorization = `Bearer ${llmConfig.apiKey}`;
   }
 
+  const startedAt = Date.now();
   const response = await fetch(`${llmConfig.apiUrl.replace(/\/+$/, '')}/chat/completions`, {
     body: JSON.stringify(request),
     headers,
     method: 'POST',
+    signal: AbortSignal.timeout(60000),
   });
   const text = await response.text();
   if (!response.ok) {
@@ -233,6 +240,8 @@ async function callDailyDigestLlm(
   }
 
   const payload = JSON.parse(text);
+  recordLlmUsage('daily_digest', payload, Date.now() - startedAt);
+  if (payload.choices?.[0]?.finish_reason === 'length') throw new Error('Daily digest exceeded output token budget');
   const content = payload.choices?.[0]?.message?.content;
   if (!content) {
     throw new Error('Empty response from LLM API');

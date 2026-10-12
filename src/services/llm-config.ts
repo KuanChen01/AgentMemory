@@ -1,6 +1,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import dotenv from 'dotenv';
+import { llmBudgetOptions, recordLlmUsage, readLlmBudgetConfig, MIN_OUTPUT_BUDGET, MAX_OUTPUT_BUDGET } from './llm-budget';
 
 export const DEFAULT_LLM_API_URL = 'https://api.deepseek.com/v1';
 export const DEFAULT_LLM_MODEL = 'deepseek-chat';
@@ -16,6 +18,9 @@ export interface LlmConfigSnapshot {
   headers: string;
   isLocalEndpoint: boolean;
   model: string;
+  outputBudgetEnabled: boolean;
+  observationMaxTokens: number;
+  digestMaxTokens: number;
 }
 
 export interface LlmConfigUpdate {
@@ -24,6 +29,9 @@ export interface LlmConfigUpdate {
   disableJsonMode?: boolean;
   headers?: string;
   model?: string;
+  outputBudgetEnabled?: boolean;
+  observationMaxTokens?: number;
+  digestMaxTokens?: number;
 }
 
 export interface LlmConnectionTestResult {
@@ -75,16 +83,31 @@ function readEnvText(envPath: string): string {
 }
 
 function parseEnvText(text: string): Record<string, string> {
-  const parsed: Record<string, string> = {};
+  const parsed = dotenv.parse(text);
+  const lastValues = new Map<string, string>();
   for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) continue;
-    const [, key, rawValue] = match;
-    parsed[key] = rawValue.replace(/^"(.*)"$/, '$1');
+    const match = line.trim().match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (match) lastValues.set(match[1], match[2]);
+  }
+  for (const [key, rawValue] of lastValues) {
+    if (!rawValue.startsWith('"') || !rawValue.endsWith('"')) continue;
+    try { parsed[key] = JSON.parse(rawValue); } catch { /* Retain dotenv syntax for non-JSON quoting. */ }
   }
   return parsed;
+}
+
+// Read the JSON-quoted values written by this module the same way at startup
+// and in the admin API. Preserve explicit environment overrides; also repair
+// values inherited from a launcher which already loaded this file via dotenv.
+export function loadAgentMemoryEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const text = readEnvText(getAgentMemoryEnvPath(env));
+  const original = dotenv.parse(text);
+  const parsed = parseEnvText(text);
+  for (const [key, value] of Object.entries(parsed)) {
+    if (env[key] === undefined || (env[key] === original[key] && value !== original[key])) {
+      env[key] = value;
+    }
+  }
 }
 
 function formatEnvValue(value: string): string {
@@ -113,13 +136,16 @@ function upsertEnvText(text: string, updates: Record<string, string | undefined>
   return `${nextLines.join('\n').replace(/\n*$/, '')}\n`;
 }
 
-function applyConfigToProcessEnv(snapshot: Pick<LlmConfigSnapshot, 'apiUrl' | 'disableJsonMode' | 'headers' | 'model'> & { apiKey?: string }) {
+function applyConfigToProcessEnv(snapshot: Pick<LlmConfigSnapshot, 'apiUrl' | 'disableJsonMode' | 'headers' | 'model' | 'outputBudgetEnabled' | 'observationMaxTokens' | 'digestMaxTokens'> & { apiKey?: string }) {
   if (snapshot.apiKey !== undefined) {
     process.env.AGENTMEM_LLM_API_KEY = snapshot.apiKey;
   }
   process.env.AGENTMEM_LLM_API_URL = snapshot.apiUrl;
   process.env.AGENTMEM_LLM_MODEL = snapshot.model;
   process.env.AGENTMEM_LLM_DISABLE_JSON_MODE = snapshot.disableJsonMode ? 'true' : 'false';
+  process.env.AGENTMEM_OUTPUT_BUDGET_ENABLED = String(snapshot.outputBudgetEnabled);
+  process.env.AGENTMEM_OBSERVATION_MAX_TOKENS = String(snapshot.observationMaxTokens);
+  process.env.AGENTMEM_DIGEST_MAX_TOKENS = String(snapshot.digestMaxTokens);
   if (snapshot.headers) {
     process.env.AGENTMEM_LLM_HEADERS = snapshot.headers;
   } else {
@@ -149,6 +175,7 @@ export function readLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfigSn
     headers,
     isLocalEndpoint: isLocalEndpoint(apiUrl),
     model,
+    ...readLlmBudgetConfig({ ...env, ...parsed }),
   };
 }
 
@@ -159,7 +186,23 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
   const nextApiUrl = normalizeApiUrl(update.apiUrl ?? current.AGENTMEM_LLM_API_URL ?? process.env.AGENTMEM_LLM_API_URL);
   const nextModel = normalizeModel(update.model ?? current.AGENTMEM_LLM_MODEL ?? process.env.AGENTMEM_LLM_MODEL);
   const nextHeaders = normalizeHeaders(update.headers ?? current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS);
-  const nextDisableJsonMode = Boolean(update.disableJsonMode);
+  const nextDisableJsonMode = update.disableJsonMode ?? String(current.AGENTMEM_LLM_DISABLE_JSON_MODE ?? process.env.AGENTMEM_LLM_DISABLE_JSON_MODE ?? 'false').toLowerCase() === 'true';
+  const currentBudget = readLlmBudgetConfig({ ...process.env, ...current });
+  if (update.outputBudgetEnabled !== undefined && typeof update.outputBudgetEnabled !== 'boolean') {
+    throw new Error('outputBudgetEnabled must be a boolean.');
+  }
+  const validateBudget = (value: number | undefined, fallback: number, label: string) => {
+    if (value === undefined) return fallback;
+    if (!Number.isInteger(value) || value < MIN_OUTPUT_BUDGET || value > MAX_OUTPUT_BUDGET) {
+      throw new Error(`${label} must be an integer from ${MIN_OUTPUT_BUDGET} to ${MAX_OUTPUT_BUDGET}.`);
+    }
+    return value;
+  };
+  const nextBudget = {
+    outputBudgetEnabled: update.outputBudgetEnabled ?? currentBudget.outputBudgetEnabled,
+    observationMaxTokens: validateBudget(update.observationMaxTokens, currentBudget.observationMaxTokens, 'observationMaxTokens'),
+    digestMaxTokens: validateBudget(update.digestMaxTokens, currentBudget.digestMaxTokens, 'digestMaxTokens'),
+  };
   const nextApiKey = typeof update.apiKey === 'string' && update.apiKey.trim()
     ? update.apiKey.trim()
     : current.AGENTMEM_LLM_API_KEY || process.env.AGENTMEM_LLM_API_KEY || '';
@@ -169,6 +212,9 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
     AGENTMEM_LLM_API_URL: nextApiUrl,
     AGENTMEM_LLM_MODEL: nextModel,
     AGENTMEM_LLM_DISABLE_JSON_MODE: nextDisableJsonMode ? 'true' : 'false',
+    AGENTMEM_OUTPUT_BUDGET_ENABLED: String(nextBudget.outputBudgetEnabled),
+    AGENTMEM_OBSERVATION_MAX_TOKENS: String(nextBudget.observationMaxTokens),
+    AGENTMEM_DIGEST_MAX_TOKENS: String(nextBudget.digestMaxTokens),
   };
   if (nextApiKey) {
     updates.AGENTMEM_LLM_API_KEY = nextApiKey;
@@ -183,6 +229,7 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
     disableJsonMode: nextDisableJsonMode,
     headers: nextHeaders,
     model: nextModel,
+    ...nextBudget,
   });
 
   return readLlmConfig();
@@ -240,7 +287,7 @@ export async function testLlmConnection(
 
     const response = await fetch(requestUrl, {
       body: JSON.stringify({
-        max_tokens: 8,
+        ...llmBudgetOptions(apiUrl, model, 'connection_test'),
         messages: [
           { role: 'system', content: 'Reply with exactly: ok' },
           { role: 'user', content: 'Connection test.' },
@@ -270,6 +317,7 @@ export async function testLlmConnection(
     let contentPreview = text.slice(0, 160);
     try {
       const payload = JSON.parse(text);
+      recordLlmUsage('connection_test', payload, latencyMs);
       contentPreview = String(payload.choices?.[0]?.message?.content || contentPreview).slice(0, 160);
     } catch (_error) {
       // Keep the raw preview when the provider returns non-JSON success content.

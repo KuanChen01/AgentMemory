@@ -172,6 +172,10 @@ AgentMemory now treats product releases as a first-class maintainer workflow:
 
 Detailed maintainer workflow: [docs/Release Process.md](./docs/Release%20Process.md)
 
+Use branches and reviewed PRs before merging, releasing, and upgrading each machine independently. Keep local configuration and memories on their own machine. See [Reviewed Updates](./docs/Reviewed%20Updates.zh.md). Existing Worker/MCP processes must restart to load new code; updating source or running bootstrap does not update an already-running process.
+
+Memory processing on the official DeepSeek endpoint uses non-thinking mode and records per-machine usage. Custom summary output budgets are optional and off by default, with separate tool-summary and daily-digest controls in LLM Settings. See [LLM Cost Controls](./docs/LLM%20Cost%20Controls.md).
+
 ---
 
 ### 🧭 Admin Console

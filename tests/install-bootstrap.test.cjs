@@ -327,7 +327,7 @@ test('agentmem install creates the OpenCode plugin and configures Antigravity wh
     );
     assert.deepEqual(officialConfig.mcpServers.agentmem, {
       command: 'node',
-      args: ['E:/Kuan/Projects/Codex/AgentMemory/dist/servers/mcp-server.js'],
+      args: [path.join(projectRoot, 'dist', 'servers', 'mcp-server.js').replace(/\\/g, '/')],
       env: { AGENTMEM_AGENT_ID: 'antigravity' },
       disabled: false,
     });

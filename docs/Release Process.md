@@ -3,6 +3,7 @@
 ## Policy
 
 - 正式版本只允许从 `master` 发布。功能分支可以开发、联调和验收，但不能直接打正式 tag 或 GitHub Release。
+- 代码和版本准备均先上传分支，以 PR 审核当前 head；修改后重新验证和复审，认可后合并到 `master`。不以直接推送 master 替代审核。双机更新与本机状态保全见 [Reviewed Updates](Reviewed%20Updates.zh.md)。
 - 版本号采用严格 `SemVer`：`vMAJOR.MINOR.PATCH`。
 - 当前正式分发渠道固定为 **GitHub Release + 默认源码归档**，不同时维护 npm 正式包和 Windows 安装器。
 - 当前版本的单一事实来源是仓库根 `package.json`；`package-lock.json` 的根版本必须和它保持一致。运行时与 MCP 对外暴露的版本都从这套元数据读取，不再各自硬编码。
@@ -33,14 +34,14 @@ npm run release:bump -- --next patch
 
 ## Checklist
 
-1. 切到 `master`，并确认工作树干净。
+1. 确认功能 PR 已审核合并，从最新 `origin/master` 建立版本准备分支，并确认工作树干净。
 2. 运行 `npm run release:plan -- --next <patch|minor|major>`，确认目标版本、tag 和说明无误。
 3. 运行 `npm run release:bump -- --next <patch|minor|major>`。
 4. 运行 `npm run build`，刷新 `dist/` 分发产物。
 5. 运行 `node --test tests/*.test.cjs`。
-6. 提交版本变更与分发产物，commit message 统一使用 `chore: release vX.Y.Z`。
-7. 运行 `git tag vX.Y.Z`。
-8. 运行 `git push origin master`，再运行 `git push origin vX.Y.Z`。上一步创建的是轻量 tag，`--follow-tags` 不会推送它。
+6. 提交版本变更，commit message 统一使用 `chore: release vX.Y.Z`；`dist/` 为 Git 忽略的本机构建产物，不强制纳入提交。上传版本准备分支并建立 PR，审核当前 head、认可后合并。
+7. 切回 `master` 并 fast-forward 到已合并版本，确认 SHA、版本号及所需验证结果，再运行 `git tag vX.Y.Z`。
+8. 运行 `git push origin vX.Y.Z`。正式提交已通过 PR 合并；上一步创建的是轻量 tag，`--follow-tags` 不会推送它。
 9. 在 GitHub 上创建标题为 `vX.Y.Z` 的 Release，保留默认源码归档，并填写 release notes。
 10. 发布后至少检查一次 GitHub Release 页面、tag 和源码归档是否正常；如果版本包含 bootstrap/install 路径变更，再补一次二机 bootstrap smoke。
 
@@ -63,4 +64,5 @@ npm run release:bump -- --next patch
 - `Highlights`：只写本版最值得用户知道的能力变化。
 - `Operator Impact`：说明哪些 agent、配置键、bootstrap 行为或 `/admin` 面板受影响。
 - `Upgrade Path`：明确是否只需 `git pull` + `.\bootstrap-second-machine.cmd`，还是需要重新填配置、释放旧 worker、或重新注册某个 agent。
+- 升级必须先选择已认可的版本并停旧 Worker/MCP；bootstrap 可能复用已经运行的 worker，不能把源码更新或 bootstrap 成功当作旧进程已加载新代码。
 - `Verification`：列出本版实际跑过的 build/test/smoke 证据。
