@@ -477,3 +477,15 @@ If a smoke check fails, fix only issues directly related to `/admin`, runtime po
 
 ### 📄 License
 Apache-2.0 License
+
+## Work memory and global review overview
+
+Tool synthesis now returns `record_kind`: `outcome`, `context`, or `skip`. Routine events can stop before embedding/review; useful read-only findings and actual failed-tool evidence remain eligible. Missing/invalid classification is uncertain recovery context, not a keyword-based exclusion. The existing synthesis call is reused; this does not prove natural-language classification quality or quota savings.
+
+New additive metadata tables retain every existing observation unchanged as legacy. `record_memory` accepts optional `record_kind` (outcome/context), defaulting to outcome for explicit milestones. `/sessions` accepts purpose=work/daily_review and echoes the stored purpose. Review plumbing is distinguished from real failures/results by the synthesis prompt, not whole-session exclusion.
+
+`get_work_overview(since, until, cursor?)` and loopback `GET /admin/api/work-overview` provide a complete local activity catalog, paginated whole newly typed memories and explicitly limited whole legacy samples. No project registration is required. Each memory is whole or a detail reference; legacy samples are not exhaustive and unshown text is not classified as inactivity. Cursor binds the fixed interval and row high-water, preserving boundary-second rescans; do not treat imported older observations as automatically covered by a newer checkpoint.
+
+`GET /admin/api/work-details?id=ID&offset=BYTE_OFFSET` returns UTF-8 detail chunks (up to 8 KiB), next_offset and source SHA-256 for concrete continuation. Changed source requires inspection. Read-disabled workers return unavailable, not an empty successful overview. Existing startup/search/timeline/digest APIs remain for working-memory recovery; digests are clues, not a complete review ledger.
+
+This revision must be independently reviewed before production deployment. Source tests use temporary DBs and mocked LLMs; real capture quality and scheduled acceptance require separate authorization. No database/history pruning, real queue replay or scheduler activation is part of this repair.

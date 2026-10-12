@@ -24,6 +24,8 @@ export interface Observation {
   files_modified: string[];
   embedding: number[];
   created_at?: string;
+  record_kind?: 'outcome' | 'context';
+  source_kind?: 'tool' | 'explicit';
 }
 
 export interface Session {
@@ -32,6 +34,7 @@ export interface Session {
   agent_id: string;
   status: 'active' | 'completed';
   created_at?: string;
+  purpose?: 'work' | 'daily_review';
 }
 
 export interface SearchResult {
@@ -435,6 +438,17 @@ export class DatabaseManager {
           }
         });
       }
+      // Additive side tables preserve old observation bytes and schema-version
+      // compatibility. No historical inference/reclassification is performed.
+      const workTables = this.db.all(`SELECT name FROM sqlite_master WHERE type='table'
+        AND name IN ('observation_work_metadata','session_purposes')`);
+      if (workTables.length !== 2) await this.write(() => {
+        this.db.run(`CREATE TABLE IF NOT EXISTS observation_work_metadata (
+          observation_id TEXT PRIMARY KEY, record_kind TEXT NOT NULL,
+          source_kind TEXT NOT NULL)`);
+        this.db.run(`CREATE TABLE IF NOT EXISTS session_purposes (
+          session_id TEXT PRIMARY KEY, purpose TEXT NOT NULL)`);
+      });
     } catch (err: any) {
       this.close();
       throw new Error(`Database initialization failed: ${err.message}`);
@@ -647,12 +661,19 @@ export class DatabaseManager {
          ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
         [session.id, session.project_path, normalizedAgentId, session.status]
       );
+      if (session.purpose) {
+        if (!['work', 'daily_review'].includes(session.purpose)) throw new Error('Invalid session purpose');
+        this.db.run(`INSERT INTO session_purposes VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET purpose=excluded.purpose`,
+          [session.id, session.purpose]);
+      }
     });
   }
 
   // Save observation
   public async saveObservation(obs: Observation): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
+    if (obs.record_kind && !['outcome', 'context'].includes(obs.record_kind)) throw new Error('Invalid work-memory kind');
+    if (obs.source_kind && !['tool', 'explicit'].includes(obs.source_kind)) throw new Error('Invalid work-memory source');
 
     return this.write(() => {
       const factsStr = JSON.stringify(obs.facts);
@@ -708,7 +729,79 @@ export class DatabaseManager {
          VALUES (?, ?, ?, ?, ?, ?)`,
         [obs.id, obs.title, obs.narrative, factsStr, conceptsStr, filesModStr]
       );
+      if (obs.record_kind) this.db.run(`INSERT INTO observation_work_metadata VALUES (?, ?, ?)`,
+        [obs.id, obs.record_kind, obs.source_kind || 'explicit']);
     });
+  }
+
+  public async getSessionPurpose(id: string): Promise<string> {
+    return this.db.get('SELECT purpose FROM session_purposes WHERE session_id=?', [id])?.purpose || 'work';
+  }
+
+  public async getWorkOverview(since: string, until: string, cursor?: string) {
+    if (!this.db) throw new Error('Database not initialized');
+    const start = new Date(since), end = new Date(until);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end)
+      throw new Error('Overview requires valid since < until timestamps');
+    // SQLite legacy timestamps have second precision: replay the boundary
+    // second, then let durable notes/outcome tasks handle idempotency.
+    const from = start.toISOString().slice(0, 19).replace('T', ' ');
+    const to = end.toISOString().slice(0, 19).replace('T', ' ');
+    let after = 0, high: number = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM observations').n;
+    if (cursor) {
+      let saved: any;
+      try { saved = JSON.parse(Buffer.from(cursor, 'base64url').toString()); } catch { throw new Error('Invalid overview cursor'); }
+      if (saved.since !== since || saved.until !== until || !Number.isSafeInteger(saved.after) || !Number.isSafeInteger(saved.high)
+          || saved.after < 0 || saved.high < saved.after || saved.high > high) throw new Error('Overview cursor conflicts with interval');
+      after = saved.after; high = saved.high;
+    }
+    const where = `o.rowid <= ? AND datetime(o.created_at) >= datetime(?) AND datetime(o.created_at) <= datetime(?)`;
+    const projects = this.db.all(`SELECT o.project_path, o.agent_id, COUNT(DISTINCT o.session_id) AS sessions,
+      COUNT(*) AS observations, SUM(m.record_kind='outcome') AS outcomes,
+      SUM(m.record_kind='context') AS contexts, SUM(m.record_kind IS NULL) AS legacy
+      FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+      WHERE ${where} GROUP BY o.project_path,o.agent_id ORDER BY o.project_path,o.agent_id`, [high, from, to]);
+    const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind FROM observations o
+      LEFT JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${where} AND o.rowid > ? AND m.record_kind IS NOT NULL
+      ORDER BY o.rowid LIMIT 20`, [high, from, to, after]);
+    // Old tool observations are recovery clues, not a new mandatory audit queue.
+    // Keep the complete global activity catalog, and give only explicit samples
+    // of legacy sessions. Their omission is never classified as inactivity.
+    const legacy = cursor ? [] : this.db.all(`SELECT * FROM (
+      SELECT o.*, ROW_NUMBER() OVER(PARTITION BY o.project_path,o.session_id ORDER BY o.rowid DESC) AS rank
+      FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+      WHERE ${where} AND m.record_kind IS NULL) WHERE rank=1 ORDER BY created_at DESC,id LIMIT 5`, [high, from, to]);
+    const memories: any[] = [];
+    let last = after;
+    for (const row of rows) {
+      const item = { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
+        created_at: row.created_at, kind: row.record_kind || 'legacy', source: row.source_kind || 'legacy',
+        title: row.title, narrative: row.narrative, facts: JSON.parse(row.facts), concepts: JSON.parse(row.concepts),
+        files_modified: JSON.parse(row.files_modified), files_read: JSON.parse(row.files_read) };
+      if (Buffer.byteLength(JSON.stringify(item), 'utf8') > 4096) {
+        const ref = { id: row.id, project_path: row.project_path, session_id: row.session_id,
+          agent_id: row.agent_id, created_at: row.created_at, kind: item.kind,
+          detail_required: true, reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
+        if (memories.length && Buffer.byteLength(JSON.stringify([...memories, ref]), 'utf8') > 12 * 1024) break;
+        memories.push(ref);
+      } else {
+        if (memories.length && Buffer.byteLength(JSON.stringify([...memories, item]), 'utf8') > 12 * 1024) break;
+        memories.push(item);
+      }
+      last = row.position;
+    }
+    const more = !!this.db.get(`SELECT 1 FROM observations o JOIN observation_work_metadata m ON m.observation_id=o.id
+      WHERE ${where} AND o.rowid > ? LIMIT 1`, [high, from, to, last]);
+    const legacy_samples = legacy.map((row: any) => {
+      const item = { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
+        created_at: row.created_at, kind: 'legacy', title: row.title, narrative: row.narrative, facts: JSON.parse(row.facts),
+        concepts: JSON.parse(row.concepts), files_read: JSON.parse(row.files_read), files_modified: JSON.parse(row.files_modified) };
+      return Buffer.byteLength(JSON.stringify(item), 'utf8') <= 2048 ? item : {
+        id: row.id, project_path: row.project_path, session_id: row.session_id, kind: 'legacy', detail_required: true };
+    });
+    return { version: 1, since, until, projects: cursor ? [] : projects, memories, legacy_samples,
+      next_cursor: more ? Buffer.from(JSON.stringify({ since, until, high, after: last })).toString('base64url') : null,
+      source_high_water: high, discovery_hint: 'Best-effort typed work overview plus whole legacy samples. Legacy is not exhaustively read or classified as inactivity. Use project context/digests/source where relevant; verify promoted claims.' };
   }
 
   // Get project timeline (chronological observations)

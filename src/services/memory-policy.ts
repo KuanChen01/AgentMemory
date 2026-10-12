@@ -62,6 +62,7 @@ export interface MemoryReadPolicyDecision {
 export interface ObservationWritePolicyInput {
   observation: Pick<Observation, 'title' | 'narrative' | 'facts' | 'files_modified'>;
   source: 'manual' | 'mcp_record' | 'tool_log';
+  classification?: 'outcome' | 'context' | 'skip';
 }
 
 export interface ObservationWritePolicyDecision {
@@ -266,52 +267,19 @@ export function decideMemoryReadPolicy(
 export function decideObservationWritePolicy(
   input: ObservationWritePolicyInput
 ): ObservationWritePolicyDecision {
-  const observation = input.observation;
-  const reasons: string[] = [];
-  const hasFacts = Array.isArray(observation.facts) && observation.facts.length > 0;
-  const hasFiles = Array.isArray(observation.files_modified) && observation.files_modified.length > 0;
-  const hasNarrative = String(observation.narrative || '').trim().length >= 24;
-  const lowSignalTitle = isLowSignalTitle(observation.title);
-  const evidenceText = [
-    observation.title,
-    observation.narrative,
-    ...(Array.isArray(observation.facts) ? observation.facts : []),
-  ].join('\n');
-  const hasSubstantiveOutcome = SUBSTANTIVE_OBSERVATION_KEYWORDS.test(evidenceText);
-
-  if (!String(observation.title || '').trim()) {
-    return {
-      action: 'skip',
-      reasons: ['Observation title is empty, so the ledger entry would not be actionable.'],
-    };
-  }
-
-  if (input.source === 'manual' || input.source === 'mcp_record') {
-    return {
-      action: 'record',
-      reasons: ['Explicit user- or MCP-driven writes bypass heuristic filtering.'],
-    };
-  }
-
-  if (lowSignalTitle && !hasFiles && !hasSubstantiveOutcome) {
-    return {
-      action: 'skip',
-      reasons: ['Routine read, status, search, view, run, or raw-execution activity has no modified files or substantive outcome.'],
-    };
-  }
-
-  if (hasFacts || hasFiles || hasNarrative) {
-    reasons.push('Observation has enough signal to remain in the append-only ledger.');
-    return {
-      action: 'record',
-      reasons,
-    };
-  }
-
-  return {
-    action: 'skip',
-    reasons: ['Observation has no durable signal after summarization.'],
+  if (!String(input.observation.title || '').trim()) return {
+    action: 'skip', reasons: ['An empty title is not an actionable memory.'],
   };
+  if (input.source === 'manual' || input.source === 'mcp_record') return {
+    action: 'record', reasons: ['Deliberate explicit working-memory entry.'],
+  };
+  if (input.classification === 'skip') return {
+    action: 'skip', reasons: ['The synthesis call identified routine activity without useful new information.'],
+  };
+  if (input.classification === 'outcome' || input.classification === 'context') return {
+    action: 'record', reasons: ['Useful result or recovery context from synthesis; not inferred from keywords or length.'],
+  };
+  return { action: 'record_low_signal', reasons: ['Legacy/unclassified content is uncertain; retain recovery context.'] };
 }
 
 export function decidePostTaskReviewPolicy(

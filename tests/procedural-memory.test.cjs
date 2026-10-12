@@ -60,6 +60,7 @@ test('memory policy brain centralizes read, write, and promotion decisions', () 
   assert.ok(readDecision.layers.includes('sliding_window'));
 
   const lowSignalWrite = decideObservationWritePolicy({
+    classification: 'skip',
     observation: {
       title: 'Read README.md file',
       narrative: 'Read docs.',

@@ -1,4 +1,5 @@
 const AGENTMEM_TOOL_NAMES = new Set([
+  'get_work_overview',
   'get_memory_details',
   'get_memory_state',
   'get_project_context',

@@ -11,11 +11,12 @@ async function fixture(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-review-'));
   const envPath = path.join(root, '.env');
   const requests = [];
+  let memory = null;
   const llm = http.createServer(async (req, res) => {
     let text = ''; for await (const chunk of req) text += chunk;
     requests.push({ headers: req.headers, body: JSON.parse(text) });
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(memory || {
       title: 'Verified tool event recovery', narrative: 'Verified that a subsequent normal tool event was processed.',
       facts: ['Verified successful processing'], concepts: ['regression'], files_read: [], files_modified: [],
     }) } }] }));
@@ -63,7 +64,7 @@ async function fixture(run) {
     }
     throw Error(`Queue failed to settle; LLM requests ${requests.length}/${expectedRequests}`);
   };
-  try { await start(); await run({ start, stop, post, get, settled, requests, envPath, worker: () => worker }); }
+  try { await start(); await run({ start, stop, post, get, settled, requests, envPath, worker: () => worker, setMemory: value => { memory = value; } }); }
   finally {
     await stop(); await new Promise(resolve => llm.close(resolve));
     const resolved = path.resolve(root);
@@ -119,5 +120,44 @@ test('saved custom headers reach real mock summary requests after worker restart
       tool_name: 'exec_command', input: 'verify inherited headers', output: 'verification passed', success: true });
     await settled(2);
     assert.equal(requests[1].headers['x-test-header'], 'review "quoted" \\ value');
+  });
+});
+test('value filtering, review purpose and work APIs use isolated mock evidence only', async () => {
+  await fixture(async ({post,get,settled,requests,setMemory}) => {
+    const base={session_id:'daily-review-fixture',project_path:'E:/New/Unregistered',agent_id:'grok',tool_name:'exec_command',success:true};
+    await post('/sessions',{id:base.session_id,project_path:base.project_path,agent_id:'grok',purpose:'daily_review'});
+    const before=(await (await get('/admin/api/overview')).json()).stats.observations;
+    setMemory({record_kind:'skip',title:'Read existing guide',narrative:'Copied known rules',facts:['Known facts'],files_modified:[]});
+    await post('/tools',{...base,input:'read existing guide',output:'Known rules'});
+    await settled(1);
+    assert.equal((await (await get('/admin/api/overview')).json()).stats.observations,before);
+    assert.match(requests[0].body.messages[1].content,/Session purpose: daily_review/);
+    assert.match(requests[0].body.messages[0].content,/record_kind/);
+    setMemory({record_kind:'outcome',title:'Read deployed limit',narrative:'部署写明并发上限八个，第九个连接永久挂起',facts:[],files_modified:[]});
+    await post('/tools',{...base,input:'inspect deployment',output:'concurrency eight; ninth hangs'});
+    await settled(2);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.version,1); assert.equal(view.memories.length,1);
+    assert.equal(view.memories[0].kind,'outcome');
+    assert.match(view.memories[0].narrative,/第九个/);
+    const detail=await (await get('/admin/api/work-details?'+new URLSearchParams({id:view.memories[0].id}))).json();
+    assert.equal(detail.next_offset,null); assert.match(detail.text,/第九个/);
+    assert.ok(detail.sha256);
+    assert.equal((await get('/admin/api/work-details?id=missing')).status,404);
+    await post('/admin/api/settings',{readEnabled:false});
+    assert.equal((await get('/admin/api/work-overview?'+qs)).status,503);
+  });
+});
+test('an attempted skip cannot erase actual failed tool evidence', async () => {
+  await fixture(async ({post,get,settled,setMemory}) => {
+    setMemory({record_kind:'skip',title:'',narrative:'',facts:[]});
+    await post('/tools',{session_id:'failed-review',project_path:'E:/Vault',agent_id:'codex',tool_name:'exec_command',success:false,
+      input:'review failed',output:'quota exhausted; 0 settled; checkpoint retained'});
+    await settled(1);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.memories.length,1); assert.equal(view.memories[0].kind,'outcome');
+    assert.match(view.memories[0].narrative,/quota exhausted; 0 settled; checkpoint retained/);
   });
 });

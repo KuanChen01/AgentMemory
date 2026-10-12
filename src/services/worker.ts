@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createHash } from 'crypto';
 import {
   DailyDigestSchedulerConfig,
   DatabaseManager,
@@ -49,6 +50,7 @@ import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger, llmBudgetOptions, recordLlmUsage } from './llm-budget';
 import { normalizeToolLogText, skipRawToolLog } from './tool-log-policy';
+import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -410,6 +412,32 @@ app.get('/admin/api/records', adminOnlyGuard, async (req, res) => {
     console.error('Error fetching admin records:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/admin/api/work-overview', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    res.json(await dbManager.getWorkOverview(String(req.query.since || ''), String(req.query.until || ''),
+      normalizeOptionalString(req.query.cursor)));
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    const id = String(req.query.id || '');
+    const offset = Number(req.query.offset || 0);
+    if (!id || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Detail requires an ID and nonnegative byte offset');
+    const rows = await dbManager.getObservationsByIds([id]);
+    if (rows.length !== 1) return res.status(404).json({ error: 'Unknown memory ID' });
+    const data = Buffer.from(JSON.stringify(toAdminObservation(rows[0])), 'utf8');
+    if (offset > data.length || (offset < data.length && (data[offset] & 0xc0) === 0x80)) throw new Error('Offset outside a UTF-8 boundary');
+    let stop = Math.min(data.length, offset + 8192);
+    while (stop < data.length && (data[stop] & 0xc0) === 0x80) stop--;
+    res.json({ id, offset, total_bytes: data.length, text: data.subarray(offset, stop).toString('utf8'),
+      next_offset: stop < data.length ? stop : null,
+      sha256: createHash('sha256').update(data).digest('hex') });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
 });
 
 app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
@@ -967,7 +995,7 @@ app.post('/state', async (req, res) => {
 
 // 2. Start/Update Session
 app.post('/sessions', async (req, res) => {
-  const { id, project_path, agent_id, status } = req.body;
+  const { id, project_path, agent_id, status, purpose } = req.body;
   if (!id || !project_path || !agent_id) {
     return res.status(400).json({ error: 'Missing required session parameters' });
   }
@@ -982,12 +1010,12 @@ app.post('/sessions', async (req, res) => {
       id,
       project_path: normalizedPath,
       agent_id,
-      status: status || 'active'
+      status: status || 'active', purpose
     };
 
     await dbManager.saveSession(session);
     console.log(`[Session] Registered session ${id} for agent ${agent_id} on ${normalizedPath}`);
-    res.json({ success: true });
+    res.json({ success: true, purpose: await dbManager.getSessionPurpose(id) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1203,6 +1231,7 @@ async function handleSummarization(log: QueuedToolLog) {
 
   // Build the summarization prompt
   const systemPrompt = `You are a developer memory synthesis assistant.
+${WORK_MEMORY_PROMPT}
 Your task is to analyze a raw tool execution log and compress it into a clean, structured JSON "Observation".
 Extract the architectural decisions, bug fixes, files read/modified, and key learnings.
 Keep the narrative under 120 words, facts and concepts to at most 5 each, and file lists to at most 10 each.
@@ -1211,6 +1240,7 @@ Only record evidence present in the log. Do not infer completed changes from int
 You MUST respond with a valid JSON object ONLY. Do not write any markdown blocks or reasoning steps.
 JSON Schema:
 {
+  "record_kind": "outcome | context | skip",
   "title": "Short title describing the main action or fix",
   "narrative": "A descriptive paragraph explaining the context, problem encountered, reasoning, and resolution.",
   "facts": ["Fact 1", "Fact 2"],
@@ -1219,7 +1249,8 @@ JSON Schema:
   "files_modified": ["file1.ts"]
 }`;
 
-  const userPrompt = `Tool Name: ${log.tool_name}
+  const userPrompt = `Session purpose: ${await dbManager.getSessionPurpose(log.session_id)}
+Tool Name: ${log.tool_name}
 Status: ${log.success ? 'Success' : 'Failure'}
 Project Location: ${log.project_path}
 Agent: ${log.agent_id}
@@ -1268,7 +1299,14 @@ ${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_M
     if (!content) throw new Error('Empty response from LLM API');
 
     // Resilient parsing of JSON content
-    const parsedObs = parseJSONContent(content);
+    const parsedObs = interpretWorkMemory(parseJSONContent(content), log.success);
+    if (parsedObs.skip) {
+      console.log(`[Memory] Skipped routine tool event ${log.id} before embedding/review`);
+      return;
+    }
+    if (!log.success) {
+      parsedObs.narrative += `\nObserved failed tool output (recovery evidence, not a verified diagnosis): ${boundToolText(log.output, 2000)}`;
+    }
 
     // Compute embedding for vector search
     const textToEmbed = `${parsedObs.title} ${parsedObs.narrative} ${parsedObs.facts.join(' ')} ${parsedObs.concepts.join(' ')}`;
@@ -1285,23 +1323,13 @@ ${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_M
       concepts: parsedObs.concepts || [],
       files_read: parsedObs.files_read || [],
       files_modified: parsedObs.files_modified || [],
-      embedding
+      embedding, record_kind: parsedObs.kind, source_kind: 'tool'
     };
-
-    const writeDecision = decideObservationWritePolicy({
-      observation,
-      source: 'tool_log',
-    });
-
-    if (writeDecision.action === 'skip') {
-      console.log(`[Memory] Skipped observation for session ${log.session_id}: ${writeDecision.reasons.join(' | ')}`);
-      return;
-    }
 
     await dbManager.saveObservation(observation);
     const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation);
     console.log(
-      `[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}" (${writeDecision.action})`
+      `[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}" (${parsedObs.kind})`
     );
     if (postTaskResult.review) {
       console.log(
@@ -1340,12 +1368,12 @@ async function saveMockObservation(log: QueuedToolLog, reason: string) {
     concepts: ['tool_execution'],
     files_read: [],
     files_modified: [],
-    embedding
+    embedding, record_kind: 'outcome', source_kind: 'tool'
   };
 
   const writeDecision = decideObservationWritePolicy({
     observation,
-    source: 'tool_log',
+    source: 'tool_log', classification: 'outcome',
   });
   if (writeDecision.action !== 'skip') {
     await dbManager.saveObservation(observation);

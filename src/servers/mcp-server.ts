@@ -65,6 +65,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
+        name: 'get_work_overview',
+        description: 'Global, paginated work overview across all local projects and agents for a fixed interval. Whole memories or detail references, never excerpt-based inactivity judgments. Verify promoted claims.',
+        inputSchema: { type: 'object', properties: {
+          since: { type: 'string', description: 'Inclusive ISO start; legacy boundary second is replayed.' },
+          until: { type: 'string', description: 'Frozen ISO end.' },
+          cursor: { type: 'string', description: 'Opaque continuation returned for this same interval.' }
+        }, required: ['since', 'until'] }
+      },
+      {
         name: 'get_project_context',
         description: 'Returns curated AgentMemory working context for this project as a single rendered block, equivalent to the hook-backed startup view. Treat it as recovery context and verify facts against current workspace evidence before durable use.',
         inputSchema: {
@@ -196,6 +205,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: 'object',
           properties: {
+            record_kind: { type: 'string', enum: ['outcome', 'context'], description: 'Optional working-memory category; defaults to outcome for explicit milestones. Neither category proves historical truth.' },
             title: {
               type: 'string',
               description: 'Short title of the memory (e.g., Fixed JWT secret load crash)',
@@ -405,6 +415,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     return await withDatabase(async (dbManager) => {
       switch (name) {
+        case 'get_work_overview': {
+          if (!(await dbManager.getRuntimePolicy()).readEnabled) throw new Error(READ_DISABLED_MESSAGE);
+          const view = await dbManager.getWorkOverview(String(args?.since || ''), String(args?.until || ''),
+            args?.cursor === undefined ? undefined : String(args.cursor));
+          return { content: [{ type: 'text', text: JSON.stringify(view) }] };
+        }
         case 'get_project_context': {
         const policy = await dbManager.getRuntimePolicy();
         if (!policy.readEnabled) {
@@ -579,6 +595,8 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
         const filesRead = (args?.files_read as string[]) || [];
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');
         const agentId = resolveAgentId(args?.agent_id);
+        if (args?.record_kind !== undefined && args.record_kind !== 'outcome' && args.record_kind !== 'context')
+          throw new Error('record_kind must be outcome or context');
 
         // Generate embedding vector
         const textToEmbed = `${title} ${narrative} ${facts.join(' ')} ${concepts.join(' ')}`;
@@ -597,6 +615,7 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
           files_read: filesRead,
           files_modified: filesModified,
           embedding,
+          record_kind: args?.record_kind === 'context' ? 'context' : 'outcome', source_kind: 'explicit',
         };
 
         // Create virtual session first
