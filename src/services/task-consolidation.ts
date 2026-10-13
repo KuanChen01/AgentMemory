@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { incompleteToolSource } from './tool-log-policy';
 import { randomUUID } from 'crypto';
 import { DatabaseManager, Observation } from './db';
@@ -361,9 +362,12 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
   const settings = resolveLlmSettings();
   if (!llmAvailable(settings)) throw new Error('compact-legacy --apply requires LLM credentials');
   for (const p of plan) {
-    const taskId = randomUUID();
+    // Deterministic ids from the session's legacy row ids: an interrupted run retried later reuses the same result
+    // instead of creating a second observation. Legacy rows are never edited or deleted.
+    const key = createHash('sha256').update(p.session + '\n' + p.items.map((r: any) => r.id).sort().join('\n')).digest('hex').slice(0, 24);
+    const taskId = `legacy-task-${key}`;
     for (let i = 0; i < p.segments.length; i++) {
-      const seg = p.segments[i]; const first = seg[0]; const resultId = randomUUID();
+      const seg = p.segments[i]; const first = seg[0]; const resultId = `legacy-${key}-${i}`;
       summary.llm_calls++;
       const parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
         `Legacy per-step records of one session\nProject: ${first.project_path}\n\n${renderTask(seg).text}`, settings), true);
@@ -374,18 +378,18 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
           files_read: parsed.files_read, files_modified: parsed.files_modified, embedding: [], record_kind: parsed.kind,
           source_kind: 'legacy_compacted', created_at: seg[seg.length - 1].created_at };
         const hash = summaryHash(obs.project_path, obs, String(obs.created_at || '').slice(0, 10));
-        const dup = db.sqlGet(`SELECT observation_id FROM observation_content_hashes WHERE project_path=? AND sha256=?`, [obs.project_path, hash]);
-        if (dup) { observationId = dup.observation_id; status = 'duplicate'; }
-        else {
-          obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')}`);
-          await db.saveObservation(obs);
-          await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [obs.id, obs.project_path, hash]));
-          observationId = obs.id; status = 'saved'; summary.results_saved++;
-        }
+        const known = db.sqlGet(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id=h.observation_id
+          WHERE h.project_path=? AND h.sha256=? AND h.observation_id<>?`, [obs.project_path, hash, obs.id]);
+        if (!known) obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')}`);
+        // Same atomic path as task results: link + flag a look-alike, or save observation + hash together.
+        const saved = await db.saveObservationDeduped(obs, hash, { id: `dup-${resultId}`, taskId });
+        if (saved.duplicateOf) { observationId = saved.duplicateOf; status = 'duplicate'; }
+        else { observationId = obs.id; status = 'saved'; summary.results_saved++; }
       }
       await db.sqlWrite(sql => {
         sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
-          source_ids,trigger,status,observation_id,llm_calls,source_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,'legacy_compacted')`,
+          source_ids,trigger,status,observation_id,llm_calls,source_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,'legacy_compacted')
+          ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id, llm_calls=task_results.llm_calls+1`,
           [resultId, taskId, p.session, first.project_path, first.agent_id, i, p.segments.length, seg.length,
             JSON.stringify(seg.map((r: any) => r.id)), 'legacy_compaction', status, observationId]);
         for (const r of seg) sql.run(`INSERT OR IGNORE INTO legacy_compaction_links VALUES (?,?)`, [r.id, resultId]);

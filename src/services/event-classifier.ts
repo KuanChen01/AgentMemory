@@ -14,7 +14,7 @@ export interface EventDecision { route: EventRoute; reason: string; }
 const SKIP_TOOL_CLASSES: { pattern: RegExp; reason: string }[] = [
   { pattern: /^(todo(_?write|_?read|_?list)?|update_plan|plan|exit_plan_mode|write_todos)$/, reason: 'todo/plan bookkeeping tool' },
   { pattern: /^(skill|load_skill|use_skill|read_skill|list_skills)$/, reason: 'skill loading tool' },
-  { pattern: /^(ask_?user(_?question)?|askuserquestion|request_user_input|question|ask_followup_question)$/, reason: 'question to the user' },
+  { pattern: /^(ask_?user(_?question)?|askuserquestion|request_user_input(_?async)?|question|ask_followup_question)$/, reason: 'question to the user' },
 ];
 
 export function shortToolName(name: string): string {

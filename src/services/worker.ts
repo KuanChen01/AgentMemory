@@ -103,7 +103,11 @@ function scheduleTask(sessionId: string, taskId: string, trigger: TaskTrigger): 
   activeConsolidations++;
   lastAttemptMs.set(taskId, Date.now());
   const previous = consolidationChain.get(sessionId) || Promise.resolve();
-  const next = previous.catch(() => undefined).then(() => consolidateTask(dbManager, taskId, trigger))
+  const next = previous.catch(() => undefined).then(async () => {
+      // Writes disabled: never call the model or save; the frozen task and its events stay for later.
+      if (!(await isWriteEnabled())) { console.log(`[Task] Writes disabled; task ${taskId} of ${sessionId} kept for later`); return { task_id: null } as any; }
+      return consolidateTask(dbManager, taskId, trigger);
+    })
     .then(result => {
       if (result.task_id) console.log(`[Task] Consolidated task ${taskId} of ${sessionId} (${trigger}): ${result.segments} segment(s), ${result.llm_calls} LLM call(s)`);
       return result;
@@ -130,6 +134,7 @@ function retryFrozenTasks(force = false): Promise<unknown>[] {
 async function sweepIdleTasks() {
   if (!taskConsolidationEnabled()) return;
   try {
+    if (!(await isWriteEnabled())) return;   // nothing is frozen, consolidated or retried while writes are disabled
     for (const id of openSessionsIdleSince(dbManager, Date.now() - taskIdleMs())) await closeTask(id, 'idle_timeout');
     retryFrozenTasks();
   } catch (err: any) { console.error(`[Task] Idle sweep failed: ${err.message}`); }
@@ -574,6 +579,7 @@ app.post('/admin/api/review-runs/progress', adminOnlyGuard, async (req, res) => 
 // Manually close open tasks (all sessions or one); used by tests and the admin UI.
 app.post('/admin/api/tasks/flush', adminOnlyGuard, async (req, res) => {
   try {
+    if (!(await isWriteEnabled())) return sendWriteDisabled(res);
     const only = normalizeOptionalString(req.body?.session_id);
     const ids = only ? [only] : openSessionsIdleSince(dbManager, Number.MAX_SAFE_INTEGER);
     for (const id of ids) await closeTask(id, 'manual');
@@ -1219,8 +1225,14 @@ app.post('/tasks/boundary', async (req, res) => {
   if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
   if (!(await isWriteEnabled())) return sendWriteDisabled(res);
   // Freeze before responding: later events can never join this task.
-  const taskId = taskConsolidationEnabled() ? await closeTask(sessionId, 'user_prompt') : null;
-  res.json({ success: true, scheduled: !!taskId, task_id: taskId });
+  try {
+    const taskId = taskConsolidationEnabled() ? await closeTask(sessionId, 'user_prompt') : null;
+    res.json({ success: true, scheduled: !!taskId, task_id: taskId });
+  } catch (err: any) {
+    // The task stays open (nothing was frozen) and is closed by the next boundary or the idle sweep.
+    console.error(`[Task] Task boundary failed for ${sessionId}; task kept open for retry: ${err.message}`);
+    if (!res.headersSent) res.status(500).json({ error: 'Task boundary failed; task kept for retry.' });
+  }
 });
 
 // 4. Force Session Summary on Close
