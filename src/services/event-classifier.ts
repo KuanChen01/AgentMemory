@@ -18,7 +18,83 @@ const READ_TOOLS = new Set([
 ]);
 const SHELL_TOOLS = new Set(['exec_command', 'shell', 'bash', 'run_terminal_cmd', 'powershell', 'local_shell',
   'run_command', 'terminal', 'run_shell_command', 'shell_command']);
-const READ_ONLY_COMMAND = /^(?:ls|dir|tree|pwd|cd|cat|type|more|less|head|tail|wc|stat|file|du|df|which|where|whoami|echo|printf|rg|grep|egrep|fgrep|ag|find|fd|sed\s+-n|awk|sort|uniq|cut|jq|nl|diff|cmp|realpath|basename|dirname|date|env|printenv|git\s+(?:status|log|diff|show|branch|remote|rev-parse|ls-files|blame|describe|config\s+--get)|get-content|gc|get-childitem|gci|select-string|sls|get-item|get-location|test-path|resolve-path|measure-object|format-list|format-table|out-string|select-object|where-object)\b/i;
+// Command + argument rules. Anything not explicitly recognised as read-only is a candidate.
+type ArgRule = (args: string[]) => boolean;
+const any: ArgRule = () => true;
+const noFlags = (...bad: RegExp[]): ArgRule => args => !args.some(a => bad.some(b => b.test(a)));
+const READ_ONLY: Record<string, ArgRule> = {
+  ls: any, dir: any, pwd: any, cd: any, cat: any, type: any, more: any, less: any, head: any, tail: noFlags(/^-f$|^--follow/),
+  wc: any, stat: any, file: any, du: any, df: any, which: any, where: any, whoami: any, echo: any, printf: any,
+  realpath: any, basename: any, dirname: any, printenv: any, nl: any, cut: any, jq: any, cmp: any,
+  tree: noFlags(/^-o$/, /^--output/),
+  diff: noFlags(/^--output/), grep: any, egrep: any, fgrep: any, ag: any,
+  rg: noFlags(/^--pre(=|$)/),
+  sort: noFlags(/^-o/, /^--output/),
+  uniq: args => args.filter(a => !a.startsWith('-')).length <= 1,
+  find: noFlags(/^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/),
+  fd: noFlags(/^-x$|^-X$|^--exec/),
+  sed: args => args.includes('-n') && !args.some(a => /^-i|^--in-place/.test(a))
+    && !args.filter(a => !a.startsWith('-')).slice(0, 1).some(script => /(^|[;\s}])[wWe](\s|$)|\/[wWe]\s/.test(script)),
+  'get-content': any, gc: any, 'get-childitem': any, gci: any, 'select-string': any, sls: any, 'get-item': any,
+  'get-location': any, 'test-path': any, 'resolve-path': any, 'measure-object': any, 'format-list': any, 'format-table': any,
+  'out-string': any, 'select-object': any,
+};
+const GIT_READ_ONLY: Record<string, ArgRule> = {
+  status: any, log: noFlags(/^--output/), show: noFlags(/^--output/), diff: noFlags(/^--output/), 'rev-parse': any,
+  'ls-files': any, blame: any, describe: any, shortlog: any, 'cat-file': any, 'ls-tree': any, 'rev-list': any,
+  branch: args => args.every(a => /^(-a|-r|-v|-vv|--all|--remotes|--list|--show-current|--no-color|--color|--contains|--merged|--no-merged)$/.test(a) || (!a.startsWith('-') && args.some(b => /^(--list|--contains|--merged|--no-merged)$/.test(b)))),
+  remote: args => args.length === 0 || (args.length === 1 && /^(-v|--verbose)$/.test(args[0])) || args[0] === 'show' || args[0] === 'get-url',
+  config: args => args.length >= 1 && /^(--get|--get-all|--list|-l|--get-regexp)$/.test(args[0]),
+  tag: args => args.length === 0 || args.every(a => /^(-l|--list|-n\d*)$/.test(a)),
+  stash: args => args[0] === 'list' || args[0] === 'show',
+};
+
+/** Shell-like tokenizer honouring single/double quotes. */
+export function tokenize(segment: string): string[] {
+  const tokens: string[] = []; let current = ''; let quote: string | null = null; let has = false;
+  for (const ch of segment) {
+    if (quote) { if (ch === quote) quote = null; else current += ch; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; has = true; continue; }
+    if (/\s/.test(ch)) { if (has || current) tokens.push(current); current = ''; has = false; continue; }
+    current += ch;
+  }
+  if (has || current) tokens.push(current);
+  return tokens;
+}
+
+/** Split on && || ; | and newlines outside quotes. */
+function splitSegments(script: string): string[] {
+  const parts: string[] = []; let current = ''; let quote: string | null = null;
+  for (let i = 0; i < script.length; i++) {
+    const ch = script[i];
+    if (quote) { current += ch; if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
+    if (ch === ';' || ch === '\n' || ch === '|' || (ch === '&' && script[i + 1] === '&')) {
+      parts.push(current); current = '';
+      if ((ch === '|' && script[i + 1] === '|') || ch === '&') i++;
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current);
+  return parts.map(p => p.trim()).filter(Boolean);
+}
+
+function segmentIsReadOnly(segment: string): boolean {
+  const tokens = tokenize(segment);
+  if (!tokens.length) return true;
+  const [rawCmd, ...args] = tokens;
+  const cmd = rawCmd.toLowerCase().replace(/\.exe$/, '');
+  if (cmd === 'git') {
+    let i = 0;
+    while (i < args.length && /^(-C|-c|--git-dir|--work-tree)$/.test(args[i])) i += 2;
+    while (i < args.length && /^--no-pager$|^-P$/.test(args[i])) i++;
+    const sub = args[i]; const rule = sub && GIT_READ_ONLY[sub];
+    return !!rule && rule(args.slice(i + 1));
+  }
+  const rule = READ_ONLY[cmd];
+  return !!rule && rule(args);
+}
 
 export function shortToolName(name: string): string {
   return String(name || '').toLowerCase().split(/[.:/]/).pop()?.replace(/^mcp__\w+__/, '') || '';
@@ -42,8 +118,10 @@ export function extractCommand(input: string): string {
 export function isReadOnlyCommand(command: string): boolean {
   const script = command.replace(/\\\r?\n/g, ' ').trim();
   if (!script) return false;
-  if (/(?:^|[^>])>{1,2}(?!&)\s*[^\s&|]|\btee\b|\bsed\s+-i|\bxargs\b|\$\(|`/.test(script)) return false;
-  return script.split(/\s*(?:&&|\|\||;|\||\r?\n)\s*/).filter(Boolean).every(part => READ_ONLY_COMMAND.test(part.trim()));
+  // Redirection, substitution, tee, xargs and PowerShell mutating verbs are never read-only.
+  if (/(?:^|[^>2&])>{1,2}(?!&)|\btee\b|\bxargs\b|\$\(|`|<\(/.test(script.replace(/'[^']*'|"[^"]*"/g, "''"))) return false;
+  if (/\b(remove|set|new|move|copy|rename|clear|add|start|stop|invoke|out-file|export|import)-[a-z]/i.test(script)) return false;
+  return splitSegments(script).every(segmentIsReadOnly);
 }
 
 export function classifyToolEvent(log: RawToolLog, sessionPurpose: string): EventDecision {
@@ -62,9 +140,11 @@ export function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-/** Stable content hash for dedup of summaries; whitespace/case-insensitive. */
-export function summaryHash(projectPath: string, parts: { title?: string; narrative?: string; facts?: string[] }): string {
+/** Stable content hash for dedup of summaries: content, file lists and local date. */
+export function summaryHash(projectPath: string, parts: { title?: string; narrative?: string; facts?: string[];
+  files_modified?: string[]; files_read?: string[] }, date = ''): string {
   const norm = (s: string) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const list = (v?: string[]) => [...(v || [])].map(norm).sort();
   return sha256(JSON.stringify([norm(projectPath), norm(parts.title || ''), norm(parts.narrative || ''),
-    [...(parts.facts || [])].map(norm).sort()]));
+    list(parts.facts), list(parts.files_modified), list(parts.files_read), date]));
 }

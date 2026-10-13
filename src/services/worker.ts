@@ -53,7 +53,8 @@ import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incomplete
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import { classifyToolEvent } from './event-classifier';
 import {
-  bufferCandidate, consolidateSession, openSessionsIdleSince, recoverInterruptedClaims, saveToolEvidence, taskIdleMs, TaskTrigger,
+  bufferCandidate, consolidateTask, freezeOpenTask, frozenTasks, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
+  saveToolEvidence, taskIdleMs, taskRetryMs, TaskTrigger,
 } from './task-consolidation';
 import {
   DailyDigestSchedulerHandle,
@@ -96,25 +97,41 @@ let isProcessingQueue = false;
 const taskConsolidationEnabled = () => process.env.AGENTMEM_TASK_CONSOLIDATION !== 'false';
 let activeConsolidations = 0;
 const consolidationChain = new Map<string, Promise<unknown>>();
-function scheduleConsolidation(sessionId: string, trigger: TaskTrigger): Promise<unknown> {
+const lastAttemptMs = new Map<string, number>();
+// Each task's event set is frozen when its boundary arrives; only that frozen task is consolidated.
+function scheduleTask(sessionId: string, taskId: string, trigger: TaskTrigger): Promise<unknown> {
   activeConsolidations++;
+  lastAttemptMs.set(taskId, Date.now());
   const previous = consolidationChain.get(sessionId) || Promise.resolve();
-  const next = previous.catch(() => undefined).then(() => consolidateSession(dbManager, sessionId, trigger))
+  const next = previous.catch(() => undefined).then(() => consolidateTask(dbManager, taskId, trigger))
     .then(result => {
-      if (result.task_id) console.log(`[Task] Consolidated session ${sessionId} (${trigger}): ${result.segments} segment(s), ${result.llm_calls} LLM call(s)`);
+      if (result.task_id) console.log(`[Task] Consolidated task ${taskId} of ${sessionId} (${trigger}): ${result.segments} segment(s), ${result.llm_calls} LLM call(s)`);
       return result;
     })
-    .catch(err => console.error(`[Task] Consolidation failed for ${sessionId}: ${err.message}`))
+    .catch(err => console.error(`[Task] Consolidation failed for task ${taskId} (${sessionId}); kept frozen for retry: ${err.message}`))
     .finally(() => { activeConsolidations--; if (consolidationChain.get(sessionId) === next) consolidationChain.delete(sessionId); });
   consolidationChain.set(sessionId, next);
   return next;
 }
-function sweepIdleTasks() {
+async function closeTask(sessionId: string, trigger: TaskTrigger): Promise<string | null> {
+  const taskId = await freezeOpenTask(dbManager, sessionId);
+  if (taskId) void scheduleTask(sessionId, taskId, trigger);
+  return taskId;
+}
+function retryFrozenTasks(force = false): Promise<unknown>[] {
+  const now = Date.now(); const jobs: Promise<unknown>[] = [];
+  for (const t of frozenTasks(dbManager)) {
+    if (isTaskInFlight(t.task_id)) continue;
+    if (!force && now - (lastAttemptMs.get(t.task_id) || 0) < taskRetryMs()) continue;
+    jobs.push(scheduleTask(t.session_id, t.task_id, 'manual'));
+  }
+  return jobs;
+}
+async function sweepIdleTasks() {
   if (!taskConsolidationEnabled()) return;
   try {
-    for (const id of openSessionsIdleSince(dbManager, Date.now() - taskIdleMs())) {
-      if (!consolidationChain.has(id)) void scheduleConsolidation(id, 'idle_timeout');
-    }
+    for (const id of openSessionsIdleSince(dbManager, Date.now() - taskIdleMs())) await closeTask(id, 'idle_timeout');
+    retryFrozenTasks();
   } catch (err: any) { console.error(`[Task] Idle sweep failed: ${err.message}`); }
 }
 const ADMIN_HTML = renderAdminPageHtml(5000);
@@ -361,7 +378,9 @@ async function startServer() {
   const recovered = await recoverInterruptedClaims(dbManager);
   if (recovered) console.log(`[Task] Restored ${recovered} interrupted buffered event(s)`);
   const sweepMs = Math.max(1000, Math.min(60_000, Math.floor(taskIdleMs() / 4)));
-  setInterval(sweepIdleTasks, Number(process.env.AGENTMEM_TASK_SWEEP_MS) || sweepMs).unref();
+  setInterval(() => { void sweepIdleTasks(); }, Number(process.env.AGENTMEM_TASK_SWEEP_MS) || sweepMs).unref();
+  // Frozen tasks left by a previous process are retried promptly.
+  for (const t of frozenTasks(dbManager)) lastAttemptMs.set(t.task_id, 0);
 
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(PORT, () => {
@@ -396,7 +415,8 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
       database: dbManager.getDatabaseDiagnostics(),
       queue: { pending: logQueue.length, processing: isProcessingQueue || activeConsolidations > 0,
         consolidating: activeConsolidations,
-        open_task_events: dbManager.sqlGet('SELECT COUNT(*) AS n FROM task_event_buffer WHERE task_result_id IS NULL').n },
+        open_task_events: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM task_event_buffer WHERE task_result_id IS NULL OR task_result_id LIKE 'task:%'`).n,
+        stuck_tasks: dbManager.sqlGet('SELECT COUNT(*) AS n FROM task_attempts a WHERE attempts >= 5 AND NOT EXISTS (SELECT 1 FROM task_results r WHERE r.task_id=a.task_id)').n },
       tasks: dbManager.sqlGet(`SELECT COUNT(DISTINCT task_id) AS tasks, COALESCE(SUM(llm_calls),0) AS llm_calls,
         (SELECT COUNT(*) FROM tool_evidence) AS evidence_rows FROM task_results`),
       stats: {
@@ -478,6 +498,27 @@ app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
   } catch (error: any) { res.status(400).json({ error: error.message }); }
 });
 
+// Evidence of a task result: the bounded read-only inspections linked to the task (paged).
+app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    const id = String(req.query.id || ''); const offset = Number(req.query.offset || 0);
+    if (!id || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Evidence requires an observation ID and nonnegative item offset');
+    const task = dbManager.sqlGet('SELECT task_id FROM task_results WHERE observation_id=? LIMIT 1', [id]);
+    if (!task) return res.status(404).json({ error: 'No task evidence for this memory' });
+    const rows = dbManager.sqlAll(`SELECT id,tool_name,success,input,output,input_bytes,output_bytes,truncated,source_sha256,created_at
+      FROM tool_evidence WHERE task_id=? ORDER BY received_ms, rowid LIMIT 21 OFFSET ?`, [task.task_id, offset]);
+    const items: any[] = []; let bytes = 0;
+    for (const row of rows.slice(0, 20)) {
+      const size = Buffer.byteLength(JSON.stringify(row));
+      if (items.length && bytes + size > 48 * 1024) break;
+      items.push({ ...row, success: !!row.success, truncated: !!row.truncated }); bytes += size;
+    }
+    const more = items.length < rows.length;
+    res.json({ id, task_id: task.task_id, offset, items, next_offset: more ? offset + items.length : null });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
 // Review reads: a reader acknowledges the exact sha256 it verified, so unchanged
 // items are never sent to its model again. Changed content (new sha) is re-sent.
 app.post('/admin/api/review-reads', adminOnlyGuard, async (req, res) => {
@@ -523,7 +564,8 @@ app.post('/admin/api/tasks/flush', adminOnlyGuard, async (req, res) => {
   try {
     const only = normalizeOptionalString(req.body?.session_id);
     const ids = only ? [only] : openSessionsIdleSince(dbManager, Number.MAX_SAFE_INTEGER);
-    const results = await Promise.all(ids.map(id => scheduleConsolidation(id, 'manual')));
+    for (const id of ids) await closeTask(id, 'manual');
+    const results = await Promise.all([...retryFrozenTasks(true), ...[...consolidationChain.values()]]);
     res.json({ success: true, sessions: ids.length, results });
   } catch (error: any) { res.status(500).json({ error: error.message }); }
 });
@@ -1164,8 +1206,9 @@ app.post('/tasks/boundary', async (req, res) => {
   const sessionId = normalizeOptionalString(req.body?.session_id);
   if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
   if (!(await isWriteEnabled())) return sendWriteDisabled(res);
-  if (taskConsolidationEnabled()) void scheduleConsolidation(sessionId, 'user_prompt');
-  res.json({ success: true, scheduled: taskConsolidationEnabled() });
+  // Freeze before responding: later events can never join this task.
+  const taskId = taskConsolidationEnabled() ? await closeTask(sessionId, 'user_prompt') : null;
+  res.json({ success: true, scheduled: !!taskId, task_id: taskId });
 });
 
 // 4. Force Session Summary on Close
@@ -1185,7 +1228,7 @@ app.post('/sessions/close', async (req, res) => {
       status: 'completed'
     });
     console.log(`[Session] Closed session ${id}`);
-    if (taskConsolidationEnabled()) void scheduleConsolidation(String(id), 'session_close');
+    if (taskConsolidationEnabled()) await closeTask(String(id), 'session_close');
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

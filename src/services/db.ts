@@ -1903,16 +1903,18 @@ export class DatabaseManager {
   // Nothing here deletes or rewrites existing rows; there is no TTL cleanup.
   private async ensureTaskTables(): Promise<void> {
     const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
-      'review_reads', 'review_runs', 'legacy_compaction_links'];
+      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wanted.map(() => '?').join(',')})`, wanted);
     if (have.length === wanted.length) return;
     await this.write(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS tool_evidence (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
         tool_name TEXT NOT NULL, success INTEGER NOT NULL, route_reason TEXT NOT NULL,
-        input_head TEXT NOT NULL, output_head TEXT NOT NULL, input_bytes INTEGER NOT NULL, output_bytes INTEGER NOT NULL,
-        source_sha256 TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
-      this.db.run(`CREATE INDEX IF NOT EXISTS idx_tool_evidence_session ON tool_evidence(session_id, created_at)`);
+        input TEXT NOT NULL, output TEXT NOT NULL, input_bytes INTEGER NOT NULL, output_bytes INTEGER NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0, source_sha256 TEXT NOT NULL, task_id TEXT, received_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_tool_evidence_session ON tool_evidence(session_id, task_id, received_ms)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_tool_evidence_task ON tool_evidence(task_id)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS task_event_buffer (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
         tool_name TEXT NOT NULL, success INTEGER NOT NULL, input TEXT NOT NULL, output TEXT NOT NULL,
@@ -1924,7 +1926,11 @@ export class DatabaseManager {
         agent_id TEXT NOT NULL, segment_index INTEGER NOT NULL, segment_count INTEGER NOT NULL,
         event_count INTEGER NOT NULL, source_ids TEXT NOT NULL, trigger TEXT NOT NULL, status TEXT NOT NULL,
         observation_id TEXT, content_sha256 TEXT, llm_calls INTEGER NOT NULL DEFAULT 0, last_error TEXT,
-        source_kind TEXT NOT NULL DEFAULT 'task', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+        source_kind TEXT NOT NULL DEFAULT 'task', evidence_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(task_id, segment_index))`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_attempts (
+        task_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+        updated_ms INTEGER NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_results_task ON task_results(task_id, segment_index)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
         observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
