@@ -192,6 +192,24 @@ export interface ConsolidationResult { task_id: string | null; llm_calls: number
 const inflight = new Set<string>();
 export function isTaskInFlight(taskId: string) { return inflight.has(taskId); }
 
+/**
+ * Shared by task and legacy consolidation: what an interrupted earlier attempt already saved for this result
+ * (its own observation, or the duplicate link it recorded). A retry reuses it and never calls the model again.
+ */
+export function savedResult(db: DatabaseManager, resultId: string, duplicateFlagId: string): { observationId: string; status: 'saved' | 'duplicate' } | null {
+  if (db.sqlGet(`SELECT id FROM observations WHERE id=?`, [resultId])) return { observationId: resultId, status: 'saved' };
+  const flag = db.sqlGet(`SELECT observation_id FROM duplicate_flags WHERE id=?`, [duplicateFlagId]);
+  return flag ? { observationId: flag.observation_id, status: 'duplicate' } : null;
+}
+
+/** Shared skip policy: failures, edits and abbreviated (truncated/incomplete) sources may never end as 'skipped'. */
+export function skipRefusal(rendered: { truncated: boolean; omitted: number; chars: number }, anyFailure = false, touched = 0): string | null {
+  if (anyFailure) return 'task contains failed tool calls';
+  if (touched) return 'task modified files';
+  if (rendered.truncated) return `source truncated/incomplete (${rendered.omitted} of ${rendered.chars} chars omitted)`;
+  return null;
+}
+
 async function markTaskComplete(db: DatabaseManager, taskId: string) {
   await db.sqlWrite(sql => sql.run(`INSERT INTO task_completions (task_id, completed_ms) VALUES (?, ?)
     ON CONFLICT(task_id) DO UPDATE SET completed_ms = excluded.completed_ms WHERE task_completions.completed_ms = 0`, [taskId, Date.now()]));
@@ -241,6 +259,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     let status = 'saved', observationId: string | null = null, contentHash: string | null = null, lastError: string | null = null;
     let lastObservation: Observation | null = null; let parsed: ReturnType<typeof interpretWorkMemory> | null = null;
     const existing = (await db.getObservationsByIds([resultId]))[0];
+    const reused = existing ? null : savedResult(db, resultId, `dup-${taskId}`);
     const hashDay = String(rows[rows.length - 1].created_at || '').slice(0, 10);
     if (existing) {
       // Crash recovery: the observation was saved but the run stopped before finishing; restore its hash claim
@@ -248,6 +267,10 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
       observationId = existing.id; lastObservation = existing;
       contentHash = summaryHash(existing.project_path, existing, hashDay);
       await db.ensureContentHash(existing.id, existing.project_path, contentHash);
+    }
+    else if (reused?.status === 'duplicate') {
+      // Interrupted after the duplicate link was recorded: reuse it, no model call.
+      status = 'duplicate'; observationId = reused.observationId; result.duplicates++;
     }
     else if (purpose === 'daily_review') { status = 'skipped'; lastError = 'daily_review session'; result.skipped++; }
     else {
@@ -263,7 +286,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
         } catch (err: any) { lastError = err.message; }
       }
       // Failures, edits and abbreviated sources are never silently skipped.
-      if (parsed?.skip && (anyFailure || rendered.truncated || touched.length)) {
+      if (parsed?.skip && skipRefusal(rendered, anyFailure, touched.length)) {
         parsed.skip = false; parsed.kind = anyFailure || touched.length ? 'outcome' : 'context';
         parsed.title ||= `Task: ${[...new Set(rows.map(r => r.tool_name))].slice(0, 6).join(', ')}`;
       }
@@ -371,22 +394,21 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
       const rendered = renderTask(seg);
       // Retry of an interrupted run: reuse what was already saved for this session key; no new model call.
       const prior = db.sqlGet(`SELECT status, observation_id FROM task_results WHERE id=?`, [resultId]);
-      const savedObs = db.sqlGet(`SELECT id FROM observations WHERE id=?`, [resultId]);
-      const savedDup = db.sqlGet(`SELECT observation_id FROM duplicate_flags WHERE id=?`, [`dup-${resultId}`]);
+      const reusedResult = savedResult(db, resultId, `dup-${resultId}`);
       let observationId: string | null = null; let status = 'skipped'; let reason: string | null = null;
       let parsed: any = null;
-      if (savedObs) { observationId = resultId; status = 'saved'; summary.reused++; }
-      else if (savedDup) { observationId = savedDup.observation_id; status = 'duplicate'; summary.reused++; }
+      if (reusedResult) { observationId = reusedResult.observationId; status = reusedResult.status; summary.reused++; }
       else if (prior?.status === 'pending') { status = 'pending'; summary.reused++; }
       else {
         summary.llm_calls++;
         parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
           `Legacy per-step records of one session\nProject: ${first.project_path}\n` +
           `${rendered.omitted ? `NOTE: ${rendered.omitted} chars were omitted for the prompt budget; the source is incomplete.\n` : ''}\n${rendered.text}`, settings), true);
-        if (parsed.skip && rendered.truncated) {
+        const refusal = parsed.skip ? skipRefusal(rendered) : null;
+        if (refusal) {
           // An abbreviated source is never dropped as "skipped": keep it pending with the reason; legacy rows stay unlinked.
           status = 'pending';
-          reason = `legacy source truncated (${rendered.omitted} of ${rendered.chars} chars omitted); model skip not accepted`;
+          reason = `legacy ${refusal}; model skip not accepted`;
         }
       }
       if (status === 'pending') { summary.pending++; reason ||= 'legacy source truncated; kept pending'; }
