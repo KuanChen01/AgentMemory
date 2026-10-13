@@ -12,10 +12,12 @@ async function fixture(run) {
   const envPath = path.join(root, '.env');
   const requests = [];
   let memory = null;
+  let summaryFailure = false;
   const llm = http.createServer(async (req, res) => {
     let text = ''; for await (const chunk of req) text += chunk;
     requests.push({ headers: req.headers, body: JSON.parse(text) });
     res.setHeader('Content-Type', 'application/json');
+    if (summaryFailure) { res.statusCode = 503; res.end('fixture synthesis unavailable'); return; }
     res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(memory || {
       title: 'Verified tool event recovery', narrative: 'Verified that a subsequent normal tool event was processed.',
       facts: ['Verified successful processing'], concepts: ['regression'], files_read: [], files_modified: [],
@@ -64,7 +66,7 @@ async function fixture(run) {
     }
     throw Error(`Queue failed to settle; LLM requests ${requests.length}/${expectedRequests}`);
   };
-  try { await start(); await run({ start, stop, post, get, settled, requests, envPath, worker: () => worker, setMemory: value => { memory = value; } }); }
+  try { await start(); await run({ start, stop, post, get, settled, requests, envPath, worker: () => worker, setMemory: value => { memory = value; }, setSummaryFailure: value => { summaryFailure = value; } }); }
   finally {
     await stop(); await new Promise(resolve => llm.close(resolve));
     const resolved = path.resolve(root);
@@ -171,5 +173,35 @@ test('truncated synthesis input cannot be skipped as proven routine work', async
     const view=await (await get('/admin/api/work-overview?'+qs)).json();
     assert.equal(view.memories.length,1); assert.equal(view.memories[0].kind,'context');
     assert.match(view.memories[0].narrative,/unshown content remains unknown/);
+  });
+});
+
+test('successful source remains recoverable when synthesis fails without a second model call', async () => {
+  await fixture(async ({post,get,settled,setSummaryFailure,requests}) => {
+    setSummaryFailure(true);
+    await post('/tools',{session_id:'capture-error',project_path:'E:/Verified',agent_id:'codex',tool_name:'exec_command',success:true,
+      input:'verify build',output:'Build passed; durable deployment issue resolved'});
+    const status=await settled(1);
+    assert.equal(status.stats.observations,1); assert.equal(requests.length,1);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    const ref=view.memories[0]; assert.equal(ref.kind,'context');
+    const detail=await (await get('/admin/api/work-details?id='+ref.id)).json();
+    assert.match(detail.text,/Build passed; durable deployment issue resolved/);
+    assert.match(detail.text,/classification remains unknown/);
+  });
+});
+
+test('MCP errors and upstream truncation survive optimistic success and model skip', async () => {
+  await fixture(async ({post,get,settled,setMemory}) => {
+    setMemory({record_kind:'skip',title:'Routine read',facts:[]});
+    const base={session_id:'source-protection',project_path:'E:/Source',agent_id:'codex',tool_name:'exec_command',success:true,input:'inspect'};
+    await post('/tools',{...base,output:{isError:true,content:[]}}); await settled(1);
+    await post('/tools',{...base,output:'Warning: truncated output (original token count: 42000)\npartial result'}); await settled(2);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.memories.length,2); assert.equal(view.memories[0].kind,'outcome');
+    assert.match(view.memories[0].narrative,/isError/);
+    assert.equal(view.memories[1].kind,'context'); assert.match(view.memories[1].narrative,/unknown/);
   });
 });

@@ -747,61 +747,88 @@ export class DatabaseManager {
     // second, then let durable notes/outcome tasks handle idempotency.
     const from = start.toISOString().slice(0, 19).replace('T', ' ');
     const to = end.toISOString().slice(0, 19).replace('T', ' ');
-    let after = 0, high: number = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM observations').n;
+    const observedHigh = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM observations').n;
+    const sessionHigh = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM sessions').n;
+    let position = { version: 2, since, until, high: observedHigh, sessionHigh,
+      catalog: 0, after: 0, legacy: 0 };
     if (cursor) {
       let saved: any;
       try { saved = JSON.parse(Buffer.from(cursor, 'base64url').toString()); } catch { throw new Error('Invalid overview cursor'); }
-      if (saved.since !== since || saved.until !== until || !Number.isSafeInteger(saved.after) || !Number.isSafeInteger(saved.high)
-          || saved.after < 0 || saved.high < saved.after || saved.high > high) throw new Error('Overview cursor conflicts with interval');
-      after = saved.after; high = saved.high;
+      if (saved.version !== 2 || saved.since !== since || saved.until !== until
+          || !['high','sessionHigh','catalog','after','legacy'].every(k => Number.isSafeInteger(saved[k]) && saved[k] >= 0)
+          || saved.high > observedHigh || saved.sessionHigh > sessionHigh || saved.after > saved.high || saved.legacy > 5)
+        throw new Error('Overview cursor conflicts with interval');
+      position = saved;
     }
+    const { high } = position;
     const where = `o.rowid <= ? AND datetime(o.created_at) >= datetime(?) AND datetime(o.created_at) <= datetime(?)`;
-    const projects = this.db.all(`SELECT o.project_path, o.agent_id, COUNT(DISTINCT o.session_id) AS sessions,
-      COUNT(*) AS observations, SUM(m.record_kind='outcome') AS outcomes,
-      SUM(m.record_kind='context') AS contexts, SUM(m.record_kind IS NULL) AS legacy
-      FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
-      WHERE ${where} GROUP BY o.project_path,o.agent_id ORDER BY o.project_path,o.agent_id`, [high, from, to]);
-    const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind FROM observations o
-      LEFT JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${where} AND o.rowid > ? AND m.record_kind IS NOT NULL
-      ORDER BY o.rowid LIMIT 20`, [high, from, to, after]);
-    // Old tool observations are recovery clues, not a new mandatory audit queue.
-    // Keep the complete global activity catalog, and give only explicit samples
-    // of legacy sessions. Their omission is never classified as inactivity.
-    const legacy = cursor ? [] : this.db.all(`SELECT * FROM (
-      SELECT o.*, ROW_NUMBER() OVER(PARTITION BY o.project_path,o.session_id ORDER BY o.rowid DESC) AS rank
-      FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
-      WHERE ${where} AND m.record_kind IS NULL) WHERE rank=1 ORDER BY created_at DESC,id LIMIT 5`, [high, from, to]);
-    const memories: any[] = [];
-    let last = after;
-    for (const row of rows) {
+    // Window activity includes session starts even if no observation was saved.
+    // Existing dormant sessions are not claimed as activity in this interval.
+    const catalog = this.db.all(`WITH activity AS (
+      SELECT o.project_path,o.agent_id,o.session_id,1 AS observation,m.record_kind FROM observations o
+      LEFT JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${where}
+      UNION ALL
+      SELECT s.project_path,s.agent_id,s.id,0,NULL FROM sessions s WHERE s.rowid <= ?
+        AND datetime(s.created_at) >= datetime(?) AND datetime(s.created_at) <= datetime(?)
+      ) SELECT project_path,agent_id,COUNT(DISTINCT session_id) AS sessions,
+        SUM(observation) AS observations, SUM(observation=1 AND record_kind='outcome') AS outcomes,
+        SUM(observation=1 AND record_kind='context') AS contexts,
+        SUM(observation=1 AND record_kind IS NULL) AS legacy
+      FROM activity GROUP BY project_path,agent_id ORDER BY project_path,agent_id LIMIT 21 OFFSET ?`,
+      [high,from,to,position.sessionHigh,from,to,position.catalog]);
+    const payload: any = { version: 1, since, until, projects: [], memories: [], legacy_samples: [],
+      next_cursor: null, source_high_water: high, session_high_water: position.sessionHigh,
+      discovery_hint: 'Paged catalog of session starts and saved observations in this interval. Typed memories and at most five legacy samples are best-effort clues, not proof of inactivity or exhaustive outcomes. Verify promoted claims.' };
+    // Budget the entire encoded response, not just memories. Reserve cursor
+    // space so a large catalog cannot strand the client on an oversized page.
+    const add = (key: string, item: any) => {
+      payload[key].push(item);
+      if (Buffer.byteLength(JSON.stringify(payload), 'utf8') + 2048 > 12 * 1024) {
+        payload[key].pop(); return false;
+      }
+      return true;
+    };
+    let catalogDelivered = 0;
+    for (const row of catalog.slice(0,20)) {
+      if (!add('projects',row)) break;
+      catalogDelivered++; position.catalog++;
+    }
+    let more = catalogDelivered < catalog.length;
+    const memory = (row: any) => {
       const item = { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
         created_at: row.created_at, kind: row.record_kind || 'legacy', source: row.source_kind || 'legacy',
         title: row.title, narrative: row.narrative, facts: JSON.parse(row.facts), concepts: JSON.parse(row.concepts),
         files_modified: JSON.parse(row.files_modified), files_read: JSON.parse(row.files_read) };
-      if (Buffer.byteLength(JSON.stringify(item), 'utf8') > 4096) {
-        const ref = { id: row.id, project_path: row.project_path, session_id: row.session_id,
-          agent_id: row.agent_id, created_at: row.created_at, kind: item.kind,
-          detail_required: true, reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
-        if (memories.length && Buffer.byteLength(JSON.stringify([...memories, ref]), 'utf8') > 12 * 1024) break;
-        memories.push(ref);
-      } else {
-        if (memories.length && Buffer.byteLength(JSON.stringify([...memories, item]), 'utf8') > 12 * 1024) break;
-        memories.push(item);
+      return Buffer.byteLength(JSON.stringify(item), 'utf8') <= (item.kind === 'legacy' ? 2048 : 4096) ? item : {
+        id: row.id, kind: item.kind, detail_required: true,
+        reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
+    };
+    if (!more) {
+      const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind FROM observations o
+        JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${where} AND o.rowid > ?
+        ORDER BY o.rowid LIMIT 20`, [high,from,to,position.after]);
+      for (const row of rows) {
+        if (!add('memories',memory(row))) break;
+        position.after = row.position;
       }
-      last = row.position;
+      more = !!this.db.get(`SELECT 1 FROM observations o JOIN observation_work_metadata m ON m.observation_id=o.id
+        WHERE ${where} AND o.rowid > ? LIMIT 1`, [high,from,to,position.after]);
+      // These are explicitly samples; omitted legacy text never becomes a queue.
+      const legacy = this.db.all(`SELECT * FROM (
+        SELECT o.*,ROW_NUMBER() OVER(PARTITION BY o.project_path,o.session_id ORDER BY o.rowid DESC) AS rank
+        FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+        WHERE ${where} AND m.record_kind IS NULL) WHERE rank=1 ORDER BY created_at DESC,id LIMIT 5`, [high,from,to]);
+      for (const row of legacy.slice(position.legacy)) {
+        if (!add('legacy_samples',memory(row))) break;
+        position.legacy++;
+      }
+      more ||= position.legacy < legacy.length;
     }
-    const more = !!this.db.get(`SELECT 1 FROM observations o JOIN observation_work_metadata m ON m.observation_id=o.id
-      WHERE ${where} AND o.rowid > ? LIMIT 1`, [high, from, to, last]);
-    const legacy_samples = legacy.map((row: any) => {
-      const item = { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
-        created_at: row.created_at, kind: 'legacy', title: row.title, narrative: row.narrative, facts: JSON.parse(row.facts),
-        concepts: JSON.parse(row.concepts), files_read: JSON.parse(row.files_read), files_modified: JSON.parse(row.files_modified) };
-      return Buffer.byteLength(JSON.stringify(item), 'utf8') <= 2048 ? item : {
-        id: row.id, project_path: row.project_path, session_id: row.session_id, kind: 'legacy', detail_required: true };
-    });
-    return { version: 1, since, until, projects: cursor ? [] : projects, memories, legacy_samples,
-      next_cursor: more ? Buffer.from(JSON.stringify({ since, until, high, after: last })).toString('base64url') : null,
-      source_high_water: high, discovery_hint: 'Best-effort typed work overview plus whole legacy samples. Legacy is not exhaustively read or classified as inactivity. Use project context/digests/source where relevant; verify promoted claims.' };
+    if (more) payload.next_cursor = Buffer.from(JSON.stringify(position)).toString('base64url');
+    if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > 12 * 1024
+        || (more && !payload.projects.length && !payload.memories.length && !payload.legacy_samples.length))
+      throw new Error('Overview routing metadata exceeds page budget; source requires inspection');
+    return payload;
   }
 
   // Get project timeline (chronological observations)

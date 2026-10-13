@@ -56,3 +56,34 @@ test('global overview keeps unregistered agents, whole text, stable cursor and u
     fs.rmSync(root,{recursive:true,force:true});
   }
 });
+
+test('whole overview pages fit client budget and include session-only activity with frozen sources', async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'catalog-budget-'));
+  const old=process.env.AGENTMEM_DB_PATH; process.env.AGENTMEM_DB_PATH=path.join(root,'fixture.db');
+  const db=new DatabaseManager();
+  try {
+    await db.initialize();
+    for(let i=0;i<80;i++) await db.saveObservation({id:'o'+i,session_id:'s'+i,
+      project_path:'E:/Unregistered/'+String(i).padStart(3,'0')+'x'.repeat(170),agent_id:'other',title:'verified '+i,
+      narrative:'useful result',facts:[],concepts:[],files_read:[],files_modified:[],embedding:[],
+      record_kind:'outcome',created_at:'2026-10-12 15:00:00'});
+    await db.saveSession({id:'no-observation',project_path:'E:/OnlySession',agent_id:'grok',status:'active'});
+    db.db.run("UPDATE sessions SET created_at='2026-10-12 15:00:00' WHERE id='no-observation'");
+    const args=['2026-10-12T14:59:59Z','2026-10-12T16:00:00Z'];
+    let cursor, projects=[], memories=[], pages=0;
+    do {
+      const page=await db.getWorkOverview(...args,cursor);
+      assert.ok(Buffer.byteLength(JSON.stringify(page))<=12*1024);
+      assert.ok(!cursor || page.next_cursor!==cursor, 'cursor makes progress');
+      projects.push(...page.projects); memories.push(...page.memories); cursor=page.next_cursor;
+      if(pages++===0) {
+        await db.saveSession({id:'late-session',project_path:'E:/Late',agent_id:'grok',status:'active'});
+        db.db.run("UPDATE sessions SET created_at='2026-10-12 15:00:00' WHERE id='late-session'");
+      }
+      assert.ok(pages<20,'bounded fixture terminates');
+    } while(cursor);
+    assert.equal(projects.length,81); assert.equal(new Set(projects.map(p=>p.project_path)).size,81);
+    assert.equal(projects.find(p=>p.project_path==='E:/OnlySession').observations,0);
+    assert.equal(memories.length,80); assert.equal(new Set(memories.map(m=>m.id)).size,80);
+  } finally { db.close(); if(old===undefined) delete process.env.AGENTMEM_DB_PATH; else process.env.AGENTMEM_DB_PATH=old; fs.rmSync(root,{recursive:true,force:true}); }
+});

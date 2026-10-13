@@ -389,7 +389,7 @@ test('test workers keep lifecycle files separate from an inherited user runtime'
 });
 
 for (const mode of ['missing credentials', 'LLM HTTP failure']) {
-  test(`worker fallback skips successful raw logs but retains tool failures: ${mode}`, async () => {
+  test(`worker fallback retains uncertain successful sources and tool failures: ${mode}`, async () => {
     const dbPath = makeDbPath();
     const port = makePort();
     const mock = mode === 'LLM HTTP failure' ? await startMockReleaseServer({ error: 'unavailable' }, 503) : null;
@@ -422,10 +422,14 @@ for (const mode of ['missing credentials', 'LLM HTTP failure']) {
         if (records.some((record) => record.title === 'Tool failure: Read')) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      assert.equal(records.length, 1);
-      assert.equal(records[0].title, 'Tool failure: Read');
-      assert.match(records[0].narrative, /ENOENT: README.md not found/);
-      assert.match(records[0].narrative, mock ? /Summarization failed/ : /Missing LLM API credentials/);
+      assert.equal(records.length, 2);
+      const failed = records.find(record => record.title === 'Tool failure: Read');
+      const uncertain = records.find(record => record.title === 'Capture incomplete: Read');
+      assert.ok(failed); assert.ok(uncertain);
+      assert.match(failed.narrative, /ENOENT: README.md not found/);
+      assert.match(failed.narrative, mock ? /Summarization failed/ : /Missing LLM API credentials/);
+      assert.match(uncertain.narrative, /Documentation contents/);
+      assert.match(uncertain.narrative, /classification remains unknown/);
       if (mock) assert.equal(mock.requests.length, 2);
     } finally {
       if (child) await stopWorker(child, port);

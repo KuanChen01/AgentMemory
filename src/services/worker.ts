@@ -49,7 +49,7 @@ import { buildReleaseManifest } from './release';
 import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger, llmBudgetOptions, recordLlmUsage } from './llm-budget';
-import { normalizeToolLogText, skipRawToolLog } from './tool-log-policy';
+import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import {
   DailyDigestSchedulerHandle,
@@ -1042,7 +1042,7 @@ app.post('/tools', async (req, res) => {
       tool_name,
       input: normalizeToolLogText(input),
       output: normalizeToolLogText(output),
-      success: !!success,
+      success: toolResponseSucceeded(output, !!success),
       timestamp: Date.now()
     };
 
@@ -1212,6 +1212,7 @@ async function handleSummarization(log: QueuedToolLog) {
     return;
   }
 
+  try {
   const requestUrl = `${rawApiUrl.trim().replace(/\/+$/, '')}/chat/completions`;
 
   // Parse custom headers if configured (will fail loudly if invalid JSON)
@@ -1251,8 +1252,7 @@ JSON Schema:
 
   const inputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_INPUT_MAX_CHARS, 10000, 1000, 30000);
   const outputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_MAX_CHARS, 20000, 1000, 60000);
-  const incompleteSource = log.input.length > inputLimit || log.output.length > outputLimit
-    || log.input.includes('[... truncated by AgentMemory ...]') || log.output.includes('[... truncated by AgentMemory ...]');
+  const incompleteSource = incompleteToolSource(log.input, log.output, inputLimit, outputLimit);
   const userPrompt = `Session purpose: ${await dbManager.getSessionPurpose(log.session_id)}
 Tool Name: ${log.tool_name}
 Status: ${log.success ? 'Success' : 'Failure'}
@@ -1266,7 +1266,6 @@ ${boundToolText(log.input, inputLimit)}
 ${boundToolText(log.output, outputLimit)}
 `;
 
-  try {
     const requestBody: any = {
       model: modelName,
       messages: [
@@ -1337,7 +1336,11 @@ ${boundToolText(log.output, outputLimit)}
     };
 
     await dbManager.saveObservation(observation);
-    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation);
+    // A post-review failure must not re-save an observation already captured.
+    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation).catch(err => {
+      console.error(`[Memory] Post-task review failed after capture: ${err.message}`);
+      return { review: null, decision: { reasons: ['Post-task review unavailable'] } };
+    });
     console.log(
       `[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}" (${parsedObs.kind})`
     );
@@ -1359,40 +1362,30 @@ ${boundToolText(log.output, outputLimit)}
 
 // Fallback logic if LLM fails or API keys are missing
 async function saveMockObservation(log: QueuedToolLog, reason: string) {
-  // Without a summary, successful raw executions contain no extracted outcome
-  // or file evidence. A summarizer diagnostic must not promote them into memory.
-  if (log.success) return;
-
-  const textToEmbed = `Raw observation for ${log.tool_name}. ${reason}`;
-  const embedding = await getEmbedding(textToEmbed);
-  const failedOutput = log.output.trim().slice(0, 500);
+  // Capture failure is uncertainty, never proof that a successful event had no
+  // value. Keep bounded source evidence without another model/embedding call.
+  const kind = log.success ? 'context' : 'outcome';
 
   const observation: Observation = {
     id: log.id,
     session_id: log.session_id,
     project_path: log.project_path,
     agent_id: log.agent_id,
-    title: `Tool failure: ${log.tool_name}`,
-    narrative: `Tool execution failed while memory summarization was unavailable. ${reason}.${failedOutput ? ` Output: ${failedOutput}` : ''}`,
+    title: `${log.success ? 'Capture incomplete' : 'Tool failure'}: ${log.tool_name}`,
+    narrative: `Memory synthesis unavailable; outcome classification remains unknown. ${reason.slice(0, 500)}\nInput: ${boundToolText(log.input, 2000)}\nOutput: ${boundToolText(log.output, 4000)}`,
     facts: [`Executed ${log.tool_name}`, `Success status: ${log.success}`],
     concepts: ['tool_execution'],
     files_read: [],
     files_modified: [],
-    embedding, record_kind: 'outcome', source_kind: 'tool'
+    embedding: [], record_kind: kind, source_kind: 'tool'
   };
 
   const writeDecision = decideObservationWritePolicy({
     observation,
-    source: 'tool_log', classification: 'outcome',
+    source: 'tool_log', classification: kind,
   });
   if (writeDecision.action !== 'skip') {
     await dbManager.saveObservation(observation);
-    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation);
-    if (postTaskResult.review) {
-      console.log(
-        `[Memory] Saved fallback post-task review for observation ${observation.id}: "${observation.title}"`
-      );
-    }
   }
 }
 
