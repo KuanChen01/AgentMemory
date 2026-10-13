@@ -357,7 +357,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
   const summary = { mode: options.apply ? 'apply' : 'dry-run', days: options.days, since, legacy_rows: rows.length,
     sessions: plan.length, planned_llm_calls: plan.reduce((n, p) => n + p.segments.length, 0),
     planned_chars: plan.reduce((n, p) => n + renderTask(p.segments[0]).text.length, 0),
-    llm_calls: 0, results_saved: 0, rows_deleted: 0 };
+    llm_calls: 0, results_saved: 0, reused: 0, pending: 0, rows_deleted: 0 };
   if (!options.apply) return summary;
   const settings = resolveLlmSettings();
   if (!llmAvailable(settings)) throw new Error('compact-legacy --apply requires LLM credentials');
@@ -368,11 +368,29 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
     const taskId = `legacy-task-${key}`;
     for (let i = 0; i < p.segments.length; i++) {
       const seg = p.segments[i]; const first = seg[0]; const resultId = `legacy-${key}-${i}`;
-      summary.llm_calls++;
-      const parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
-        `Legacy per-step records of one session\nProject: ${first.project_path}\n\n${renderTask(seg).text}`, settings), true);
-      let observationId: string | null = null; let status = 'skipped';
-      if (!parsed.skip) {
+      const rendered = renderTask(seg);
+      // Retry of an interrupted run: reuse what was already saved for this session key; no new model call.
+      const prior = db.sqlGet(`SELECT status, observation_id FROM task_results WHERE id=?`, [resultId]);
+      const savedObs = db.sqlGet(`SELECT id FROM observations WHERE id=?`, [resultId]);
+      const savedDup = db.sqlGet(`SELECT observation_id FROM duplicate_flags WHERE id=?`, [`dup-${resultId}`]);
+      let observationId: string | null = null; let status = 'skipped'; let reason: string | null = null;
+      let parsed: any = null;
+      if (savedObs) { observationId = resultId; status = 'saved'; summary.reused++; }
+      else if (savedDup) { observationId = savedDup.observation_id; status = 'duplicate'; summary.reused++; }
+      else if (prior?.status === 'pending') { status = 'pending'; summary.reused++; }
+      else {
+        summary.llm_calls++;
+        parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
+          `Legacy per-step records of one session\nProject: ${first.project_path}\n` +
+          `${rendered.omitted ? `NOTE: ${rendered.omitted} chars were omitted for the prompt budget; the source is incomplete.\n` : ''}\n${rendered.text}`, settings), true);
+        if (parsed.skip && rendered.truncated) {
+          // An abbreviated source is never dropped as "skipped": keep it pending with the reason; legacy rows stay unlinked.
+          status = 'pending';
+          reason = `legacy source truncated (${rendered.omitted} of ${rendered.chars} chars omitted); model skip not accepted`;
+        }
+      }
+      if (status === 'pending') { summary.pending++; reason ||= 'legacy source truncated; kept pending'; }
+      else if (parsed && !parsed.skip) {
         const obs: Observation = { id: resultId, session_id: p.session, project_path: first.project_path, agent_id: first.agent_id,
           title: parsed.title || 'Compacted legacy session', narrative: parsed.narrative, facts: parsed.facts, concepts: parsed.concepts,
           files_read: parsed.files_read, files_modified: parsed.files_modified, embedding: [], record_kind: parsed.kind,
@@ -386,15 +404,18 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
         if (saved.duplicateOf) { observationId = saved.duplicateOf; status = 'duplicate'; }
         else { observationId = obs.id; status = 'saved'; summary.results_saved++; }
       }
+      const called = parsed ? 1 : 0;
       await db.sqlWrite(sql => {
         sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
-          source_ids,trigger,status,observation_id,llm_calls,source_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,'legacy_compacted')
-          ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id, llm_calls=task_results.llm_calls+1`,
+          source_ids,trigger,status,observation_id,llm_calls,source_kind,last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'legacy_compacted',?)
+          ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id,
+            llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=COALESCE(excluded.last_error, task_results.last_error)`,
           [resultId, taskId, p.session, first.project_path, first.agent_id, i, p.segments.length, seg.length,
-            JSON.stringify(seg.map((r: any) => r.id)), 'legacy_compaction', status, observationId]);
-        for (const r of seg) sql.run(`INSERT OR IGNORE INTO legacy_compaction_links VALUES (?,?)`, [r.id, resultId]);
+            JSON.stringify(seg.map((r: any) => r.id)), 'legacy_compaction', status, observationId, called, reason]);
+        // A pending (truncated) source stays unlinked, so it remains visible as not-yet-compacted.
+        if (status !== 'pending') for (const r of seg) sql.run(`INSERT OR IGNORE INTO legacy_compaction_links VALUES (?,?)`, [r.id, resultId]);
       });
-      await markTaskComplete(db, taskId);
+      if (status !== 'pending') await markTaskComplete(db, taskId);
     }
   }
   return summary;
