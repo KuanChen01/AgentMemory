@@ -56,7 +56,6 @@ import {
   bufferEvent, consolidateTask, freezeOpenTask, frozenTasks, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
   stuckTaskCount, taskIdleMs, taskRetryMs, TaskTrigger,
 } from './task-consolidation';
-import { registerTranscript, sessionUsesTranscript, syncTranscript, activeTranscripts } from './codex-transcript';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -115,8 +114,6 @@ function scheduleTask(sessionId: string, taskId: string, trigger: TaskTrigger): 
   return next;
 }
 async function closeTask(sessionId: string, trigger: TaskTrigger): Promise<string | null> {
-  // A session whose Codex transcript is readable is synced first, so the task holds every call up to the boundary.
-  if (sessionUsesTranscript(dbManager, sessionId)) await syncSessionTranscripts(sessionId);
   const taskId = await freezeOpenTask(dbManager, sessionId);
   if (taskId) void scheduleTask(sessionId, taskId, trigger);
   return taskId;
@@ -130,24 +127,9 @@ function retryFrozenTasks(force = false): Promise<unknown>[] {
   }
   return jobs;
 }
-// Transcript sync: boundaries found in the transcript (each user prompt / turn end) freeze tasks with
-// deterministic ids; the frozen tasks are then consolidated like any other.
-async function syncSessionTranscripts(sessionId?: string) {
-  for (const cursor of activeTranscripts(dbManager, sessionId)) {
-    try {
-      const result = await syncTranscript(dbManager, cursor.path, { archiveRoots: transcriptArchiveRoots() });
-      for (const t of result.frozen_tasks) void scheduleTask(t.session_id, t.task_id, t.trigger);
-    } catch (err: any) { console.error(`[Transcript] Sync failed for ${cursor.path}: ${err.message}`); }
-  }
-}
-function transcriptArchiveRoots(): string[] {
-  return String(process.env.AGENTMEM_CODEX_ARCHIVE_DIRS || path.join(os.homedir(), '.codex', 'archived_sessions'))
-    .split(path.delimiter).filter(Boolean);
-}
 async function sweepIdleTasks() {
   if (!taskConsolidationEnabled()) return;
   try {
-    await syncSessionTranscripts();
     for (const id of openSessionsIdleSince(dbManager, Date.now() - taskIdleMs())) await closeTask(id, 'idle_timeout');
     retryFrozenTasks();
   } catch (err: any) { console.error(`[Task] Idle sweep failed: ${err.message}`); }
@@ -435,8 +417,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
         consolidating: activeConsolidations,
         open_task_events: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM task_event_buffer WHERE task_result_id IS NULL OR task_result_id LIKE 'task:%'`).n,
         stuck_tasks: stuckTaskCount(dbManager),
-        duplicate_flags: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM duplicate_flags WHERE status='needs_confirmation'`).n,
-        transcripts: dbManager.sqlAll(`SELECT status, format, COUNT(*) AS n FROM transcript_cursors GROUP BY status, format`) },
+        duplicate_flags: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM duplicate_flags WHERE status='needs_confirmation'`).n },
       tasks: dbManager.sqlGet(`SELECT COUNT(DISTINCT task_id) AS tasks, COALESCE(SUM(llm_calls),0) AS llm_calls,
         (SELECT COUNT(*) FROM tool_evidence) AS evidence_rows FROM task_results`),
       stats: {
@@ -1175,9 +1156,6 @@ app.post('/sessions', async (req, res) => {
     };
 
     await dbManager.saveSession(session);
-    const transcriptPath = normalizeOptionalString(req.body?.transcript_path);
-    if (transcriptPath && taskConsolidationEnabled()) await registerTranscript(dbManager, transcriptPath, id, normalizedPath).catch(err =>
-      console.error(`[Transcript] Not used for ${id} (hook events stay the source): ${err.message}`));
     console.log(`[Session] Registered session ${id} for agent ${agent_id} on ${normalizedPath}`);
     res.json({ success: true, purpose: await dbManager.getSessionPurpose(id) });
   } catch (err: any) {
@@ -1216,10 +1194,7 @@ app.post('/tools', async (req, res) => {
       return res.json({ success: true, skipped: true, route: 'drop', reason: decision.reason, queueLength: logQueue.length });
     }
     if (taskConsolidationEnabled()) {
-      const hookTranscript = normalizeOptionalString(req.body?.transcript_path);
-      if (hookTranscript) await registerTranscript(dbManager, hookTranscript, session_id, logEntry.project_path).catch(() => undefined);
-      // When the session's Codex transcript is the source, hook events would double count; the transcript wins.
-      if (sessionUsesTranscript(dbManager, session_id)) return res.json({ success: true, route: 'transcript', buffered: false });
+      // Hooks are the sole capture source; every tool event joins the session's open task.
       // Insert-once by tool call id when the hook provides one.
       const callId = normalizeOptionalString(req.body?.call_id ?? req.body?.tool_use_id ?? req.body?.id);
       if (callId) logEntry.id = `hook:${session_id}:${callId}`;
@@ -1243,8 +1218,6 @@ app.post('/tasks/boundary', async (req, res) => {
   const sessionId = normalizeOptionalString(req.body?.session_id);
   if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
   if (!(await isWriteEnabled())) return sendWriteDisabled(res);
-  const transcriptPath = normalizeOptionalString(req.body?.transcript_path);
-  if (transcriptPath && taskConsolidationEnabled()) await registerTranscript(dbManager, transcriptPath, sessionId, '').catch(() => undefined);
   // Freeze before responding: later events can never join this task.
   const taskId = taskConsolidationEnabled() ? await closeTask(sessionId, 'user_prompt') : null;
   res.json({ success: true, scheduled: !!taskId, task_id: taskId });

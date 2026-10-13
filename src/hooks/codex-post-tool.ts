@@ -51,9 +51,8 @@ async function main() {
         input: toolLog.input,
         output: toolLog.output,
         success: toolLog.success,
-        // Insert-once id and the transcript path (when Codex provides them); the worker then uses the transcript.
+        // Insert-once id (when Codex provides one): a retried hook delivery is stored once.
         call_id: payload.call_id ?? payload.tool_use_id ?? payload.toolUseId ?? undefined,
-        transcript_path: payload.transcript_path ?? payload.transcriptPath ?? undefined,
       })
     });
     if (stuckQuery) {

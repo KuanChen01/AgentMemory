@@ -31,14 +31,28 @@ export function classifyToolEvent(log: RawToolLog, sessionPurpose: string): Even
   return { route: 'task', reason: 'buffered for whole-task synthesis' };
 }
 
+function patchTexts(input: string): string[] {
+  const out: string[] = [];
+  const visit = (v: unknown) => {
+    if (typeof v === 'string') { if (v.includes('*** ')) out.push(v); }
+    else if (Array.isArray(v)) v.forEach(visit);
+    else if (v && typeof v === 'object') Object.values(v).forEach(visit);
+  };
+  try { visit(JSON.parse(input)); } catch { /* not JSON */ }
+  return out.length ? out : [input];
+}
+
 const EDIT_TOOLS = /^(apply_patch|edit|multiedit|multi_edit|write|write_file|create_file|str_replace|str_replace_editor|edit_file|replace|notebookedit)$/;
 
 /** The "modified files" signal: paths named by edit tools (apply_patch headers or path arguments). */
 export function modifiedFiles(toolName: string, input: string): string[] {
   const name = shortToolName(toolName);
   const files = new Set<string>();
-  for (const m of String(input || '').matchAll(/\*\*\* (?:Update|Add|Delete) File: ([^\n\r"\\]+)/g)) files.add(m[1].trim());
-  for (const m of String(input || '').matchAll(/\*\*\* Move to: ([^\n\r"\\]+)/g)) files.add(m[1].trim());
+  // Patch text may arrive raw or JSON-encoded; decode first so Windows paths (E:\\App\\x.ts) keep their backslashes.
+  for (const text of patchTexts(String(input || ''))) {
+    for (const m of text.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+?)\s*$/gm)) files.add(m[1].trim());
+    for (const m of text.matchAll(/^\*\*\* Move to: (.+?)\s*$/gm)) files.add(m[1].trim());
+  }
   if (EDIT_TOOLS.test(name)) {
     try {
       const parsed = JSON.parse(input);

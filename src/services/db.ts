@@ -1930,7 +1930,7 @@ export class DatabaseManager {
   // Nothing here deletes or rewrites existing rows; there is no TTL cleanup.
   private async ensureTaskTables(): Promise<void> {
     const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
-      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'transcript_cursors', 'duplicate_flags'];
+      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'duplicate_flags'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wanted.map(() => '?').join(',')})`, wanted);
     if (have.length === wanted.length && !this.taskTablesNeedMigration()) return;
     await this.write(() => {
@@ -1967,12 +1967,6 @@ export class DatabaseManager {
       if (!hadCompletions) this.db.run(`INSERT OR IGNORE INTO task_completions (task_id, completed_ms)
         SELECT DISTINCT r.task_id, 0 FROM task_results r WHERE NOT EXISTS
           (SELECT 1 FROM task_event_buffer b WHERE b.task_result_id = 'task:' || r.task_id)`);
-      // Codex transcript reader: byte offset + content fingerprint per transcript file (resume, rotation, archive/move).
-      this.db.run(`CREATE TABLE IF NOT EXISTS transcript_cursors (
-        path TEXT PRIMARY KEY, session_id TEXT, project_path TEXT, fingerprint TEXT NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
-        size INTEGER NOT NULL DEFAULT 0, format TEXT NOT NULL DEFAULT 'unknown', status TEXT NOT NULL DEFAULT 'active',
-        pending_json TEXT NOT NULL DEFAULT '{}', turn INTEGER NOT NULL DEFAULT 0, moved_from TEXT, updated_ms INTEGER NOT NULL)`);
-      this.db.run(`CREATE INDEX IF NOT EXISTS idx_transcript_cursors_session ON transcript_cursors(session_id, status)`);
       // Duplicate-looking summaries are linked and flagged for a human; never deleted automatically.
       this.db.run(`CREATE TABLE IF NOT EXISTS duplicate_flags (
         id TEXT PRIMARY KEY, task_id TEXT NOT NULL, observation_id TEXT NOT NULL, matched_sha256 TEXT NOT NULL,

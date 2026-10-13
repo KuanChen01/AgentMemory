@@ -1,3 +1,4 @@
+import { incompleteToolSource } from './tool-log-policy';
 import { randomUUID } from 'crypto';
 import { DatabaseManager, Observation } from './db';
 import { boundedEnvInteger } from './llm-budget';
@@ -10,11 +11,11 @@ import { runAutomaticPostTaskReview } from './post-task-review';
 /**
  * Simplified task pipeline (claude-mem style):
  *  - rules only drop whole tool classes (see event-classifier); everything else is buffered as-is;
- *  - a task is frozen at its boundary (user prompt / turn end / session close / 20-min idle);
+ *  - hooks are the only capture source; a task is frozen at the next user prompt, session close or 20-min idle;
  *  - the whole task is sent to the model ONCE; very large tasks keep head + tail with an explicit
  *    "omitted N chars" marker (never segmented);
- *  - every tool call and every task has a unique id with insert-once semantics, so retries and
- *    transcript re-reads are idempotent;
+ *  - every tool call and every task has a unique id with insert-once semantics, so hook retries
+ *    are idempotent;
  *  - an identical summary is linked, not saved twice, and flagged for human confirmation.
  */
 export interface IncomingToolEvent {
@@ -37,10 +38,11 @@ export const MAX_TASK_ATTEMPTS = 5;
 const EVENT_INPUT_MAX = 30000;
 const EVENT_OUTPUT_MAX = 60000;
 
-/** Buffer one tool call. Insert-once: a re-delivered call id (hook retry, transcript re-read) is ignored. */
+/** Buffer one tool call. Insert-once: a re-delivered call id (hook retry) is ignored. */
 export async function bufferEvent(db: DatabaseManager, ev: IncomingToolEvent): Promise<boolean> {
   const input = String(ev.input ?? ''), output = String(ev.output ?? '');
-  const incomplete = input.length > EVENT_INPUT_MAX || output.length > EVENT_OUTPUT_MAX;
+  // Over-size at capture OR a tool's own truncation marker ('Warning: truncated output', ...) = incomplete source.
+  const incomplete = incompleteToolSource(input, output, EVENT_INPUT_MAX, EVENT_OUTPUT_MAX);
   const res: any = await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_event_buffer (id,session_id,project_path,agent_id,tool_name,success,
     input,output,incomplete,received_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [ev.id, ev.session_id, ev.project_path, ev.agent_id, ev.tool_name, ev.success ? 1 : 0,
@@ -67,12 +69,18 @@ export function openSessionsIdleSince(db: DatabaseManager, cutoffMs: number): st
 /**
  * Whole-task completion. A task is complete when task_completions records it with a real
  * completion time. Rows backfilled by the aeb72af migration (completed_ms = 0) only count as
- * complete when the task really finished: a saved/linked observation, or nothing left to recover
- * (no legacy evidence and every result row is a deliberate skip) — never a failed mixed task.
+ * complete when nothing is left: no frozen events, legacy segmented rows all resolved, and either a saved
+ * observation or (no legacy evidence and every result row is a deliberate skip).
  */
 export const TASK_COMPLETE_SQL = (alias: string) => `EXISTS (SELECT 1 FROM task_completions c WHERE c.task_id = ${alias} AND (c.completed_ms > 0
-  OR EXISTS (SELECT 1 FROM task_results r WHERE r.task_id = ${alias} AND r.observation_id IS NOT NULL)
+  OR (NOT EXISTS (SELECT 1 FROM task_event_buffer b WHERE b.task_result_id = 'task:' || ${alias})
+      AND NOT EXISTS (SELECT 1 FROM task_results r WHERE r.task_id = ${alias} AND r.segment_count > 1
+        AND (r.observation_id IS NULL AND r.status NOT IN ('skipped','duplicate')))
+      AND EXISTS (SELECT 1 FROM task_results r WHERE r.task_id = ${alias} AND r.observation_id IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM tool_evidence e WHERE e.task_id = ${alias} AND NOT EXISTS
+        (SELECT 1 FROM task_results r WHERE r.task_id = ${alias} AND r.segment_count = 1 AND r.observation_id IS NOT NULL)))
   OR (NOT EXISTS (SELECT 1 FROM tool_evidence e WHERE e.task_id = ${alias})
+      AND NOT EXISTS (SELECT 1 FROM task_event_buffer b WHERE b.task_result_id = 'task:' || ${alias})
       AND NOT EXISTS (SELECT 1 FROM task_results r WHERE r.task_id = ${alias} AND r.status NOT IN ('skipped','duplicate')))))`;
 
 /** Frozen tasks waiting for (re)consolidation, excluding those that exhausted their attempts. */
@@ -121,7 +129,8 @@ ${String(row.output ?? '')}`;
 export function renderTask(rows: any[], budget = taskCharBudget()): { text: string; truncated: boolean; omitted: number; chars: number } {
   const pieces = rows.map(renderOne);
   const chars = pieces.reduce((n, p) => n + p.length + 2, 0);
-  const captureAbbreviated = rows.some(r => r.incomplete || r.truncated);
+  const captureAbbreviated = rows.some(r => r.incomplete || r.truncated
+    || incompleteToolSource(String(r.input ?? ''), String(r.output ?? ''), Infinity, Infinity));
   if (chars <= budget) return { text: pieces.join('\n\n'), truncated: captureAbbreviated, omitted: 0, chars };
   let omitted = 0;
   // 1) No single call may dominate: keep its head and tail.
@@ -194,8 +203,12 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     const rows = taskRows(db, taskId);
     if (!rows.length) return { ...result, task_id: null, segments: 0 };
     const first = rows[0]; const sessionId = first.session_id;
-    const resultId = `${taskId}-0`;
-    const prior = db.sqlGet(`SELECT * FROM task_results WHERE task_id=? AND segment_index=0`, [taskId]);
+    // A task left by the segmented pipeline (segment_count > 1) is never finished by its first segment:
+    // its whole remaining content gets a new whole-task result; the legacy rows stay untouched as history.
+    const legacy = db.sqlGet(`SELECT 1 AS x FROM task_results WHERE task_id=? AND segment_count > 1 AND id <> ? LIMIT 1`, [taskId, `${taskId}-whole`]);
+    const resultId = legacy ? `${taskId}-whole` : `${taskId}-0`;
+    const segmentIndex = legacy ? 1000 : 0;
+    const prior = db.sqlGet(`SELECT * FROM task_results WHERE id=?`, [resultId]);
     if (prior && (prior.observation_id || ['skipped', 'duplicate'].includes(prior.status))) {
       // Result already recorded (crash between result and completion marker): finish without a model call.
       if (prior.observation_id) result.observations.push(prior.observation_id);
@@ -262,10 +275,10 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     if (observationId) result.observations.push(observationId);
     await db.sqlWrite(sql => {
       sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
-        source_ids,trigger,status,observation_id,content_sha256,llm_calls,last_error,evidence_count) VALUES (?,?,?,?,?,0,1,?,?,?,?,?,?,?,?,0)
+        source_ids,trigger,status,observation_id,content_sha256,llm_calls,last_error,evidence_count) VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,0)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id, content_sha256=excluded.content_sha256,
           llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=excluded.last_error, created_at=CURRENT_TIMESTAMP`,
-        [resultId, taskId, sessionId, first.project_path, first.agent_id, rows.length, JSON.stringify(rows.map(r => r.id)), trigger,
+        [resultId, taskId, sessionId, first.project_path, first.agent_id, segmentIndex, rows.length, JSON.stringify(rows.map(r => r.id)), trigger,
           status, observationId, contentHash, result.llm_calls, lastError]);
       sql.run(`UPDATE task_event_buffer SET task_result_id=? WHERE task_result_id=?`, [resultId, 'task:' + taskId]);
     });
