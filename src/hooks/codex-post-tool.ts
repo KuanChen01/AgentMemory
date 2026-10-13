@@ -50,7 +50,10 @@ async function main() {
         tool_name: toolLog.toolName,
         input: toolLog.input,
         output: toolLog.output,
-        success: toolLog.success
+        success: toolLog.success,
+        // Insert-once id and the transcript path (when Codex provides them); the worker then uses the transcript.
+        call_id: payload.call_id ?? payload.tool_use_id ?? payload.toolUseId ?? undefined,
+        transcript_path: payload.transcript_path ?? payload.transcriptPath ?? undefined,
       })
     });
     if (stuckQuery) {

@@ -1,18 +1,27 @@
 import { randomUUID } from 'crypto';
 import { DatabaseManager, Observation } from './db';
-import { boundToolText, boundedEnvInteger } from './llm-budget';
+import { boundedEnvInteger } from './llm-budget';
 import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
-import { EventDecision, sha256, summaryHash } from './event-classifier';
-import { incompleteToolSource } from './tool-log-policy';
+import { modifiedFiles, summaryHash } from './event-classifier';
 import { getEmbedding } from './embedding';
 import { runAutomaticPostTaskReview } from './post-task-review';
 
+/**
+ * Simplified task pipeline (claude-mem style):
+ *  - rules only drop whole tool classes (see event-classifier); everything else is buffered as-is;
+ *  - a task is frozen at its boundary (user prompt / turn end / session close / 20-min idle);
+ *  - the whole task is sent to the model ONCE; very large tasks keep head + tail with an explicit
+ *    "omitted N chars" marker (never segmented);
+ *  - every tool call and every task has a unique id with insert-once semantics, so retries and
+ *    transcript re-reads are idempotent;
+ *  - an identical summary is linked, not saved twice, and flagged for human confirmation.
+ */
 export interface IncomingToolEvent {
   id: string; session_id: string; project_path: string; agent_id: string; tool_name: string;
   input: string; output: string; success: boolean; timestamp: number;
 }
-export type TaskTrigger = 'user_prompt' | 'session_close' | 'idle_timeout' | 'manual' | 'legacy_compaction';
+export type TaskTrigger = 'user_prompt' | 'turn_end' | 'session_close' | 'idle_timeout' | 'manual' | 'legacy_compaction';
 
 export function taskIdleMs(env: NodeJS.ProcessEnv = process.env): number {
   // AGENTMEM_TASK_IDLE_MS exists for bounded tests; users configure minutes (default 20).
@@ -20,36 +29,26 @@ export function taskIdleMs(env: NodeJS.ProcessEnv = process.env): number {
   if (env.AGENTMEM_TASK_IDLE_MS?.trim() && Number.isFinite(ms) && ms >= 100) return Math.trunc(ms);
   return boundedEnvInteger(env.AGENTMEM_TASK_IDLE_MINUTES, 20, 1, 24 * 60) * 60_000;
 }
-export function segmentCharBudget(env: NodeJS.ProcessEnv = process.env): number {
-  return boundedEnvInteger(env.AGENTMEM_TASK_SEGMENT_CHARS, 24000, 4000, 120000);
+/** Character budget of the single per-task prompt body (head + tail beyond it). */
+export function taskCharBudget(env: NodeJS.ProcessEnv = process.env): number {
+  return boundedEnvInteger(env.AGENTMEM_TASK_PROMPT_CHARS ?? env.AGENTMEM_TASK_SEGMENT_CHARS, 24000, 4000, 200000);
 }
-
-const EVIDENCE_INPUT_MAX = 2000;
-const EVIDENCE_OUTPUT_MAX = 20000;
-const RENDER_INPUT_MAX = 3000;
-const RENDER_OUTPUT_MAX = 6000;
 export const MAX_TASK_ATTEMPTS = 5;
+const EVENT_INPUT_MAX = 30000;
+const EVENT_OUTPUT_MAX = 60000;
 
-/** evidence_only: permanent row (bounded, full sha256), no model call, no embedding; linked to its task. */
-export async function saveToolEvidence(db: DatabaseManager, ev: IncomingToolEvent, decision: EventDecision) {
-  const truncated = ev.input.length > EVIDENCE_INPUT_MAX || ev.output.length > EVIDENCE_OUTPUT_MAX;
-  await db.sqlWrite(sql => sql.run(`INSERT INTO tool_evidence (id,session_id,project_path,agent_id,tool_name,success,
-    route_reason,input,output,input_bytes,output_bytes,truncated,source_sha256,received_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [ev.id, ev.session_id, ev.project_path, ev.agent_id, ev.tool_name, ev.success ? 1 : 0, decision.reason,
-      boundToolText(ev.input, EVIDENCE_INPUT_MAX), boundToolText(ev.output, EVIDENCE_OUTPUT_MAX),
-      Buffer.byteLength(ev.input), Buffer.byteLength(ev.output), truncated ? 1 : 0, sha256(ev.input + '\u0000' + ev.output), ev.timestamp]));
-}
-
-/** candidate: buffered until the task boundary. */
-export async function bufferCandidate(db: DatabaseManager, ev: IncomingToolEvent) {
-  const inputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_INPUT_MAX_CHARS, 10000, 1000, 30000);
-  const outputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_MAX_CHARS, 20000, 1000, 60000);
-  const incomplete = incompleteToolSource(ev.input, ev.output, inputLimit, outputLimit);
-  await db.sqlWrite(sql => sql.run(`INSERT INTO task_event_buffer (id,session_id,project_path,agent_id,tool_name,success,
+/** Buffer one tool call. Insert-once: a re-delivered call id (hook retry, transcript re-read) is ignored. */
+export async function bufferEvent(db: DatabaseManager, ev: IncomingToolEvent): Promise<boolean> {
+  const input = String(ev.input ?? ''), output = String(ev.output ?? '');
+  const incomplete = input.length > EVENT_INPUT_MAX || output.length > EVENT_OUTPUT_MAX;
+  const res: any = await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_event_buffer (id,session_id,project_path,agent_id,tool_name,success,
     input,output,incomplete,received_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [ev.id, ev.session_id, ev.project_path, ev.agent_id, ev.tool_name, ev.success ? 1 : 0,
-      boundToolText(ev.input, inputLimit), boundToolText(ev.output, outputLimit), incomplete ? 1 : 0, ev.timestamp]));
+      input.slice(0, EVENT_INPUT_MAX), output.slice(0, EVENT_OUTPUT_MAX), incomplete ? 1 : 0, ev.timestamp]));
+  return (res?.changes || 0) > 0;
 }
+/** Back-compat alias used by older callers/tests. */
+export const bufferCandidate = bufferEvent;
 
 /** After a crash, legacy in-flight claims become frozen tasks again (retried, never lost). */
 export async function recoverInterruptedClaims(db: DatabaseManager): Promise<number> {
@@ -57,7 +56,7 @@ export async function recoverInterruptedClaims(db: DatabaseManager): Promise<num
     WHERE task_result_id LIKE 'claim:%'`).changes || 0);
 }
 
-/** Sessions with open (unfrozen) activity whose LAST activity of any kind (candidate or evidence) is older than cutoff. */
+/** Sessions with open events whose last activity (including legacy evidence rows) is older than cutoff. */
 export function openSessionsIdleSince(db: DatabaseManager, cutoffMs: number): string[] {
   return db.sqlAll(`SELECT session_id FROM (
       SELECT session_id, received_ms AS ms, (task_result_id IS NULL) AS open FROM task_event_buffer
@@ -65,22 +64,40 @@ export function openSessionsIdleSince(db: DatabaseManager, cutoffMs: number): st
     GROUP BY session_id HAVING SUM(open) > 0 AND MAX(ms) <= ?`, [cutoffMs]).map(r => r.session_id);
 }
 
-/** Frozen tasks waiting for (re)consolidation, excluding those that exhausted their attempts.
- * Eligibility is whole-task: a task is done only once task_completions records it, not when any segment row exists. */
+/**
+ * Whole-task completion. A task is complete when task_completions records it with a real
+ * completion time. Rows backfilled by the aeb72af migration (completed_ms = 0) only count as
+ * complete when the task really finished: a saved/linked observation, or nothing left to recover
+ * (no legacy evidence and every result row is a deliberate skip) — never a failed mixed task.
+ */
+export const TASK_COMPLETE_SQL = (alias: string) => `EXISTS (SELECT 1 FROM task_completions c WHERE c.task_id = ${alias} AND (c.completed_ms > 0
+  OR EXISTS (SELECT 1 FROM task_results r WHERE r.task_id = ${alias} AND r.observation_id IS NOT NULL)
+  OR (NOT EXISTS (SELECT 1 FROM tool_evidence e WHERE e.task_id = ${alias})
+      AND NOT EXISTS (SELECT 1 FROM task_results r WHERE r.task_id = ${alias} AND r.status NOT IN ('skipped','duplicate')))))`;
+
+/** Frozen tasks waiting for (re)consolidation, excluding those that exhausted their attempts. */
 export function frozenTasks(db: DatabaseManager): { task_id: string; session_id: string }[] {
   return db.sqlAll(`SELECT t.task_id, t.session_id FROM (
       SELECT DISTINCT substr(task_result_id, 6) AS task_id, session_id FROM task_event_buffer WHERE task_result_id LIKE 'task:%'
-      UNION SELECT DISTINCT task_id, session_id FROM tool_evidence e WHERE task_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM task_completions c WHERE c.task_id = e.task_id)) t
-    LEFT JOIN task_attempts a ON a.task_id = t.task_id WHERE COALESCE(a.attempts, 0) < ?`, [MAX_TASK_ATTEMPTS]);
+      UNION SELECT DISTINCT task_id, session_id FROM tool_evidence WHERE task_id IS NOT NULL
+      UNION SELECT DISTINCT task_id, session_id FROM task_results WHERE source_kind = 'task') t
+    LEFT JOIN task_attempts a ON a.task_id = t.task_id
+    WHERE COALESCE(a.attempts, 0) < ? AND NOT ${TASK_COMPLETE_SQL('t.task_id')}`, [MAX_TASK_ATTEMPTS]);
+}
+
+/** Tasks that exhausted their retries and are not complete (partial results included). */
+export function stuckTaskCount(db: DatabaseManager): number {
+  return db.sqlGet(`SELECT COUNT(*) AS n FROM task_attempts a WHERE a.attempts >= ? AND NOT ${TASK_COMPLETE_SQL('a.task_id')}`,
+    [MAX_TASK_ATTEMPTS]).n;
 }
 
 /**
  * Freeze the session's open events into a task at the moment the boundary arrives.
  * Events arriving later belong to the next task, even while this one is still queued.
+ * An explicit taskId (e.g. derived from a transcript turn) makes freezing idempotent.
  */
-export async function freezeOpenTask(db: DatabaseManager, sessionId: string): Promise<string | null> {
-  const taskId = randomUUID();
+export async function freezeOpenTask(db: DatabaseManager, sessionId: string, explicitTaskId?: string): Promise<string | null> {
+  const taskId = explicitTaskId || randomUUID();
   const frozen = await db.sqlWrite(sql => {
     const a = sql.run(`UPDATE task_event_buffer SET task_result_id=? WHERE session_id=? AND task_result_id IS NULL`, ['task:' + taskId, sessionId]).changes || 0;
     const b = sql.run(`UPDATE tool_evidence SET task_id=? WHERE session_id=? AND task_id IS NULL`, [taskId, sessionId]).changes || 0;
@@ -89,156 +106,175 @@ export async function freezeOpenTask(db: DatabaseManager, sessionId: string): Pr
   return frozen ? taskId : null;
 }
 
-export function renderEvent(row: any): { text: string; truncated: boolean } {
-  const input = String(row.input ?? ''), output = String(row.output ?? '');
-  const truncated = input.length > RENDER_INPUT_MAX || output.length > RENDER_OUTPUT_MAX;
-  return { truncated, text: `## ${row.tool_name} (${row.success ? 'success' : 'FAILURE'})${row.incomplete || truncated ? ' [source abbreviated]' : ''}
+function renderOne(row: any): string {
+  return `## ${row.tool_name} (${row.success ? 'success' : 'FAILURE'})${row.incomplete || row.truncated ? ' [source abbreviated at capture]' : ''}
 [INPUT]
-${boundToolText(input, RENDER_INPUT_MAX)}
+${String(row.input ?? '')}
 [OUTPUT]
-${boundToolText(output, RENDER_OUTPUT_MAX)}` };
+${String(row.output ?? '')}`;
 }
 
-/** Split a task's events into segments under the char budget (never splits one event). */
-export function segmentEvents(rows: any[], budget = segmentCharBudget()): any[][] {
-  const segments: any[][] = []; let current: any[] = []; let size = 0;
-  for (const row of rows) {
-    const len = renderEvent(row).text.length;
-    if (current.length && size + len > budget) { segments.push(current); current = []; size = 0; }
-    current.push(row); size += len;
-  }
-  if (current.length) segments.push(current);
-  return segments;
+/**
+ * Render a whole task. Over budget: keep the head and the tail and put an explicit marker with
+ * the exact number of omitted characters in between. One string, one model call.
+ */
+export function renderTask(rows: any[], budget = taskCharBudget()): { text: string; truncated: boolean; omitted: number; chars: number } {
+  const pieces = rows.map(renderOne);
+  const chars = pieces.reduce((n, p) => n + p.length + 2, 0);
+  const captureAbbreviated = rows.some(r => r.incomplete || r.truncated);
+  if (chars <= budget) return { text: pieces.join('\n\n'), truncated: captureAbbreviated, omitted: 0, chars };
+  let omitted = 0;
+  // 1) No single call may dominate: keep its head and tail.
+  const perCall = Math.max(1000, Math.floor(budget / 4));
+  const bounded = pieces.map(p => {
+    if (p.length <= perCall) return p;
+    const head = Math.floor(perCall * 0.7), tail = perCall - head, cut = p.length - head - tail;
+    omitted += cut;
+    return `${p.slice(0, head)}\n[... omitted ${cut} chars of this call ...]\n${p.slice(p.length - tail)}`;
+  });
+  // 2) Keep whole calls from the start (60%) and from the end (40%); one marker for the dropped middle.
+  const size = (list: string[]) => list.reduce((n, p) => n + p.length + 2, 0);
+  if (size(bounded) <= budget) return { text: bounded.join('\n\n'), truncated: true, omitted, chars };
+  const head: string[] = [], tail: string[] = [];
+  let i = 0, j = bounded.length - 1;
+  while (i <= j && size(head) + bounded[i].length + 2 <= budget * 0.6) head.push(bounded[i++]);
+  while (j >= i && size(tail) + bounded[j].length + 2 <= budget * 0.4) tail.unshift(bounded[j--]);
+  const dropped = bounded.slice(i, j + 1);
+  const droppedChars = size(dropped);
+  omitted += droppedChars;
+  const marker = dropped.length ? [`[... omitted ${droppedChars} chars: ${dropped.length} tool call(s) in the middle of this task ...]`] : [];
+  return { text: [...head, ...marker, ...tail].join('\n\n'), truncated: true, omitted, chars };
 }
 
 const TASK_SYSTEM_PROMPT = `You are a developer memory synthesis assistant.
 ${WORK_MEMORY_PROMPT}
-You receive ALL state-changing tool events of ONE agent task (or one segment of a very large task), plus an index of read-only inspections.
-Produce ONE consolidated JSON record describing the task's result: what was changed, verified, decided, diagnosed or learned.
-Merge repeated steps; do not list every command. Keep the narrative under 180 words, facts and concepts to at most 6 each, file lists to at most 15 each.
-Only record evidence present in the events. Do not infer completed changes from intentions. Failures are recovery evidence.
+You receive the whole record of ONE agent task: every tool call with its input and output, in order.
+A very large task is shown as head and tail with an explicit "[... omitted N chars ...]" marker; never invent what the omitted part contained.
+Decide whether the task produced anything worth remembering (a change, verification, decision, diagnosis or lesson).
+If it did not (pure routine browsing with no finding), return record_kind "skip".
+Otherwise produce ONE consolidated JSON record of the task's result. Merge repeated steps; do not list every command.
+Keep the narrative under 180 words, facts and concepts to at most 6 each, file lists to at most 15 each.
+Only record evidence present in the events. Failures are recovery evidence.
 
 You MUST respond with a valid JSON object ONLY.
 JSON Schema:
 {"record_kind":"outcome | context | skip","title":"...","narrative":"...","facts":[],"concepts":[],"files_read":[],"files_modified":[]}`;
 
-export interface ConsolidationResult { task_id: string | null; segments: number; llm_calls: number; observations: string[]; duplicates: number; skipped: number; failed: number; }
+export interface ConsolidationResult { task_id: string | null; llm_calls: number; observations: string[]; duplicates: number;
+  skipped: number; failed: number; prompt_chars: number; omitted_chars: number; segments: number; }
 
 const inflight = new Set<string>();
 export function isTaskInFlight(taskId: string) { return inflight.has(taskId); }
 
-function localDate(createdAt: string): string { return String(createdAt || '').slice(0, 10); }
+async function markTaskComplete(db: DatabaseManager, taskId: string) {
+  await db.sqlWrite(sql => sql.run(`INSERT INTO task_completions (task_id, completed_ms) VALUES (?, ?)
+    ON CONFLICT(task_id) DO UPDATE SET completed_ms = excluded.completed_ms WHERE task_completions.completed_ms = 0`, [taskId, Date.now()]));
+}
+
+/** Rows of a task: buffered calls plus legacy evidence rows frozen by earlier revisions (read-only). */
+function taskRows(db: DatabaseManager, taskId: string): any[] {
+  const buffered = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,output,incomplete,received_ms,created_at
+    FROM task_event_buffer WHERE task_result_id=? OR task_result_id IN (SELECT id FROM task_results WHERE task_id=?)`, ['task:' + taskId, taskId]);
+  const legacy = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,output,truncated,received_ms,created_at
+    FROM tool_evidence WHERE task_id=?`, [taskId]);
+  return [...buffered, ...legacy].sort((a, b) => (a.received_ms - b.received_ms) || String(a.id).localeCompare(String(b.id)));
+}
 
 /**
- * Consolidate one frozen task: one model call per segment (normally exactly one), one embedding per
- * saved result, one post-task review per task. Segments already saved are skipped on retry. Any
- * exception leaves the task frozen (not claimed) so it is retried; attempts are counted.
+ * Consolidate one frozen task with exactly one model call. Insert-once: the task's result id is
+ * `${taskId}-0`; a retry after a crash reuses whatever was already saved. Any exception leaves the
+ * task frozen and counts an attempt.
  */
 export async function consolidateTask(db: DatabaseManager, taskId: string, trigger: TaskTrigger): Promise<ConsolidationResult> {
-  const result: ConsolidationResult = { task_id: taskId, segments: 0, llm_calls: 0, observations: [], duplicates: 0, skipped: 0, failed: 0 };
-  if (inflight.has(taskId)) return { ...result, task_id: null };
+  const result: ConsolidationResult = { task_id: taskId, llm_calls: 0, observations: [], duplicates: 0, skipped: 0, failed: 0,
+    prompt_chars: 0, omitted_chars: 0, segments: 1 };
+  if (inflight.has(taskId)) return { ...result, task_id: null, segments: 0 };
   inflight.add(taskId);
   try {
-    // Segment over the task's full frozen event set (pending rows plus rows already attached to a saved
-    // segment of this task) so segment indexes are stable across retries; a retry never renumbers.
-    const rows = db.sqlAll(`SELECT * FROM task_event_buffer WHERE task_result_id=? OR task_result_id IN
-      (SELECT id FROM task_results WHERE task_id=?) ORDER BY received_ms, rowid`, ['task:' + taskId, taskId]);
-    const evidence = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,created_at FROM tool_evidence
-      WHERE task_id=? ORDER BY received_ms, rowid`, [taskId]);
-    const done = new Set(db.sqlAll(`SELECT segment_index FROM task_results WHERE task_id=?`, [taskId]).map(r => r.segment_index));
-    if (!rows.length && !evidence.length) return { ...result, task_id: null };
-    const sessionId = (rows[0] || evidence[0]).session_id;
-    const purpose = await db.getSessionPurpose(sessionId);
-    let lastObservation: Observation | null = null;
-
-    if (!rows.length) {
-      // Investigation-only task: discoverable context result built from evidence, no model call.
-      if (done.has(0)) { await markTaskComplete(db, taskId); return result; }
-      await saveInvestigation(db, taskId, 0, sessionId, evidence, purpose, trigger, result);
+    const rows = taskRows(db, taskId);
+    if (!rows.length) return { ...result, task_id: null, segments: 0 };
+    const first = rows[0]; const sessionId = first.session_id;
+    const resultId = `${taskId}-0`;
+    const prior = db.sqlGet(`SELECT * FROM task_results WHERE task_id=? AND segment_index=0`, [taskId]);
+    if (prior && (prior.observation_id || ['skipped', 'duplicate'].includes(prior.status))) {
+      // Result already recorded (crash between result and completion marker): finish without a model call.
+      if (prior.observation_id) result.observations.push(prior.observation_id);
       await markTaskComplete(db, taskId);
       return result;
     }
-
-    const segments = segmentEvents(rows);
-    result.segments = segments.length;
-    const settings = resolveLlmSettings();
-    const evidenceIndex = evidence.length ? `\n\n[READ-ONLY INSPECTIONS — ${evidence.length}, outputs kept as evidence]\n` +
-      boundToolText(evidence.map(e => `- ${e.tool_name}: ${boundToolText(String(e.input), 120)}`).join('\n'), 2000) : '';
-    for (let i = 0; i < segments.length; i++) {
-      if (done.has(i)) continue;
-      const seg = segments[i]; const first = seg[0];
-      const resultId = `${taskId}-${i}`;
-      const sourceIds = seg.map(r => r.id);
-      const rendered = seg.map(renderEvent);
-      let status = 'saved', observationId: string | null = null, contentHash: string | null = null, lastError: string | null = null, calls = 0;
-      let parsed: ReturnType<typeof interpretWorkMemory> | null = null;
-      const anyFailure = seg.some(r => !r.success);
-      const anyIncomplete = seg.some(r => r.incomplete) || rendered.some(r => r.truncated);
-      const existing = (await db.getObservationsByIds([resultId]))[0];
-      if (existing) { observationId = existing.id; lastObservation = existing; result.observations.push(existing.id); }
-      else if (purpose === 'daily_review') { status = 'skipped'; lastError = 'daily_review session'; }
+    const purpose = await db.getSessionPurpose(sessionId);
+    const rendered = renderTask(rows);
+    result.prompt_chars = rendered.text.length; result.omitted_chars = rendered.omitted;
+    const touched = [...new Set(rows.flatMap(r => modifiedFiles(r.tool_name, String(r.input ?? ''))))];
+    const anyFailure = rows.some(r => !r.success);
+    let status = 'saved', observationId: string | null = null, contentHash: string | null = null, lastError: string | null = null;
+    let lastObservation: Observation | null = null; let parsed: ReturnType<typeof interpretWorkMemory> | null = null;
+    const existing = (await db.getObservationsByIds([resultId]))[0];
+    if (existing) { observationId = existing.id; lastObservation = existing; }
+    else if (purpose === 'daily_review') { status = 'skipped'; lastError = 'daily_review session'; result.skipped++; }
+    else {
+      const settings = resolveLlmSettings();
+      if (!llmAvailable(settings)) lastError = 'Missing LLM API credentials';
       else {
-        if (!llmAvailable(settings)) lastError = 'Missing LLM API credentials';
-        else {
-          try {
-            calls++; result.llm_calls++;
-            const user = `Session purpose: ${purpose}\nProject: ${first.project_path}\nAgent: ${first.agent_id}\nTrigger: ${trigger}\nSegment ${i + 1} of ${segments.length}, ${seg.length} events${anyIncomplete ? '\nNOTE: some event text below is abbreviated.' : ''}\n\n${rendered.map(r => r.text).join('\n\n')}${i === segments.length - 1 ? evidenceIndex : ''}`;
-            parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT, user, settings), !anyFailure);
-          } catch (err: any) { lastError = err.message; }
-        }
-        // An abbreviated or failing source can never be proven routine: no silent skip.
-        if (parsed?.skip && (anyFailure || anyIncomplete)) {
-          parsed.skip = false; parsed.kind = anyFailure ? 'outcome' : 'context';
-          parsed.title ||= `Task with abbreviated source: ${[...new Set(seg.map(r => r.tool_name))].join(', ')}`;
-        }
-        if (parsed?.skip) { status = 'skipped'; result.skipped++; }
-        else {
-          const fallback = !parsed;
-          const tools = [...new Set(seg.map(r => r.tool_name))].join(', ');
-          const obs: Observation = {
-            id: resultId, session_id: first.session_id, project_path: first.project_path, agent_id: first.agent_id,
-            title: parsed?.title || `Task capture incomplete: ${tools}`,
-            narrative: parsed?.narrative || `Memory synthesis unavailable; classification unknown. ${String(lastError || '').slice(0, 300)}\n` +
-              seg.slice(-5).map(r => `${r.tool_name}: ${boundToolText(r.input, 300)} => ${boundToolText(r.output, 600)}`).join('\n'),
-            facts: parsed?.facts || [`${seg.length} tool events (${tools})`], concepts: parsed?.concepts || ['task'],
-            files_read: parsed?.files_read || [], files_modified: parsed?.files_modified || [], embedding: [],
-            record_kind: fallback ? (anyFailure ? 'outcome' : 'context') : parsed!.kind, source_kind: 'task',
-          };
-          if (anyIncomplete && !fallback) obs.narrative += '\nSome source was abbreviated before synthesis; unshown content remains unknown.';
-          if (segments.length > 1) obs.title = `${obs.title} (part ${i + 1}/${segments.length})`;
-          contentHash = summaryHash(obs.project_path, obs, localDate(seg[seg.length - 1].created_at));
-          const dup = db.sqlGet(`SELECT observation_id FROM observation_content_hashes WHERE project_path=? AND sha256=?`, [obs.project_path, contentHash]);
-          if (dup) { status = 'duplicate'; observationId = dup.observation_id; result.duplicates++; }
-          else {
-            obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')} ${obs.concepts.join(' ')}`);
-            await db.saveObservation(obs);
-            await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [obs.id, obs.project_path, contentHash]));
-            observationId = obs.id; lastObservation = obs; result.observations.push(obs.id);
-            if (fallback) { status = 'fallback'; result.failed++; }
-          }
+        try {
+          result.llm_calls++;
+          const user = `Session purpose: ${purpose}\nProject: ${first.project_path}\nAgent: ${first.agent_id}\nTrigger: ${trigger}\n` +
+            `Tool calls: ${rows.length}${touched.length ? `\nFiles modified (from edit tools): ${touched.slice(0, 30).join(', ')}` : ''}` +
+            `${rendered.omitted ? `\nNOTE: ${rendered.omitted} chars in the middle were omitted.` : ''}\n\n${rendered.text}`;
+          parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT, user, settings), !anyFailure);
+        } catch (err: any) { lastError = err.message; }
+      }
+      // Failures, edits and abbreviated sources are never silently skipped.
+      if (parsed?.skip && (anyFailure || rendered.truncated || touched.length)) {
+        parsed.skip = false; parsed.kind = anyFailure || touched.length ? 'outcome' : 'context';
+        parsed.title ||= `Task: ${[...new Set(rows.map(r => r.tool_name))].slice(0, 6).join(', ')}`;
+      }
+      if (parsed?.skip) { status = 'skipped'; result.skipped++; }
+      else {
+        const fallback = !parsed;
+        const tools = [...new Set(rows.map(r => r.tool_name))].join(', ');
+        const obs: Observation = {
+          id: resultId, session_id: sessionId, project_path: first.project_path, agent_id: first.agent_id,
+          title: parsed?.title || `Task capture incomplete: ${tools}`.slice(0, 200),
+          narrative: parsed?.narrative || `Memory synthesis unavailable; classification unknown. ${String(lastError || '').slice(0, 300)}\n` +
+            rows.slice(-5).map(r => `${r.tool_name}: ${String(r.input).slice(0, 300)} => ${String(r.output).slice(0, 600)}`).join('\n'),
+          facts: parsed?.facts || [`${rows.length} tool calls (${tools})`], concepts: parsed?.concepts || ['task'],
+          files_read: parsed?.files_read || [], files_modified: [...new Set([...(parsed?.files_modified || []), ...touched])].slice(0, 30),
+          embedding: [], record_kind: fallback ? (anyFailure || touched.length ? 'outcome' : 'context') : parsed!.kind, source_kind: 'task',
+        };
+        if (rendered.omitted && !fallback) obs.narrative += `\n(${rendered.omitted} chars of the task were omitted before synthesis.)`;
+        contentHash = summaryHash(obs.project_path, obs, String(rows[rows.length - 1].created_at || '').slice(0, 10));
+        const dup = db.sqlGet(`SELECT observation_id FROM observation_content_hashes WHERE project_path=? AND sha256=?`, [obs.project_path, contentHash]);
+        if (dup) {
+          // Duplicate-looking content: link to the existing memory and flag it for a human; nothing is deleted.
+          status = 'duplicate'; observationId = dup.observation_id; result.duplicates++;
+          await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms)
+            VALUES (?,?,?,?,'needs_confirmation',?)`, [`dup-${taskId}`, taskId, dup.observation_id, contentHash, Date.now()]));
+        } else {
+          obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')} ${obs.concepts.join(' ')}`);
+          await db.saveObservation(obs);
+          await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [obs.id, obs.project_path, contentHash]));
+          observationId = obs.id; lastObservation = obs;
+          if (fallback) { status = 'fallback'; result.failed++; }
         }
       }
-      await db.sqlWrite(sql => {
-        sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
-          source_ids,trigger,status,observation_id,content_sha256,llm_calls,last_error,evidence_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [resultId, taskId, first.session_id, first.project_path, first.agent_id, i, segments.length, seg.length,
-            JSON.stringify(sourceIds), trigger, status, observationId, contentHash, calls, lastError, i === segments.length - 1 ? evidence.length : 0]);
-        sql.run(`UPDATE task_event_buffer SET task_result_id=? WHERE id IN (${sourceIds.map(() => '?').join(',')})`, [resultId, ...sourceIds]);
-      });
     }
-    // Mixed task whose candidate segments were all skipped: keep the read-only evidence discoverable.
-    const evidenceIndexSlot = segments.length;
-    if (evidence.length && !result.observations.length && !done.has(evidenceIndexSlot)
-        && !db.sqlGet(`SELECT 1 FROM task_results WHERE task_id=? AND observation_id IS NOT NULL LIMIT 1`, [taskId])) {
-      await saveInvestigation(db, taskId, evidenceIndexSlot, sessionId, evidence, purpose, trigger, result);
-    }
+    if (observationId) result.observations.push(observationId);
+    await db.sqlWrite(sql => {
+      sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
+        source_ids,trigger,status,observation_id,content_sha256,llm_calls,last_error,evidence_count) VALUES (?,?,?,?,?,0,1,?,?,?,?,?,?,?,?,0)
+        ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id, content_sha256=excluded.content_sha256,
+          llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=excluded.last_error, created_at=CURRENT_TIMESTAMP`,
+        [resultId, taskId, sessionId, first.project_path, first.agent_id, rows.length, JSON.stringify(rows.map(r => r.id)), trigger,
+          status, observationId, contentHash, result.llm_calls, lastError]);
+      sql.run(`UPDATE task_event_buffer SET task_result_id=? WHERE task_result_id=?`, [resultId, 'task:' + taskId]);
+    });
     await markTaskComplete(db, taskId);
     // Post-task review runs once per task, never per observation.
     if (lastObservation) await runAutomaticPostTaskReview(db, lastObservation).catch(err =>
       console.error(`[Memory] Post-task review failed after task capture: ${err.message}`));
     return result;
   } catch (err: any) {
-    // Task stays frozen ('task:<id>'), so it is retried; attempts are bounded and visible.
     const sid = db.sqlGet(`SELECT session_id FROM task_event_buffer WHERE task_result_id=? LIMIT 1`, ['task:' + taskId])?.session_id
       || db.sqlGet(`SELECT session_id FROM tool_evidence WHERE task_id=? LIMIT 1`, [taskId])?.session_id || '';
     await db.sqlWrite(sql => sql.run(`INSERT INTO task_attempts (task_id,session_id,attempts,last_error,updated_ms) VALUES (?,?,1,?,?)
@@ -248,37 +284,10 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
   } finally { inflight.delete(taskId); }
 }
 
-async function markTaskComplete(db: DatabaseManager, taskId: string) {
-  await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_completions (task_id, completed_ms) VALUES (?, ?)`, [taskId, Date.now()]));
-}
-
-async function saveInvestigation(db: DatabaseManager, taskId: string, index: number, sessionId: string, evidence: any[],
-  purpose: string, trigger: TaskTrigger, result: ConsolidationResult): Promise<void> {
-  const first = evidence[0]; const resultId = `${taskId}-${index}`;
-  const tools = [...new Set(evidence.map(e => e.tool_name))].join(', ');
-  const obs: Observation = { id: resultId, session_id: sessionId, project_path: first.project_path, agent_id: first.agent_id,
-    title: `Read-only investigation: ${evidence.length} inspection(s) (${tools})`.slice(0, 200),
-    narrative: 'Read-only inspections; outcome not synthesized. Full bounded evidence via work-evidence.\n' +
-      evidence.slice(0, 20).map(e => `${e.tool_name}: ${boundToolText(String(e.input), 160)}`).join('\n'),
-    facts: [`${evidence.length} read-only inspections`], concepts: ['investigation'], files_read: [], files_modified: [], embedding: [],
-    record_kind: 'context', source_kind: 'task' };
-  const existing = (await db.getObservationsByIds([resultId]))[0];
-  if (!existing && purpose !== 'daily_review') {
-    obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative}`);
-    await db.saveObservation(obs);
-  }
-  await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,
-    segment_count,event_count,source_ids,trigger,status,observation_id,llm_calls,evidence_count) VALUES (?,?,?,?,?,?,?,0,'[]',?,?,?,0,?)`,
-    [resultId, taskId, sessionId, first.project_path, first.agent_id, index, index + 1, trigger,
-      purpose === 'daily_review' ? 'skipped' : 'evidence_only', purpose === 'daily_review' ? null : resultId, evidence.length]));
-  result.segments = Math.max(result.segments, index + 1);
-  if (purpose !== 'daily_review') result.observations.push(resultId);
-}
-
 /** Freeze then consolidate whatever is open for a session (convenience for tests/CLI). */
 export async function consolidateSession(db: DatabaseManager, sessionId: string, trigger: TaskTrigger): Promise<ConsolidationResult> {
   const taskId = await freezeOpenTask(db, sessionId);
-  if (!taskId) return { task_id: null, segments: 0, llm_calls: 0, observations: [], duplicates: 0, skipped: 0, failed: 0 };
+  if (!taskId) return { task_id: null, llm_calls: 0, observations: [], duplicates: 0, skipped: 0, failed: 0, prompt_chars: 0, omitted_chars: 0, segments: 0 };
   return consolidateTask(db, taskId, trigger);
 }
 
@@ -306,11 +315,11 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
   const plan = [...bySession.entries()].map(([session, items]) => {
     const asEvents = items.map(r => ({ ...r, tool_name: 'legacy:' + r.title, success: 1, incomplete: 0,
       input: '', output: `${r.title}\n${r.narrative}\nfacts: ${r.facts}\nfiles_modified: ${r.files_modified}` }));
-    return { session, items, segments: segmentEvents(asEvents) };
+    return { session, items, segments: [asEvents] };  // one call per session, head+tail bounded
   });
   const summary = { mode: options.apply ? 'apply' : 'dry-run', days: options.days, since, legacy_rows: rows.length,
     sessions: plan.length, planned_llm_calls: plan.reduce((n, p) => n + p.segments.length, 0),
-    planned_chars: plan.reduce((n, p) => n + p.segments.flat().reduce((m: number, e: any) => m + renderEvent(e).text.length, 0), 0),
+    planned_chars: plan.reduce((n, p) => n + renderTask(p.segments[0]).text.length, 0),
     llm_calls: 0, results_saved: 0, rows_deleted: 0 };
   if (!options.apply) return summary;
   const settings = resolveLlmSettings();
@@ -321,7 +330,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
       const seg = p.segments[i]; const first = seg[0]; const resultId = randomUUID();
       summary.llm_calls++;
       const parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
-        `Legacy per-step records of one session, segment ${i + 1}/${p.segments.length}\nProject: ${first.project_path}\n\n${seg.map(e => renderEvent(e).text).join('\n\n')}`, settings), true);
+        `Legacy per-step records of one session\nProject: ${first.project_path}\n\n${renderTask(seg).text}`, settings), true);
       let observationId: string | null = null; let status = 'skipped';
       if (!parsed.skip) {
         const obs: Observation = { id: resultId, session_id: p.session, project_path: first.project_path, agent_id: first.agent_id,
@@ -345,6 +354,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
             JSON.stringify(seg.map((r: any) => r.id)), 'legacy_compaction', status, observationId]);
         for (const r of seg) sql.run(`INSERT OR IGNORE INTO legacy_compaction_links VALUES (?,?)`, [r.id, resultId]);
       });
+      await markTaskComplete(db, taskId);
     }
   }
   return summary;

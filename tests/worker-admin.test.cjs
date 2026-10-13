@@ -424,16 +424,15 @@ for (const mode of ['missing credentials', 'LLM HTTP failure']) {
         if (records.some((record) => record.title === 'Tool failure: Read')) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      // A successful read-only Read is routed to permanent evidence_only storage before
-      // any model call; the failure is still summarized and retained.
-      assert.equal(records.length, 1);
+      // No per-command routing any more: the uncertain successful source is retained too (as before PR #3).
+      assert.equal(records.length, 2);
       const failed = records.find(record => record.title === 'Tool failure: Read');
-      assert.ok(failed);
+      const uncertain = records.find(record => record.title === 'Capture incomplete: Read');
+      assert.ok(failed); assert.ok(uncertain);
       assert.match(failed.narrative, /ENOENT: README.md not found/);
       assert.match(failed.narrative, mock ? /Summarization failed/ : /Missing LLM API credentials/);
-      const overview = await (await fetch(`http://127.0.0.1:${port}/admin/api/overview`)).json();
-      assert.equal(overview.tasks.evidence_rows, 1);
-      if (mock) assert.equal(mock.requests.length, 1);
+      assert.match(uncertain.narrative, /Documentation contents/);
+      if (mock) assert.equal(mock.requests.length, 2);
     } finally {
       if (child) await stopWorker(child, port);
       if (mock) await mock.close();

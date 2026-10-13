@@ -414,7 +414,8 @@ export function reviewItem(row: any): any {
     ...(Number(row.evidence_tasks) > 1 ? { evidence_tasks: Number(row.evidence_tasks), evidence_items: Number(row.evidence_items) } : {}) };
 }
 const EVIDENCE_LINK_COLUMNS = `(SELECT COUNT(DISTINCT r.task_id) FROM task_results r WHERE r.observation_id=o.id) AS evidence_tasks,
-  (SELECT COUNT(*) FROM tool_evidence e WHERE e.task_id IN (SELECT r.task_id FROM task_results r WHERE r.observation_id=o.id)) AS evidence_items`;
+  ((SELECT COUNT(*) FROM tool_evidence e WHERE e.task_id IN (SELECT r.task_id FROM task_results r WHERE r.observation_id=o.id))
+   + (SELECT COUNT(*) FROM task_event_buffer b WHERE b.task_result_id IN (SELECT r.id FROM task_results r WHERE r.observation_id=o.id))) AS evidence_items`;
 export function reviewItemHash(row: any): string {
   return createHash('sha256').update(JSON.stringify(reviewItem(row)), 'utf8').digest('hex');
 }
@@ -781,6 +782,10 @@ export class DatabaseManager {
     }
     const { high } = position;
     const where = `o.rowid <= ? AND datetime(o.created_at) >= datetime(?) AND datetime(o.created_at) <= datetime(?)`;
+    // A memory that gains a newly linked task (deduplicated summary) inside the window is in the window too,
+    // so evidence linked after the checkpoint is rediscovered (its version hash changes with the link).
+    const linkedWhere = `o.rowid <= ? AND ((datetime(o.created_at) >= datetime(?) AND datetime(o.created_at) <= datetime(?))
+      OR EXISTS (SELECT 1 FROM task_results lr WHERE lr.observation_id=o.id AND datetime(lr.created_at) >= datetime(?) AND datetime(lr.created_at) <= datetime(?)))`;
     // Window activity includes session starts even if no observation was saved.
     // Existing dormant sessions are not claimed as activity in this interval.
     const catalog = this.db.all(`WITH activity AS (
@@ -828,14 +833,14 @@ export class DatabaseManager {
     };
     if (!more) {
       const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS} FROM observations o
-        JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${where} AND o.rowid > ?
-        ORDER BY o.rowid LIMIT 20`, [high,from,to,position.after]);
+        JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${linkedWhere} AND o.rowid > ?
+        ORDER BY o.rowid LIMIT 20`, [high,from,to,from,to,position.after]);
       for (const row of rows) {
         if (!add('memories',memory(row))) break;
         position.after = row.position;
       }
       more = !!this.db.get(`SELECT 1 FROM observations o JOIN observation_work_metadata m ON m.observation_id=o.id
-        WHERE ${where} AND o.rowid > ? LIMIT 1`, [high,from,to,position.after]);
+        WHERE ${linkedWhere} AND o.rowid > ? LIMIT 1`, [high,from,to,from,to,position.after]);
       // These are explicitly samples; omitted legacy text never becomes a queue.
       const legacy = this.db.all(`SELECT * FROM (
         SELECT o.*,ROW_NUMBER() OVER(PARTITION BY o.project_path,o.session_id ORDER BY o.rowid DESC) AS rank
@@ -1925,7 +1930,7 @@ export class DatabaseManager {
   // Nothing here deletes or rewrites existing rows; there is no TTL cleanup.
   private async ensureTaskTables(): Promise<void> {
     const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
-      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions'];
+      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'transcript_cursors', 'duplicate_flags'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wanted.map(() => '?').join(',')})`, wanted);
     if (have.length === wanted.length && !this.taskTablesNeedMigration()) return;
     await this.write(() => {
@@ -1962,6 +1967,16 @@ export class DatabaseManager {
       if (!hadCompletions) this.db.run(`INSERT OR IGNORE INTO task_completions (task_id, completed_ms)
         SELECT DISTINCT r.task_id, 0 FROM task_results r WHERE NOT EXISTS
           (SELECT 1 FROM task_event_buffer b WHERE b.task_result_id = 'task:' || r.task_id)`);
+      // Codex transcript reader: byte offset + content fingerprint per transcript file (resume, rotation, archive/move).
+      this.db.run(`CREATE TABLE IF NOT EXISTS transcript_cursors (
+        path TEXT PRIMARY KEY, session_id TEXT, project_path TEXT, fingerprint TEXT NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
+        size INTEGER NOT NULL DEFAULT 0, format TEXT NOT NULL DEFAULT 'unknown', status TEXT NOT NULL DEFAULT 'active',
+        pending_json TEXT NOT NULL DEFAULT '{}', turn INTEGER NOT NULL DEFAULT 0, moved_from TEXT, updated_ms INTEGER NOT NULL)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_transcript_cursors_session ON transcript_cursors(session_id, status)`);
+      // Duplicate-looking summaries are linked and flagged for a human; never deleted automatically.
+      this.db.run(`CREATE TABLE IF NOT EXISTS duplicate_flags (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, observation_id TEXT NOT NULL, matched_sha256 TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'needs_confirmation', created_ms INTEGER NOT NULL)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
         observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_observation_content_hash ON observation_content_hashes(project_path, sha256)`);

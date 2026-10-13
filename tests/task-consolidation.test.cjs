@@ -91,21 +91,7 @@ function normalDay() {
   return tasks;
 }
 
-test('rule router: read-only work never reaches the model; failures and writes do', () => {
-  const ok = (tool_name, input, success = true) => classifyToolEvent({ tool_name, input, output: 'x', success }, 'work').route;
-  assert.equal(ok('Read', 'a.ts'), 'evidence_only');
-  assert.equal(ok('exec_command', JSON.stringify({ cmd: 'git status && rg foo | head' })), 'evidence_only');
-  assert.equal(ok('exec_command', JSON.stringify({ cmd: ['bash', '-lc', 'cat a > b'] })), 'candidate');
-  assert.equal(ok('exec_command', 'sed -i s/a/b/ f'), 'candidate');
-  assert.equal(ok('exec_command', 'npm test'), 'candidate');
-  assert.equal(ok('Read', 'missing.ts', false), 'candidate');
-  assert.equal(ok('apply_patch', 'diff'), 'candidate');
-  assert.equal(ok('update_plan', '{}'), 'drop');
-  assert.equal(classifyToolEvent({ tool_name: 'apply_patch', input: 'x', output: 'y', success: true }, 'daily_review').route, 'drop');
-  assert.equal(isReadOnlyCommand('echo $(rm -rf x)'), false);
-});
-
-test('normal day: <=1.5 LLM calls per task, one review per task, no backlog, under token cap', async () => {
+test('normal day: exactly 1 LLM call per task, one review per task, no backlog, under token cap', async () => {
   await withWorker(async ({ post, get, idle, stub }) => {
     const tasks = normalDay();
     for (let t = 0; t < tasks.length; t++) {
@@ -121,11 +107,13 @@ test('normal day: <=1.5 LLM calls per task, one review per task, no backlog, und
     assert.ok(stub.calls.length <= 1.5 * tasks.length, `calls ${stub.calls.length} for ${tasks.length} tasks`);
     assert.equal(stub.calls.length, tasks.length);
     assert.equal(o.tasks.tasks, tasks.length);
-    assert.equal(o.tasks.evidence_rows, tasks.length * 21);
+    assert.equal(o.tasks.evidence_rows, 0, 'no per-command evidence routing any more');
     assert.equal(o.stats.observations, tasks.length);
     assert.equal(o.stats.postTaskReviews, tasks.length, 'post-task review once per task');
     assert.ok(stub.tokens() < TOKEN_CAP, `token estimate ${stub.tokens()}`);
-    for (const c of stub.calls) assert.doesNotMatch(c.user, /contents \d+-\d+/, 'evidence-only reads are never sent');
+    for (let t = 0; t < tasks.length; t++) assert.ok(stub.calls.some(c => c.user.includes(`contents ${t}-14`) && c.user.includes(`src/feature${t}.ts`)),
+      'the whole task (reads included) is sent once');
+    for (const c of stub.calls) assert.doesNotMatch(c.user, /update_plan/, 'todo/plan tool class is dropped by name');
   });
 });
 
@@ -138,18 +126,6 @@ test('idle timeout closes a task without a prompt or session end', async () => {
     const o = await idle();
     assert.equal(stub.calls.length, 1); assert.equal(o.queue.open_task_events, 0);
   }, { AGENTMEM_TASK_IDLE_MS: '500' });
-});
-
-test('very large task is split into bounded segments, one call per segment', async () => {
-  await withWorker(async ({ post, get, idle, stub }) => {
-    for (let i = 0; i < 40; i++) await post('/tools', ev('big', 'exec_command', `npm run step${i}`, 'y'.repeat(8000)));
-    await post('/sessions/close', { id: 'big' });
-    const o = await idle();
-    const segments = stub.calls.length;
-    assert.ok(segments > 1 && segments <= Math.ceil(40 * 9300 / 24000) + 1, `segments ${segments}`);
-    for (const c of stub.calls) assert.ok(c.chars < 24000 + 4000);
-    assert.equal(o.tasks.tasks, 1); assert.equal(o.stats.postTaskReviews, 1);
-  });
 });
 
 test('daily_review sessions never call the model; duplicate summaries are not saved twice', async () => {

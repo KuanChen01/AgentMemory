@@ -6,33 +6,6 @@ const { classifyToolEvent } = require('../dist/services/event-classifier.js');
 
 const route = cmd => classifyToolEvent({ tool_name: 'exec_command', input: JSON.stringify({ cmd }), output: 'x', success: true }, 'work').route;
 
-test('F3 classifier parses full command + args; writes and unknown commands are candidates', () => {
-  for (const cmd of ['git branch -D important', 'git branch -m a b', 'git remote add origin https://x', 'git remote remove o',
-    'sort -o out.txt in.txt', 'sort --output=o in', 'find . -delete', 'find . -name a -exec rm {} \\;', 'fd -x rm', 'uniq in out',
-    'env rm -rf x', "awk '{print > \"f\"}' a", 'date -s 2020-01-01', 'git config user.name x', 'some-unknown-tool --flag',
-    'Get-ChildItem | Remove-Item', "sed -n 'w out' f", 'git diff --output=patch.txt', 'tree -o out.txt'])
-    assert.equal(route(cmd), 'candidate', cmd);
-  for (const cmd of ['ls -la', 'git branch', 'git branch -a', 'git remote -v', 'git log --oneline -5', 'rg -n foo src | head -20',
-    "sed -n '1,20p' file", 'find . -name "*.ts"', 'sort in.txt', 'git config --get user.name', 'Get-Content a.txt', 'cat a && wc -l a'])
-    assert.equal(route(cmd), 'evidence_only', cmd);
-});
-
-test('F2 read-only results stay discoverable: investigation-only task yields overview item and full evidence', async () => {
-  await withWorker(async ({ post, get, idle, stub }) => {
-    const out = 'line\n'.repeat(400) + 'ROOT CAUSE: pool size 8 exhausted';
-    await post('/tools', ev('inv', 'Read', 'logs/app.log', out));
-    await post('/tools', ev('inv', 'Grep', 'pattern', 'match'));
-    await post('/sessions/close', { id: 'inv' }); await idle();
-    assert.equal(stub.calls.length, 0, 'still no model call for evidence');
-    const qs = new URLSearchParams({ since: '2020-01-01T00:00:00Z', until: '2099-01-01T00:00:00Z' });
-    const view = await get('/admin/api/work-overview?' + qs);
-    assert.equal(view.memories.length, 1); assert.equal(view.memories[0].kind, 'context');
-    const evidence = await get('/admin/api/work-evidence?' + new URLSearchParams({ id: view.memories[0].id }));
-    assert.equal(evidence.items.length, 2);
-    assert.match(evidence.items.find(i => i.tool_name === 'Read').output, /ROOT CAUSE: pool size 8 exhausted/);
-  });
-});
-
 test('F5 boundary freezes its event set; later events are not merged into a queued task', async () => {
   await withWorker(async ({ post, idle, stub, get }) => {
     stub.state.delayMs = 600;
@@ -56,19 +29,6 @@ test('F6 idle timeout uses session-wide activity including evidence_only events'
     await sleep(1500); await idle();
     assert.equal(stub.calls.length, 1);
   }, { AGENTMEM_TASK_IDLE_MS: '800' });
-});
-
-test('F7 completeness is computed on what is sent; abbreviated synthesis input cannot be silently skipped', async () => {
-  await withWorker(async ({ post, idle, stub, get }) => {
-    stub.setFixed({ record_kind: 'skip', title: 'routine', narrative: '', facts: [] });
-    await post('/tools', ev('t', 'exec_command', 'npm run report', 'a'.repeat(4000) + ' KEY RESULT 42 ' + 'b'.repeat(4000)));
-    await post('/sessions/close', { id: 't' }); await idle();
-    assert.equal(stub.calls.length, 1);
-    const o = await get('/admin/api/overview');
-    assert.equal(o.stats.observations, 1, 'not skipped');
-    const qs = new URLSearchParams({ since: '2020-01-01T00:00:00Z', until: '2099-01-01T00:00:00Z' });
-    assert.match((await get('/admin/api/work-overview?' + qs)).memories[0].narrative, /abbreviated|unknown/);
-  });
 });
 
 test('F8 dedup hash includes file lists (and date): different results are not merged', async () => {

@@ -53,9 +53,10 @@ import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incomplete
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import { classifyToolEvent } from './event-classifier';
 import {
-  bufferCandidate, consolidateTask, freezeOpenTask, frozenTasks, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
-  saveToolEvidence, taskIdleMs, taskRetryMs, TaskTrigger,
+  bufferEvent, consolidateTask, freezeOpenTask, frozenTasks, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
+  stuckTaskCount, taskIdleMs, taskRetryMs, TaskTrigger,
 } from './task-consolidation';
+import { registerTranscript, sessionUsesTranscript, syncTranscript, activeTranscripts } from './codex-transcript';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -114,6 +115,8 @@ function scheduleTask(sessionId: string, taskId: string, trigger: TaskTrigger): 
   return next;
 }
 async function closeTask(sessionId: string, trigger: TaskTrigger): Promise<string | null> {
+  // A session whose Codex transcript is readable is synced first, so the task holds every call up to the boundary.
+  if (sessionUsesTranscript(dbManager, sessionId)) await syncSessionTranscripts(sessionId);
   const taskId = await freezeOpenTask(dbManager, sessionId);
   if (taskId) void scheduleTask(sessionId, taskId, trigger);
   return taskId;
@@ -127,9 +130,24 @@ function retryFrozenTasks(force = false): Promise<unknown>[] {
   }
   return jobs;
 }
+// Transcript sync: boundaries found in the transcript (each user prompt / turn end) freeze tasks with
+// deterministic ids; the frozen tasks are then consolidated like any other.
+async function syncSessionTranscripts(sessionId?: string) {
+  for (const cursor of activeTranscripts(dbManager, sessionId)) {
+    try {
+      const result = await syncTranscript(dbManager, cursor.path, { archiveRoots: transcriptArchiveRoots() });
+      for (const t of result.frozen_tasks) void scheduleTask(t.session_id, t.task_id, t.trigger);
+    } catch (err: any) { console.error(`[Transcript] Sync failed for ${cursor.path}: ${err.message}`); }
+  }
+}
+function transcriptArchiveRoots(): string[] {
+  return String(process.env.AGENTMEM_CODEX_ARCHIVE_DIRS || path.join(os.homedir(), '.codex', 'archived_sessions'))
+    .split(path.delimiter).filter(Boolean);
+}
 async function sweepIdleTasks() {
   if (!taskConsolidationEnabled()) return;
   try {
+    await syncSessionTranscripts();
     for (const id of openSessionsIdleSince(dbManager, Date.now() - taskIdleMs())) await closeTask(id, 'idle_timeout');
     retryFrozenTasks();
   } catch (err: any) { console.error(`[Task] Idle sweep failed: ${err.message}`); }
@@ -416,7 +434,9 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
       queue: { pending: logQueue.length, processing: isProcessingQueue || activeConsolidations > 0,
         consolidating: activeConsolidations,
         open_task_events: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM task_event_buffer WHERE task_result_id IS NULL OR task_result_id LIKE 'task:%'`).n,
-        stuck_tasks: dbManager.sqlGet('SELECT COUNT(*) AS n FROM task_attempts a WHERE attempts >= 5 AND NOT EXISTS (SELECT 1 FROM task_results r WHERE r.task_id=a.task_id)').n },
+        stuck_tasks: stuckTaskCount(dbManager),
+        duplicate_flags: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM duplicate_flags WHERE status='needs_confirmation'`).n,
+        transcripts: dbManager.sqlAll(`SELECT status, format, COUNT(*) AS n FROM transcript_cursors GROUP BY status, format`) },
       tasks: dbManager.sqlGet(`SELECT COUNT(DISTINCT task_id) AS tasks, COALESCE(SUM(llm_calls),0) AS llm_calls,
         (SELECT COUNT(*) FROM tool_evidence) AS evidence_rows FROM task_results`),
       stats: {
@@ -490,7 +510,8 @@ app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
     if (rows.length !== 1) return res.status(404).json({ error: 'Unknown memory ID' });
     const data = Buffer.from(JSON.stringify(toAdminObservation(rows[0])), 'utf8');
     if (offset > data.length || (offset < data.length && (data[offset] & 0xc0) === 0x80)) throw new Error('Offset outside a UTF-8 boundary');
-    let stop = Math.min(data.length, offset + 8192);
+    // Whole memory in one response (bounded at 256 KiB); continuation offsets only for pathological sizes.
+    let stop = Math.min(data.length, offset + 256 * 1024);
     while (stop < data.length && (data[stop] & 0xc0) === 0x80) stop--;
     res.json({ id, offset, total_bytes: data.length, text: data.subarray(offset, stop).toString('utf8'),
       next_offset: stop < data.length ? stop : null,
@@ -508,8 +529,15 @@ app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
     // Every task linked to this memory (deduplicated summaries can be shared by several tasks).
     const tasks = dbManager.sqlAll('SELECT DISTINCT task_id FROM task_results WHERE observation_id=? ORDER BY rowid', [id]).map((t: any) => t.task_id);
     if (!tasks.length) return res.status(404).json({ error: 'No task evidence for this memory' });
-    const rows = dbManager.sqlAll(`SELECT id,task_id,tool_name,success,input,output,input_bytes,output_bytes,truncated,source_sha256,created_at
-      FROM tool_evidence WHERE task_id IN (${tasks.map(() => '?').join(',')}) ORDER BY received_ms, rowid LIMIT 21 OFFSET ?`, [...tasks, offset]);
+    const marks = tasks.map(() => '?').join(',');
+    // Buffered tool calls of every linked task plus legacy (read-only) evidence rows of earlier revisions.
+    const rows = dbManager.sqlAll(`SELECT * FROM (
+        SELECT b.id, r.task_id, b.tool_name, b.success, b.input, b.output, length(b.input) AS input_bytes, length(b.output) AS output_bytes,
+          b.incomplete AS truncated, NULL AS source_sha256, b.created_at, b.received_ms FROM task_event_buffer b
+          JOIN task_results r ON r.id = b.task_result_id WHERE r.task_id IN (${marks})
+        UNION ALL SELECT id, task_id, tool_name, success, input, output, input_bytes, output_bytes, truncated, source_sha256, created_at, received_ms
+          FROM tool_evidence WHERE task_id IN (${marks}))
+      ORDER BY received_ms, id LIMIT 21 OFFSET ?`, [...tasks, ...tasks, offset]);
     const task = { task_id: tasks[0] };
     const items: any[] = []; let bytes = 0;
     for (const row of rows.slice(0, 20)) {
@@ -1147,6 +1175,9 @@ app.post('/sessions', async (req, res) => {
     };
 
     await dbManager.saveSession(session);
+    const transcriptPath = normalizeOptionalString(req.body?.transcript_path);
+    if (transcriptPath && taskConsolidationEnabled()) await registerTranscript(dbManager, transcriptPath, id, normalizedPath).catch(err =>
+      console.error(`[Transcript] Not used for ${id} (hook events stay the source): ${err.message}`));
     console.log(`[Session] Registered session ${id} for agent ${agent_id} on ${normalizedPath}`);
     res.json({ success: true, purpose: await dbManager.getSessionPurpose(id) });
   } catch (err: any) {
@@ -1184,13 +1215,16 @@ app.post('/tools', async (req, res) => {
     if (decision.route === 'drop') {
       return res.json({ success: true, skipped: true, route: 'drop', reason: decision.reason, queueLength: logQueue.length });
     }
-    if (decision.route === 'evidence_only') {
-      await saveToolEvidence(dbManager, logEntry, decision);
-      return res.json({ success: true, route: 'evidence_only', reason: decision.reason, queueLength: logQueue.length });
-    }
     if (taskConsolidationEnabled()) {
-      await bufferCandidate(dbManager, logEntry);
-      return res.json({ success: true, route: 'candidate', buffered: true, queueLength: logQueue.length });
+      const hookTranscript = normalizeOptionalString(req.body?.transcript_path);
+      if (hookTranscript) await registerTranscript(dbManager, hookTranscript, session_id, logEntry.project_path).catch(() => undefined);
+      // When the session's Codex transcript is the source, hook events would double count; the transcript wins.
+      if (sessionUsesTranscript(dbManager, session_id)) return res.json({ success: true, route: 'transcript', buffered: false });
+      // Insert-once by tool call id when the hook provides one.
+      const callId = normalizeOptionalString(req.body?.call_id ?? req.body?.tool_use_id ?? req.body?.id);
+      if (callId) logEntry.id = `hook:${session_id}:${callId}`;
+      const inserted = await bufferEvent(dbManager, logEntry);
+      return res.json({ success: true, route: 'task', buffered: inserted, duplicate: !inserted, queueLength: logQueue.length });
     }
 
     logQueue.push(logEntry);
@@ -1209,6 +1243,8 @@ app.post('/tasks/boundary', async (req, res) => {
   const sessionId = normalizeOptionalString(req.body?.session_id);
   if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
   if (!(await isWriteEnabled())) return sendWriteDisabled(res);
+  const transcriptPath = normalizeOptionalString(req.body?.transcript_path);
+  if (transcriptPath && taskConsolidationEnabled()) await registerTranscript(dbManager, transcriptPath, sessionId, '').catch(() => undefined);
   // Freeze before responding: later events can never join this task.
   const taskId = taskConsolidationEnabled() ? await closeTask(sessionId, 'user_prompt') : null;
   res.json({ success: true, scheduled: !!taskId, task_id: taskId });
