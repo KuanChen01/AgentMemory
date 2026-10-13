@@ -138,7 +138,10 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
   if (inflight.has(taskId)) return { ...result, task_id: null };
   inflight.add(taskId);
   try {
-    const rows = db.sqlAll(`SELECT * FROM task_event_buffer WHERE task_result_id=? ORDER BY received_ms, rowid`, ['task:' + taskId]);
+    // Segment over the task's full frozen event set (pending rows plus rows already attached to a saved
+    // segment of this task) so segment indexes are stable across retries; a retry never renumbers.
+    const rows = db.sqlAll(`SELECT * FROM task_event_buffer WHERE task_result_id=? OR task_result_id IN
+      (SELECT id FROM task_results WHERE task_id=?) ORDER BY received_ms, rowid`, ['task:' + taskId, taskId]);
     const evidence = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,created_at FROM tool_evidence
       WHERE task_id=? ORDER BY received_ms, rowid`, [taskId]);
     const done = new Set(db.sqlAll(`SELECT segment_index FROM task_results WHERE task_id=?`, [taskId]).map(r => r.segment_index));
@@ -150,24 +153,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     if (!rows.length) {
       // Investigation-only task: discoverable context result built from evidence, no model call.
       if (done.has(0)) return result;
-      const first = evidence[0]; const resultId = `${taskId}-0`;
-      const tools = [...new Set(evidence.map(e => e.tool_name))].join(', ');
-      const obs: Observation = { id: resultId, session_id: sessionId, project_path: first.project_path, agent_id: first.agent_id,
-        title: `Read-only investigation: ${evidence.length} inspection(s) (${tools})`.slice(0, 200),
-        narrative: 'Read-only inspections; outcome not synthesized. Full bounded evidence via work-evidence.\n' +
-          evidence.slice(0, 20).map(e => `${e.tool_name}: ${boundToolText(String(e.input), 160)}`).join('\n'),
-        facts: [`${evidence.length} read-only inspections`], concepts: ['investigation'], files_read: [], files_modified: [], embedding: [],
-        record_kind: 'context', source_kind: 'task' };
-      const existing = (await db.getObservationsByIds([resultId]))[0];
-      if (!existing && purpose !== 'daily_review') {
-        obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative}`);
-        await db.saveObservation(obs);
-      }
-      await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,
-        segment_count,event_count,source_ids,trigger,status,observation_id,llm_calls,evidence_count) VALUES (?,?,?,?,?,0,1,0,'[]',?,?,?,0,?)`,
-        [resultId, taskId, sessionId, first.project_path, first.agent_id, trigger, purpose === 'daily_review' ? 'skipped' : 'evidence_only',
-          purpose === 'daily_review' ? null : resultId, evidence.length]));
-      result.segments = 1; if (purpose !== 'daily_review') result.observations.push(resultId);
+      await saveInvestigation(db, taskId, 0, sessionId, evidence, purpose, trigger, result);
       return result;
     }
 
@@ -238,6 +224,12 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
         sql.run(`UPDATE task_event_buffer SET task_result_id=? WHERE id IN (${sourceIds.map(() => '?').join(',')})`, [resultId, ...sourceIds]);
       });
     }
+    // Mixed task whose candidate segments were all skipped: keep the read-only evidence discoverable.
+    const evidenceIndexSlot = segments.length;
+    if (evidence.length && !result.observations.length && !done.has(evidenceIndexSlot)
+        && !db.sqlGet(`SELECT 1 FROM task_results WHERE task_id=? AND observation_id IS NOT NULL LIMIT 1`, [taskId])) {
+      await saveInvestigation(db, taskId, evidenceIndexSlot, sessionId, evidence, purpose, trigger, result);
+    }
     // Post-task review runs once per task, never per observation.
     if (lastObservation) await runAutomaticPostTaskReview(db, lastObservation).catch(err =>
       console.error(`[Memory] Post-task review failed after task capture: ${err.message}`));
@@ -251,6 +243,29 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
       [taskId, sid, String(err.message).slice(0, 500), Date.now()])).catch(() => undefined);
     throw err;
   } finally { inflight.delete(taskId); }
+}
+
+async function saveInvestigation(db: DatabaseManager, taskId: string, index: number, sessionId: string, evidence: any[],
+  purpose: string, trigger: TaskTrigger, result: ConsolidationResult): Promise<void> {
+  const first = evidence[0]; const resultId = `${taskId}-${index}`;
+  const tools = [...new Set(evidence.map(e => e.tool_name))].join(', ');
+  const obs: Observation = { id: resultId, session_id: sessionId, project_path: first.project_path, agent_id: first.agent_id,
+    title: `Read-only investigation: ${evidence.length} inspection(s) (${tools})`.slice(0, 200),
+    narrative: 'Read-only inspections; outcome not synthesized. Full bounded evidence via work-evidence.\n' +
+      evidence.slice(0, 20).map(e => `${e.tool_name}: ${boundToolText(String(e.input), 160)}`).join('\n'),
+    facts: [`${evidence.length} read-only inspections`], concepts: ['investigation'], files_read: [], files_modified: [], embedding: [],
+    record_kind: 'context', source_kind: 'task' };
+  const existing = (await db.getObservationsByIds([resultId]))[0];
+  if (!existing && purpose !== 'daily_review') {
+    obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative}`);
+    await db.saveObservation(obs);
+  }
+  await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,
+    segment_count,event_count,source_ids,trigger,status,observation_id,llm_calls,evidence_count) VALUES (?,?,?,?,?,?,?,0,'[]',?,?,?,0,?)`,
+    [resultId, taskId, sessionId, first.project_path, first.agent_id, index, index + 1, trigger,
+      purpose === 'daily_review' ? 'skipped' : 'evidence_only', purpose === 'daily_review' ? null : resultId, evidence.length]));
+  result.segments = Math.max(result.segments, index + 1);
+  if (purpose !== 'daily_review') result.observations.push(resultId);
 }
 
 /** Freeze then consolidate whatever is open for a session (convenience for tests/CLI). */

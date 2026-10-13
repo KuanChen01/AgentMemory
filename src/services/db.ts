@@ -402,6 +402,18 @@ function normalizeTimeZone(value: string): string {
   return timeZone;
 }
 
+const reviewList = (v: any): any[] => Array.isArray(v) ? v : (typeof v === 'string' && v ? JSON.parse(v) : []);
+/** Canonical review shape of one memory; overview items and detail reads share this version identity. */
+export function reviewItem(row: any): any {
+  return { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
+    created_at: row.created_at, kind: row.record_kind || 'legacy', source: row.source_kind || 'legacy',
+    title: row.title, narrative: row.narrative, facts: reviewList(row.facts), concepts: reviewList(row.concepts),
+    files_modified: reviewList(row.files_modified), files_read: reviewList(row.files_read) };
+}
+export function reviewItemHash(row: any): string {
+  return createHash('sha256').update(JSON.stringify(reviewItem(row)), 'utf8').digest('hex');
+}
+
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
@@ -797,11 +809,8 @@ export class DatabaseManager {
     }
     let more = catalogDelivered < catalog.length;
     const memory = (row: any) => {
-      const item = { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
-        created_at: row.created_at, kind: row.record_kind || 'legacy', source: row.source_kind || 'legacy',
-        title: row.title, narrative: row.narrative, facts: JSON.parse(row.facts), concepts: JSON.parse(row.concepts),
-        files_modified: JSON.parse(row.files_modified), files_read: JSON.parse(row.files_read) } as any;
-      const itemSha = createHash('sha256').update(JSON.stringify(item), 'utf8').digest('hex');
+      const item = reviewItem(row);
+      const itemSha = reviewItemHash(row);
       if (reader) {
         const seen = this.db.get('SELECT sha256 FROM review_reads WHERE reader=? AND item_id=?', [reader, row.id]);
         // Unchanged items were already verified by this reader: never resend their text.
@@ -856,6 +865,14 @@ export class DatabaseManager {
   }
 
   // Get multiple observations by their IDs
+  /** Overview version hash of one memory, computed from the raw row exactly like getWorkOverview. */
+  public reviewHashById(id: string): string | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const row = this.db.get(`SELECT o.*,m.record_kind,m.source_kind FROM observations o
+      LEFT JOIN observation_work_metadata m ON m.observation_id=o.id WHERE o.id=?`, [id]);
+    return row ? reviewItemHash(row) : null;
+  }
+
   public async getObservationsByIds(ids: string[]): Promise<Observation[]> {
     if (!this.db) throw new Error('Database not initialized');
     if (ids.length === 0) return [];
@@ -1905,8 +1922,9 @@ export class DatabaseManager {
     const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
       'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wanted.map(() => '?').join(',')})`, wanted);
-    if (have.length === wanted.length) return;
+    if (have.length === wanted.length && !this.taskTablesNeedMigration()) return;
     await this.write(() => {
+      this.migrateTaskTablesFromV1();
       this.db.run(`CREATE TABLE IF NOT EXISTS tool_evidence (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
         tool_name TEXT NOT NULL, success INTEGER NOT NULL, route_reason TEXT NOT NULL,
@@ -1946,6 +1964,51 @@ export class DatabaseManager {
       this.db.run(`CREATE TABLE IF NOT EXISTS legacy_compaction_links (
         legacy_observation_id TEXT PRIMARY KEY, task_result_id TEXT NOT NULL)`);
     });
+  }
+
+  private columnsOf(table: string): Set<string> {
+    return new Set(this.db.all(`PRAGMA table_info(${table})`).map((c: any) => c.name));
+  }
+
+  private taskTablesNeedMigration(): boolean {
+    const evidence = this.columnsOf('tool_evidence');
+    const results = this.columnsOf('task_results');
+    return (evidence.size > 0 && !evidence.has('task_id')) || (results.size > 0 && !results.has('evidence_count'));
+  }
+
+  /**
+   * Explicit, additive migration for databases created by the first PR #3 revision (f28a49d).
+   * tool_evidence v1 (input_head/output_head NOT NULL, no task_id) is renamed to tool_evidence_v1 and kept
+   * intact; its rows are copied into the new table. task_results gains evidence_count and a unique
+   * (task_id, segment_index) index. Nothing is deleted.
+   */
+  private migrateTaskTablesFromV1(): void {
+    const evidence = this.columnsOf('tool_evidence');
+    if (evidence.size > 0 && !evidence.has('task_id')) {
+      const backup = this.columnsOf('tool_evidence_v1').size ? `tool_evidence_v1_${Date.now()}` : 'tool_evidence_v1';
+      this.db.run(`DROP INDEX IF EXISTS idx_tool_evidence_session`);
+      this.db.run(`ALTER TABLE tool_evidence RENAME TO ${backup}`);
+      this.db.run(`CREATE TABLE tool_evidence (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL, success INTEGER NOT NULL, route_reason TEXT NOT NULL,
+        input TEXT NOT NULL, output TEXT NOT NULL, input_bytes INTEGER NOT NULL, output_bytes INTEGER NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0, source_sha256 TEXT NOT NULL, task_id TEXT, received_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`INSERT INTO tool_evidence (id,session_id,project_path,agent_id,tool_name,success,route_reason,input,output,
+        input_bytes,output_bytes,truncated,source_sha256,task_id,received_ms,created_at)
+        SELECT id,session_id,project_path,agent_id,tool_name,success,route_reason,input_head,output_head,input_bytes,output_bytes,
+        CASE WHEN input_bytes > length(input_head) OR output_bytes > length(output_head) THEN 1 ELSE 0 END,
+        source_sha256,NULL,CAST(strftime('%s', created_at) AS INTEGER) * 1000,created_at FROM ${backup}`);
+    }
+    const results = this.columnsOf('task_results');
+    if (results.size > 0 && !results.has('evidence_count')) {
+      this.db.run(`ALTER TABLE task_results ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (results.size > 0) {
+      const dupes = this.db.get(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM task_results GROUP BY task_id, segment_index HAVING COUNT(*) > 1)`);
+      if (!dupes?.n) this.db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_task_results_segment ON task_results(task_id, segment_index)`);
+      else console.error('[Memory] task_results has duplicate (task_id, segment_index) rows; unique index not created, rows kept.');
+    }
   }
 
   /** Read-only SQL access for additive task/review stores. */

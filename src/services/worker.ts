@@ -494,7 +494,8 @@ app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
     while (stop < data.length && (data[stop] & 0xc0) === 0x80) stop--;
     res.json({ id, offset, total_bytes: data.length, text: data.subarray(offset, stop).toString('utf8'),
       next_offset: stop < data.length ? stop : null,
-      sha256: createHash('sha256').update(data).digest('hex') });
+      // Same version identity as the overview item, so a reader can tell that what it read is what it acknowledges.
+      sha256: dbManager.reviewHashById(id), content_sha256: createHash('sha256').update(data).digest('hex') });
   } catch (error: any) { res.status(400).json({ error: error.message }); }
 });
 

@@ -33,12 +33,27 @@ const READ_ONLY: Record<string, ArgRule> = {
   uniq: args => args.filter(a => !a.startsWith('-')).length <= 1,
   find: noFlags(/^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/),
   fd: noFlags(/^-x$|^-X$|^--exec/),
-  sed: args => args.includes('-n') && !args.some(a => /^-i|^--in-place/.test(a))
-    && !args.filter(a => !a.startsWith('-')).slice(0, 1).some(script => /(^|[;\s}])[wWe](\s|$)|\/[wWe]\s/.test(script)),
+  sed: args => args.includes('-n') && !args.some(a => /^-i|^--in-place|^-f$|^--file/.test(a)) && sedScripts(args).every(sedScriptIsReadOnly),
   'get-content': any, gc: any, 'get-childitem': any, gci: any, 'select-string': any, sls: any, 'get-item': any,
   'get-location': any, 'test-path': any, 'resolve-path': any, 'measure-object': any, 'format-list': any, 'format-table': any,
   'out-string': any, 'select-object': any,
 };
+/** All sed scripts: every -e/--expression argument, otherwise the first operand. */
+function sedScripts(args: string[]): string[] {
+  const scripts: string[] = []; let explicit = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-e' || args[i] === '--expression') { explicit = true; scripts.push(args[++i] ?? ''); }
+    else if (args[i].startsWith('--expression=')) { explicit = true; scripts.push(args[i].slice(13)); }
+    else if (/^-e./.test(args[i])) { explicit = true; scripts.push(args[i].slice(2)); }
+  }
+  if (!explicit) { const first = args.find(a => !a.startsWith('-')); if (first !== undefined) scripts.push(first); }
+  return scripts;
+}
+function sedScriptIsReadOnly(script: string): boolean {
+  // w/W (write file), e (execute), and s///w|e flags are side effects.
+  return !/(^|[;\s{}0-9$\/,!])[wWe](\s|$)/.test(script) && !/\/[gpIiMm0-9]*[we]/.test(script.replace(/^[^s]*s/, 's'));
+}
+
 const GIT_READ_ONLY: Record<string, ArgRule> = {
   status: any, log: noFlags(/^--output/), show: noFlags(/^--output/), diff: noFlags(/^--output/), 'rev-parse': any,
   'ls-files': any, blame: any, describe: any, shortlog: any, 'cat-file': any, 'ls-tree': any, 'rev-list': any,
@@ -118,8 +133,16 @@ export function extractCommand(input: string): string {
 export function isReadOnlyCommand(command: string): boolean {
   const script = command.replace(/\\\r?\n/g, ' ').trim();
   if (!script) return false;
-  // Redirection, substitution, tee, xargs and PowerShell mutating verbs are never read-only.
-  if (/(?:^|[^>2&])>{1,2}(?!&)|\btee\b|\bxargs\b|\$\(|`|<\(/.test(script.replace(/'[^']*'|"[^"]*"/g, "''"))) return false;
+  // Single quotes are literal in bash and PowerShell; double quotes still expand $(...), backticks and
+  // PowerShell subexpressions, so substitution checks only strip single-quoted text.
+  const unsingle = script.replace(/'[^']*'/g, "''");
+  if (/\$\(|`|<\(|\[[\w.]+\]::/.test(unsingle)) return false;
+  const unquoted = unsingle.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  if (/\btee\b|\bxargs\b/.test(unquoted)) return false;
+  // Any redirection to a file (including 2>file) is a write; only fd duplication and null sinks are allowed.
+  for (const m of unquoted.matchAll(/\d*>>?\s*(&\d|[^\s;&|]*)/g)) {
+    if (!/^(&\d|\/dev\/null|\$null|nul)$/i.test(m[1])) return false;
+  }
   if (/\b(remove|set|new|move|copy|rename|clear|add|start|stop|invoke|out-file|export|import)-[a-z]/i.test(script)) return false;
   return splitSegments(script).every(segmentIsReadOnly);
 }
