@@ -65,12 +65,13 @@ export function openSessionsIdleSince(db: DatabaseManager, cutoffMs: number): st
     GROUP BY session_id HAVING SUM(open) > 0 AND MAX(ms) <= ?`, [cutoffMs]).map(r => r.session_id);
 }
 
-/** Frozen tasks waiting for (re)consolidation, excluding those that exhausted their attempts. */
+/** Frozen tasks waiting for (re)consolidation, excluding those that exhausted their attempts.
+ * Eligibility is whole-task: a task is done only once task_completions records it, not when any segment row exists. */
 export function frozenTasks(db: DatabaseManager): { task_id: string; session_id: string }[] {
   return db.sqlAll(`SELECT t.task_id, t.session_id FROM (
       SELECT DISTINCT substr(task_result_id, 6) AS task_id, session_id FROM task_event_buffer WHERE task_result_id LIKE 'task:%'
       UNION SELECT DISTINCT task_id, session_id FROM tool_evidence e WHERE task_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM task_results r WHERE r.task_id = e.task_id)) t
+        AND NOT EXISTS (SELECT 1 FROM task_completions c WHERE c.task_id = e.task_id)) t
     LEFT JOIN task_attempts a ON a.task_id = t.task_id WHERE COALESCE(a.attempts, 0) < ?`, [MAX_TASK_ATTEMPTS]);
 }
 
@@ -152,8 +153,9 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
 
     if (!rows.length) {
       // Investigation-only task: discoverable context result built from evidence, no model call.
-      if (done.has(0)) return result;
+      if (done.has(0)) { await markTaskComplete(db, taskId); return result; }
       await saveInvestigation(db, taskId, 0, sessionId, evidence, purpose, trigger, result);
+      await markTaskComplete(db, taskId);
       return result;
     }
 
@@ -230,6 +232,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
         && !db.sqlGet(`SELECT 1 FROM task_results WHERE task_id=? AND observation_id IS NOT NULL LIMIT 1`, [taskId])) {
       await saveInvestigation(db, taskId, evidenceIndexSlot, sessionId, evidence, purpose, trigger, result);
     }
+    await markTaskComplete(db, taskId);
     // Post-task review runs once per task, never per observation.
     if (lastObservation) await runAutomaticPostTaskReview(db, lastObservation).catch(err =>
       console.error(`[Memory] Post-task review failed after task capture: ${err.message}`));
@@ -243,6 +246,10 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
       [taskId, sid, String(err.message).slice(0, 500), Date.now()])).catch(() => undefined);
     throw err;
   } finally { inflight.delete(taskId); }
+}
+
+async function markTaskComplete(db: DatabaseManager, taskId: string) {
+  await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_completions (task_id, completed_ms) VALUES (?, ?)`, [taskId, Date.now()]));
 }
 
 async function saveInvestigation(db: DatabaseManager, taskId: string, index: number, sessionId: string, evidence: any[],

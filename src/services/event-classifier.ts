@@ -77,16 +77,19 @@ export function tokenize(segment: string): string[] {
   return tokens;
 }
 
-/** Split on && || ; | and newlines outside quotes. */
+/** Split on & && || ; | and newlines outside quotes. */
 function splitSegments(script: string): string[] {
   const parts: string[] = []; let current = ''; let quote: string | null = null;
   for (let i = 0; i < script.length; i++) {
     const ch = script[i];
     if (quote) { current += ch; if (ch === quote) quote = null; continue; }
     if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
-    if (ch === ';' || ch === '\n' || ch === '|' || (ch === '&' && script[i + 1] === '&')) {
+    // cmd.exe and POSIX separators: ; newline | || & && (a lone & runs the next command too).
+    // '&' that is part of a redirection (2>&1, &>file, >&2) is not a separator.
+    const redirectAmp = ch === '&' && (script[i - 1] === '>' || script[i + 1] === '>');
+    if (ch === ';' || ch === '\n' || ch === '\r' || ch === '|' || (ch === '&' && !redirectAmp)) {
       parts.push(current); current = '';
-      if ((ch === '|' && script[i + 1] === '|') || ch === '&') i++;
+      if ((ch === '|' && script[i + 1] === '|') || (ch === '&' && script[i + 1] === '&')) i++;
       continue;
     }
     current += ch;

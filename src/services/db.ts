@@ -408,8 +408,13 @@ export function reviewItem(row: any): any {
   return { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
     created_at: row.created_at, kind: row.record_kind || 'legacy', source: row.source_kind || 'legacy',
     title: row.title, narrative: row.narrative, facts: reviewList(row.facts), concepts: reviewList(row.concepts),
-    files_modified: reviewList(row.files_modified), files_read: reviewList(row.files_read) };
+    files_modified: reviewList(row.files_modified), files_read: reviewList(row.files_read),
+    // A deduplicated summary shared by several tasks changes version when new linked evidence arrives,
+    // so later reviews rediscover it (single-task items keep their existing hash).
+    ...(Number(row.evidence_tasks) > 1 ? { evidence_tasks: Number(row.evidence_tasks), evidence_items: Number(row.evidence_items) } : {}) };
 }
+const EVIDENCE_LINK_COLUMNS = `(SELECT COUNT(DISTINCT r.task_id) FROM task_results r WHERE r.observation_id=o.id) AS evidence_tasks,
+  (SELECT COUNT(*) FROM tool_evidence e WHERE e.task_id IN (SELECT r.task_id FROM task_results r WHERE r.observation_id=o.id)) AS evidence_items`;
 export function reviewItemHash(row: any): string {
   return createHash('sha256').update(JSON.stringify(reviewItem(row)), 'utf8').digest('hex');
 }
@@ -822,7 +827,7 @@ export class DatabaseManager {
         reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
     };
     if (!more) {
-      const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind FROM observations o
+      const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS} FROM observations o
         JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${where} AND o.rowid > ?
         ORDER BY o.rowid LIMIT 20`, [high,from,to,position.after]);
       for (const row of rows) {
@@ -868,7 +873,7 @@ export class DatabaseManager {
   /** Overview version hash of one memory, computed from the raw row exactly like getWorkOverview. */
   public reviewHashById(id: string): string | null {
     if (!this.db) throw new Error('Database not initialized');
-    const row = this.db.get(`SELECT o.*,m.record_kind,m.source_kind FROM observations o
+    const row = this.db.get(`SELECT o.*,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS} FROM observations o
       LEFT JOIN observation_work_metadata m ON m.observation_id=o.id WHERE o.id=?`, [id]);
     return row ? reviewItemHash(row) : null;
   }
@@ -1920,7 +1925,7 @@ export class DatabaseManager {
   // Nothing here deletes or rewrites existing rows; there is no TTL cleanup.
   private async ensureTaskTables(): Promise<void> {
     const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
-      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts'];
+      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wanted.map(() => '?').join(',')})`, wanted);
     if (have.length === wanted.length && !this.taskTablesNeedMigration()) return;
     await this.write(() => {
@@ -1950,6 +1955,13 @@ export class DatabaseManager {
         task_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
         updated_ms INTEGER NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_results_task ON task_results(task_id, segment_index)`);
+      // Whole-task completion marker (additive). Tasks already finished by an earlier revision are backfilled
+      // from task_results that have no frozen rows left, so they are not re-run.
+      const hadCompletions = this.columnsOf('task_completions').size > 0;
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_completions (task_id TEXT PRIMARY KEY, completed_ms INTEGER NOT NULL)`);
+      if (!hadCompletions) this.db.run(`INSERT OR IGNORE INTO task_completions (task_id, completed_ms)
+        SELECT DISTINCT r.task_id, 0 FROM task_results r WHERE NOT EXISTS
+          (SELECT 1 FROM task_event_buffer b WHERE b.task_result_id = 'task:' || r.task_id)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
         observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_observation_content_hash ON observation_content_hashes(project_path, sha256)`);

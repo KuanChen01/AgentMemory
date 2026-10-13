@@ -505,10 +505,12 @@ app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
     if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
     const id = String(req.query.id || ''); const offset = Number(req.query.offset || 0);
     if (!id || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Evidence requires an observation ID and nonnegative item offset');
-    const task = dbManager.sqlGet('SELECT task_id FROM task_results WHERE observation_id=? LIMIT 1', [id]);
-    if (!task) return res.status(404).json({ error: 'No task evidence for this memory' });
-    const rows = dbManager.sqlAll(`SELECT id,tool_name,success,input,output,input_bytes,output_bytes,truncated,source_sha256,created_at
-      FROM tool_evidence WHERE task_id=? ORDER BY received_ms, rowid LIMIT 21 OFFSET ?`, [task.task_id, offset]);
+    // Every task linked to this memory (deduplicated summaries can be shared by several tasks).
+    const tasks = dbManager.sqlAll('SELECT DISTINCT task_id FROM task_results WHERE observation_id=? ORDER BY rowid', [id]).map((t: any) => t.task_id);
+    if (!tasks.length) return res.status(404).json({ error: 'No task evidence for this memory' });
+    const rows = dbManager.sqlAll(`SELECT id,task_id,tool_name,success,input,output,input_bytes,output_bytes,truncated,source_sha256,created_at
+      FROM tool_evidence WHERE task_id IN (${tasks.map(() => '?').join(',')}) ORDER BY received_ms, rowid LIMIT 21 OFFSET ?`, [...tasks, offset]);
+    const task = { task_id: tasks[0] };
     const items: any[] = []; let bytes = 0;
     for (const row of rows.slice(0, 20)) {
       const size = Buffer.byteLength(JSON.stringify(row));
@@ -516,7 +518,7 @@ app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
       items.push({ ...row, success: !!row.success, truncated: !!row.truncated }); bytes += size;
     }
     const more = items.length < rows.length;
-    res.json({ id, task_id: task.task_id, offset, items, next_offset: more ? offset + items.length : null });
+    res.json({ id, task_id: task.task_id, task_ids: tasks, offset, items, next_offset: more ? offset + items.length : null });
   } catch (error: any) { res.status(400).json({ error: error.message }); }
 });
 
