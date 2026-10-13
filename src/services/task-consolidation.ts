@@ -46,8 +46,20 @@ export async function bufferEvent(db: DatabaseManager, ev: IncomingToolEvent): P
   const res: any = await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_event_buffer (id,session_id,project_path,agent_id,tool_name,success,
     input,output,incomplete,received_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [ev.id, ev.session_id, ev.project_path, ev.agent_id, ev.tool_name, ev.success ? 1 : 0,
-      input.slice(0, EVENT_INPUT_MAX), output.slice(0, EVENT_OUTPUT_MAX), incomplete ? 1 : 0, ev.timestamp]));
+      keepHeadTail(input, EVENT_INPUT_MAX), keepHeadTail(output, EVENT_OUTPUT_MAX), incomplete ? 1 : 0, ev.timestamp]));
   return (res?.changes || 0) > 0;
+}
+const CAPTURE_MARKER = /\[\.\.\. omitted (\d+) chars at capture \.\.\.\]/g;
+/** Oversized text keeps its head (2/3) and tail (1/3): final results/verification at the end are never lost. */
+export function keepHeadTail(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = Math.floor(max * 2 / 3), tail = max - head;
+  return `${text.slice(0, head)}\n[... omitted ${text.length - head - tail} chars at capture ...]\n${text.slice(text.length - tail)}`;
+}
+function captureOmitted(rows: any[]): number {
+  let n = 0;
+  for (const r of rows) for (const f of [r.input, r.output]) for (const m of String(f ?? '').matchAll(CAPTURE_MARKER)) n += Number(m[1]);
+  return n;
 }
 /** Back-compat alias used by older callers/tests. */
 export const bufferCandidate = bufferEvent;
@@ -217,7 +229,8 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     }
     const purpose = await db.getSessionPurpose(sessionId);
     const rendered = renderTask(rows);
-    result.prompt_chars = rendered.text.length; result.omitted_chars = rendered.omitted;
+    const atCapture = captureOmitted(rows);
+    result.prompt_chars = rendered.text.length; result.omitted_chars = rendered.omitted + atCapture;
     const touched = [...new Set(rows.flatMap(r => modifiedFiles(r.tool_name, String(r.input ?? ''))))];
     const anyFailure = rows.some(r => !r.success);
     let status = 'saved', observationId: string | null = null, contentHash: string | null = null, lastError: string | null = null;
@@ -233,7 +246,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
           result.llm_calls++;
           const user = `Session purpose: ${purpose}\nProject: ${first.project_path}\nAgent: ${first.agent_id}\nTrigger: ${trigger}\n` +
             `Tool calls: ${rows.length}${touched.length ? `\nFiles modified (from edit tools): ${touched.slice(0, 30).join(', ')}` : ''}` +
-            `${rendered.omitted ? `\nNOTE: ${rendered.omitted} chars in the middle were omitted.` : ''}\n\n${rendered.text}`;
+            `${rendered.omitted || atCapture ? `\nNOTE: ${rendered.omitted + atCapture} chars were omitted (${atCapture} at capture, ${rendered.omitted} for the prompt budget); the source is incomplete.` : ''}\n\n${rendered.text}`;
           parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT, user, settings), !anyFailure);
         } catch (err: any) { lastError = err.message; }
       }
@@ -255,7 +268,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
           files_read: parsed?.files_read || [], files_modified: [...new Set([...(parsed?.files_modified || []), ...touched])].slice(0, 30),
           embedding: [], record_kind: fallback ? (anyFailure || touched.length ? 'outcome' : 'context') : parsed!.kind, source_kind: 'task',
         };
-        if (rendered.omitted && !fallback) obs.narrative += `\n(${rendered.omitted} chars of the task were omitted before synthesis.)`;
+        if ((rendered.omitted || atCapture) && !fallback) obs.narrative += `\n(${rendered.omitted + atCapture} chars of the task were omitted before synthesis; source incomplete.)`;
         contentHash = summaryHash(obs.project_path, obs, String(rows[rows.length - 1].created_at || '').slice(0, 10));
         const dup = db.sqlGet(`SELECT observation_id FROM observation_content_hashes WHERE project_path=? AND sha256=?`, [obs.project_path, contentHash]);
         if (dup) {
