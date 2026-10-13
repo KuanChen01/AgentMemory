@@ -421,7 +421,7 @@ export function reviewItemHash(row: any): string {
 }
 
 /** Bump whenever ensureTaskTables() adds a table, index or column (round 9: dedup is transactional, claims unused). */
-const TASK_SCHEMA_REVISION = 9;
+const TASK_SCHEMA_REVISION = 10;
 
 export class DatabaseManager {
   private dbPath: string;
@@ -769,28 +769,38 @@ export class DatabaseManager {
    * carries this (project, content hash), link + flag `obs` as its duplicate; otherwise insert the observation and its
    * hash together. Commit or roll back together, so a duplicate can only ever point to a real observation.
    */
-  public async saveObservationDeduped(obs: Observation, sha256: string, flag: { id: string; taskId: string }):
+  public async saveObservationDeduped(obs: Observation, hashes: { v2: string; v1: string }, flag: { id: string; taskId: string }):
       Promise<{ duplicateOf: string | null }> {
     if (!this.db) throw new Error('Database not initialized');
     this.validateObservation(obs);
     return this.write(() => {
+      // Exact (v2) match: link and flag as a duplicate.
       const owner = this.db.get(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id = h.observation_id
-        WHERE h.project_path=? AND h.sha256=? AND h.observation_id<>? ORDER BY h.rowid LIMIT 1`, [obs.project_path, sha256, obs.id]);
+        WHERE h.project_path=? AND h.sha256=? AND h.hash_version=2 AND h.observation_id<>? ORDER BY h.rowid LIMIT 1`,
+        [obs.project_path, hashes.v2, obs.id]);
       if (owner) {
-        this.db.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms)
-          VALUES (?,?,?,?,'needs_confirmation',?)`, [flag.id, flag.taskId, owner.observation_id, sha256, Date.now()]);
+        this.db.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms,reason)
+          VALUES (?,?,?,?,'needs_confirmation',?,'exact content match')`, [flag.id, flag.taskId, owner.observation_id, hashes.v2, Date.now()]);
         return { duplicateOf: owner.observation_id as string };
       }
       if (!this.db.get(`SELECT 1 AS x FROM observations WHERE id=?`, [obs.id])) this.insertObservationRows(obs);
-      this.db.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [obs.id, obs.project_path, sha256]);
+      this.db.run(`INSERT OR IGNORE INTO observation_content_hashes (observation_id, project_path, sha256, hash_version) VALUES (?,?,?,2)`,
+        [obs.id, obs.project_path, hashes.v2]);
+      // A match only under the legacy case-insensitive v1 hash may be a different result: keep the new observation
+      // and flag the pair for a human. Old rows are never rewritten.
+      const legacy = this.db.get(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id = h.observation_id
+        WHERE h.project_path=? AND h.sha256=? AND h.hash_version=1 AND h.observation_id<>? ORDER BY h.rowid LIMIT 1`,
+        [obs.project_path, hashes.v1, obs.id]);
+      if (legacy) this.db.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms,reason)
+        VALUES (?,?,?,?,'needs_confirmation',?,'legacy case-insensitive match')`, [`v1-${flag.id}`, flag.taskId, legacy.observation_id, hashes.v1, Date.now()]);
       return { duplicateOf: null };
     });
   }
 
   /** Crash recovery: record the hash of an observation that exists (no-op otherwise). */
   public async ensureContentHash(observationId: string, projectPath: string, sha256: string): Promise<void> {
-    await this.write(() => this.db.run(`INSERT OR IGNORE INTO observation_content_hashes (observation_id, project_path, sha256)
-      SELECT id, ?, ? FROM observations WHERE id=?`, [projectPath, sha256, observationId]));
+    await this.write(() => this.db.run(`INSERT OR IGNORE INTO observation_content_hashes (observation_id, project_path, sha256, hash_version)
+      SELECT id, ?, ?, 2 FROM observations WHERE id=?`, [projectPath, sha256, observationId]));
   }
 
   public async getSessionPurpose(id: string): Promise<string> {
@@ -2020,6 +2030,10 @@ export class DatabaseManager {
       this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
         observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_observation_content_hash ON observation_content_hashes(project_path, sha256)`);
+      // Revision 10 (additive): hash version (existing rows are v1, case-insensitive) and a flag reason.
+      if (!this.columnsOf('observation_content_hashes').has('hash_version'))
+        this.db.run(`ALTER TABLE observation_content_hashes ADD COLUMN hash_version INTEGER NOT NULL DEFAULT 1`);
+      if (!this.columnsOf('duplicate_flags').has('reason')) this.db.run(`ALTER TABLE duplicate_flags ADD COLUMN reason TEXT`);
       // content_hash_claims (f2afea2 only) is no longer used; an existing table is left in place untouched.
       this.db.run(`CREATE TABLE IF NOT EXISTS review_reads (
         reader TEXT NOT NULL, item_id TEXT NOT NULL, sha256 TEXT NOT NULL, run_id TEXT,
@@ -2044,7 +2058,9 @@ export class DatabaseManager {
   private taskTablesNeedMigration(): boolean {
     const evidence = this.columnsOf('tool_evidence');
     const results = this.columnsOf('task_results');
-    return (evidence.size > 0 && !evidence.has('task_id')) || (results.size > 0 && !results.has('evidence_count'));
+    const hashes = this.columnsOf('observation_content_hashes'); const flags = this.columnsOf('duplicate_flags');
+    return (evidence.size > 0 && !evidence.has('task_id')) || (results.size > 0 && !results.has('evidence_count'))
+      || (hashes.size > 0 && !hashes.has('hash_version')) || (flags.size > 0 && !flags.has('reason'));
   }
 
   /**

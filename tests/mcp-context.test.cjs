@@ -14,9 +14,8 @@ function makeDbPath() {
   return path.join(os.tmpdir(), `agentmemory-mcp-context-test-${randomUUID()}.db`);
 }
 
-function makePort() {
-  return 45000 + Math.floor(Math.random() * 1000);
-}
+// A fresh free ephemeral port (random fixed ranges collided with workers still shutting down).
+const makePort = () => require('./helpers/task-worker.cjs').freePort();
 
 async function withDatabase(run) {
   const previous = process.env.AGENTMEM_DB_PATH;
@@ -322,7 +321,7 @@ async function stopWorker(child, port) {
 
 test('MCP get_project_context renders the same curated structured context as /context', { skip: skipDrive }, async () => {
   await withDatabase(async (db, dbPath) => {
-    const port = makePort();
+    const port = await makePort();
     const projectPath = 'E:/Repo/Antigravity';
     await seedProjectContext(db, projectPath);
     const worker = await startWorker(dbPath, port);

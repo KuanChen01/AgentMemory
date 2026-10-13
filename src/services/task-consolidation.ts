@@ -5,7 +5,7 @@ import { DatabaseManager, Observation } from './db';
 import { boundedEnvInteger } from './llm-budget';
 import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
-import { modifiedFiles, summaryHash } from './event-classifier';
+import { modifiedFiles, summaryHash, summaryHashV2 } from './event-classifier';
 import { getEmbedding } from './embedding';
 import { runAutomaticPostTaskReview } from './post-task-review';
 
@@ -265,7 +265,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
       // Crash recovery: the observation was saved but the run stopped before finishing; restore its hash claim
       // so later identical results still deduplicate.
       observationId = existing.id; lastObservation = existing;
-      contentHash = summaryHash(existing.project_path, existing, hashDay);
+      contentHash = summaryHashV2(existing.project_path, existing, hashDay);
       await db.ensureContentHash(existing.id, existing.project_path, contentHash);
     }
     else if (reused?.status === 'duplicate') {
@@ -304,12 +304,12 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
           embedding: [], record_kind: fallback ? (anyFailure || touched.length ? 'outcome' : 'context') : parsed!.kind, source_kind: 'task',
         };
         if ((rendered.omitted || atCapture) && !fallback) obs.narrative += `\n(${rendered.omitted + atCapture} chars of the task were omitted before synthesis; source incomplete.)`;
-        contentHash = summaryHash(obs.project_path, obs, hashDay);
+        contentHash = summaryHashV2(obs.project_path, obs, hashDay);
         // One transaction: link to an EXISTING observation with this hash, or save observation + hash together.
         const known = db.sqlGet(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id=h.observation_id
-          WHERE h.project_path=? AND h.sha256=? AND h.observation_id<>?`, [obs.project_path, contentHash, obs.id]);
+          WHERE h.project_path=? AND h.sha256=? AND h.hash_version=2 AND h.observation_id<>?`, [obs.project_path, contentHash, obs.id]);
         if (!known) obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')} ${obs.concepts.join(' ')}`);
-        const saved = await db.saveObservationDeduped(obs, contentHash, { id: `dup-${taskId}`, taskId });
+        const saved = await db.saveObservationDeduped(obs, { v2: contentHash, v1: summaryHash(obs.project_path, obs, hashDay) }, { id: `dup-${taskId}`, taskId });
         if (saved.duplicateOf) {
           // Duplicate-looking content: link to the existing memory and flag it for a human; nothing is deleted.
           status = 'duplicate'; observationId = saved.duplicateOf; result.duplicates++;
@@ -417,12 +417,12 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
           title: parsed.title || 'Compacted legacy session', narrative: parsed.narrative, facts: parsed.facts, concepts: parsed.concepts,
           files_read: parsed.files_read, files_modified: parsed.files_modified, embedding: [], record_kind: parsed.kind,
           source_kind: 'legacy_compacted', created_at: seg[seg.length - 1].created_at };
-        const hash = summaryHash(obs.project_path, obs, String(obs.created_at || '').slice(0, 10));
+        const day = String(obs.created_at || '').slice(0, 10); const hash = summaryHashV2(obs.project_path, obs, day);
         const known = db.sqlGet(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id=h.observation_id
-          WHERE h.project_path=? AND h.sha256=? AND h.observation_id<>?`, [obs.project_path, hash, obs.id]);
+          WHERE h.project_path=? AND h.sha256=? AND h.hash_version=2 AND h.observation_id<>?`, [obs.project_path, hash, obs.id]);
         if (!known) obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')}`);
         // Same atomic path as task results: link + flag a look-alike, or save observation + hash together.
-        const saved = await db.saveObservationDeduped(obs, hash, { id: `dup-${resultId}`, taskId });
+        const saved = await db.saveObservationDeduped(obs, { v2: hash, v1: summaryHash(obs.project_path, obs, day) }, { id: `dup-${resultId}`, taskId });
         if (saved.duplicateOf) { observationId = saved.duplicateOf; status = 'duplicate'; }
         else { observationId = obs.id; status = 'saved'; summary.results_saved++; }
       }

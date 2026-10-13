@@ -20,9 +20,8 @@ function makeDbPath() {
   return path.join(os.tmpdir(), `agentmemory-worker-test-${randomUUID()}.db`);
 }
 
-function makePort() {
-  return 43000 + Math.floor(Math.random() * 1000);
-}
+// A fresh free ephemeral port (random fixed ranges collided with workers still shutting down).
+const makePort = () => require('./helpers/task-worker.cjs').freePort();
 
 async function seedDatabase(dbPath) {
   const previous = process.env.AGENTMEM_DB_PATH;
@@ -358,7 +357,7 @@ async function waitForPostTaskReviews(port, projectPath, expectedCount = 1) {
 
 test('test workers keep lifecycle files separate from an inherited user runtime', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const userRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmemory-user-runtime-'));
   const sentinels = { 'worker.pid': '12345\n', 'worker-status.json': '{"state":"running","pid":12345}\n' };
   for (const [name, content] of Object.entries(sentinels)) {
@@ -394,7 +393,7 @@ test('test workers keep lifecycle files separate from an inherited user runtime'
 for (const mode of ['missing credentials', 'LLM HTTP failure']) {
   test(`worker fallback retains uncertain successful sources and tool failures: ${mode}`, async () => {
     const dbPath = makeDbPath();
-    const port = makePort();
+    const port = await makePort();
     const mock = mode === 'LLM HTTP failure' ? await startMockReleaseServer({ error: 'unavailable' }, 503) : null;
     let child;
     try {
@@ -444,7 +443,7 @@ for (const mode of ['missing credentials', 'LLM HTTP failure']) {
 
 test('worker serves admin UI and admin APIs', { skip: skipDrive }, async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const latestVersion = bumpSemVer(currentPackageVersion, 'patch');
   await seedDatabase(dbPath);
   const mockRelease = await startMockReleaseServer({
@@ -590,7 +589,7 @@ test('worker serves admin UI and admin APIs', { skip: skipDrive }, async () => {
 
 test('worker admin daily digest scheduler config can be saved and restarts runtime', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const child = await startWorkerWithEnv(dbPath, port, {
     AGENTMEM_DAILY_DIGEST_DISABLED: 'false',
   });
@@ -661,7 +660,7 @@ test('worker admin daily digest scheduler config can be saved and restarts runti
 
 test('worker normalizes admin release-check network errors without breaking the UI surface', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   await seedDatabase(dbPath);
   const child = await startWorkerWithEnv(dbPath, port, {
     AGENTMEM_LATEST_RELEASE_API_URL: 'http://127.0.0.1:9/releases/latest',
@@ -684,7 +683,7 @@ test('worker normalizes admin release-check network errors without breaking the 
 
 test('worker admin LLM settings save model and test local connection', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const envPath = path.join(os.tmpdir(), `agentmemory-worker-llm-${randomUUID()}.env`);
   fs.writeFileSync(envPath, [
     'AGENTMEM_LLM_API_KEY=secret-token-1234',
@@ -781,7 +780,7 @@ test('worker admin LLM settings save model and test local connection', async () 
 
 test('worker admin daily digest APIs expose status and manual run', { skip: skipDrive }, async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const envPath = path.join(os.tmpdir(), `agentmemory-worker-digest-${randomUUID()}.env`);
   const mockLlm = await startMockDigestLlmServer();
   fs.writeFileSync(envPath, [
@@ -863,7 +862,7 @@ test('worker admin daily digest APIs expose status and manual run', { skip: skip
 
 test('worker admin exposes policy-driven memory query and procedural skill lifecycle APIs', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   await seedDatabase(dbPath);
   const previousDbPath = process.env.AGENTMEM_DB_PATH;
   process.env.AGENTMEM_DB_PATH = dbPath;
@@ -1004,7 +1003,7 @@ test('worker admin exposes policy-driven memory query and procedural skill lifec
 
 test('worker tool ingestion creates automatic post-task reviews visible in admin', { skip: skipDrive }, async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const envPath = path.join(os.tmpdir(), `agentmemory-worker-post-task-${randomUUID()}.env`);
   await seedDatabase(dbPath);
 
@@ -1131,7 +1130,7 @@ test('worker tool ingestion creates automatic post-task reviews visible in admin
 
 test('worker admin settings toggle read and write gates immediately', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   await seedDatabase(dbPath);
   const child = await startWorker(dbPath, port);
 

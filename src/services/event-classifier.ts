@@ -66,7 +66,19 @@ export function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-/** Stable content hash for dedup of summaries: content, file lists and local date. */
+/**
+ * Content hash v2 (current): keeps case and inner whitespace; only trims, unifies line endings and applies Unicode NFC.
+ * Different results such as `GET /Users` vs `GET /users` therefore never collide.
+ */
+export function summaryHashV2(projectPath: string, parts: { title?: string; narrative?: string; facts?: string[];
+  files_modified?: string[]; files_read?: string[] }, date = ''): string {
+  const norm = (s: string) => String(s || '').normalize('NFC').replace(/\r\n?/g, '\n').trim();
+  const list = (v?: string[]) => [...(v || [])].map(norm).sort();
+  return sha256(JSON.stringify(['v2', norm(projectPath), norm(parts.title || ''), norm(parts.narrative || ''),
+    list(parts.facts), list(parts.files_modified), list(parts.files_read), date]));
+}
+
+/** Content hash v1 (legacy, case-insensitive): kept only to recognise rows hashed by earlier revisions. */
 export function summaryHash(projectPath: string, parts: { title?: string; narrative?: string; facts?: string[];
   files_modified?: string[]; files_read?: string[] }, date = ''): string {
   const norm = (s: string) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();

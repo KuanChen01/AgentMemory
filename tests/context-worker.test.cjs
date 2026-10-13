@@ -12,9 +12,8 @@ function makeDbPath() {
   return path.join(os.tmpdir(), `agentmemory-context-test-${randomUUID()}.db`);
 }
 
-function makePort() {
-  return 44000 + Math.floor(Math.random() * 1000);
-}
+// A fresh free ephemeral port (random fixed ranges collided with workers still shutting down).
+const makePort = () => require('./helpers/task-worker.cjs').freePort();
 
 async function seedDatabase(dbPath, projectPath) {
   const previous = process.env.AGENTMEM_DB_PATH;
@@ -219,7 +218,7 @@ async function runHook(scriptName, projectPath, port) {
 
 test('worker context endpoint returns ProjectContextView and hooks render it', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const projectPath = path.join(os.tmpdir(), `agentmemory-project-${randomUUID()}`).replace(/\\/g, '/');
   fs.mkdirSync(projectPath, { recursive: true });
   await seedDatabase(dbPath, projectPath);
@@ -266,7 +265,7 @@ test('worker context endpoint returns ProjectContextView and hooks render it', a
 
 test('worker state endpoints obey runtime policy gates', async () => {
   const dbPath = makeDbPath();
-  const port = makePort();
+  const port = await makePort();
   const projectPath = 'E:/Repo/Policy';
   await seedDatabase(dbPath, projectPath);
   const child = await startWorker(dbPath, port);
