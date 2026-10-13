@@ -1,6 +1,12 @@
 import path from 'path';
 import { randomUUID } from 'crypto';
+import os from 'os';
+import dotenv from 'dotenv';
 import { beginRecallTurn, recallForTask, takePreparedRecall } from './auto-recall';
+import { fetchAgentMemoryWorker } from './worker-client';
+
+dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
+const PORT = process.env.AGENTMEM_PORT || 38888;
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -21,6 +27,10 @@ async function main() {
     const projectPath = path.resolve(String(payload.cwd || process.cwd())).replace(/\\/g, '/');
     const sessionId = String(payload.session_id || payload.sessionID || payload.sessionId || 'global');
     const sessionKey = `opencode:${sessionId}`;
+    // Must match the session id opencode-post-tool sends to /tools.
+    const toolSessionId = String(payload.session_id || payload.sessionID || payload.sessionId || 'global-session');
+    await fetchAgentMemoryWorker(PORT, '/tasks/boundary', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: toolSessionId }) }).catch(() => null);
     const turnId = String(payload.turn_id || payload.turnId || randomUUID());
     const context = await recallForTask(projectPath, prompt);
 

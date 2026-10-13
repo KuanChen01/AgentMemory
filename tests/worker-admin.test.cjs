@@ -109,6 +109,8 @@ async function startWorkerWithEnv(dbPath, port, extraEnv) {
       AGENTMEM_RUNTIME_DIR: `${dbPath}.runtime`,
       AGENTMEM_ENV_PATH: extraEnv.AGENTMEM_ENV_PATH || path.join(os.tmpdir(), `agentmemory-worker-env-${randomUUID()}.env`),
       AGENTMEM_PORT: String(port),
+      // These suites cover the legacy per-event path; task consolidation has its own suite.
+      AGENTMEM_TASK_CONSOLIDATION: 'false',
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -422,15 +424,16 @@ for (const mode of ['missing credentials', 'LLM HTTP failure']) {
         if (records.some((record) => record.title === 'Tool failure: Read')) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      assert.equal(records.length, 2);
+      // A successful read-only Read is routed to permanent evidence_only storage before
+      // any model call; the failure is still summarized and retained.
+      assert.equal(records.length, 1);
       const failed = records.find(record => record.title === 'Tool failure: Read');
-      const uncertain = records.find(record => record.title === 'Capture incomplete: Read');
-      assert.ok(failed); assert.ok(uncertain);
+      assert.ok(failed);
       assert.match(failed.narrative, /ENOENT: README.md not found/);
       assert.match(failed.narrative, mock ? /Summarization failed/ : /Missing LLM API credentials/);
-      assert.match(uncertain.narrative, /Documentation contents/);
-      assert.match(uncertain.narrative, /classification remains unknown/);
-      if (mock) assert.equal(mock.requests.length, 2);
+      const overview = await (await fetch(`http://127.0.0.1:${port}/admin/api/overview`)).json();
+      assert.equal(overview.tasks.evidence_rows, 1);
+      if (mock) assert.equal(mock.requests.length, 1);
     } finally {
       if (child) await stopWorker(child, port);
       if (mock) await mock.close();

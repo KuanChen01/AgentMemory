@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Database, retrySqliteBusy } from './sqlite';
 import { randomUUID } from 'crypto';
 import path from 'path';
@@ -25,7 +26,7 @@ export interface Observation {
   embedding: number[];
   created_at?: string;
   record_kind?: 'outcome' | 'context';
-  source_kind?: 'tool' | 'explicit';
+  source_kind?: 'tool' | 'explicit' | 'task' | 'legacy_compacted';
 }
 
 export interface Session {
@@ -449,6 +450,7 @@ export class DatabaseManager {
         this.db.run(`CREATE TABLE IF NOT EXISTS session_purposes (
           session_id TEXT PRIMARY KEY, purpose TEXT NOT NULL)`);
       });
+      await this.ensureTaskTables();
     } catch (err: any) {
       this.close();
       throw new Error(`Database initialization failed: ${err.message}`);
@@ -673,7 +675,7 @@ export class DatabaseManager {
   public async saveObservation(obs: Observation): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
     if (obs.record_kind && !['outcome', 'context'].includes(obs.record_kind)) throw new Error('Invalid work-memory kind');
-    if (obs.source_kind && !['tool', 'explicit'].includes(obs.source_kind)) throw new Error('Invalid work-memory source');
+    if (obs.source_kind && !['tool', 'explicit', 'task', 'legacy_compacted'].includes(obs.source_kind)) throw new Error('Invalid work-memory source');
 
     return this.write(() => {
       const factsStr = JSON.stringify(obs.facts);
@@ -738,7 +740,7 @@ export class DatabaseManager {
     return this.db.get('SELECT purpose FROM session_purposes WHERE session_id=?', [id])?.purpose || 'work';
   }
 
-  public async getWorkOverview(since: string, until: string, cursor?: string) {
+  public async getWorkOverview(since: string, until: string, cursor?: string, reader?: string) {
     if (!this.db) throw new Error('Database not initialized');
     const start = new Date(since), end = new Date(until);
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end)
@@ -798,9 +800,16 @@ export class DatabaseManager {
       const item = { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
         created_at: row.created_at, kind: row.record_kind || 'legacy', source: row.source_kind || 'legacy',
         title: row.title, narrative: row.narrative, facts: JSON.parse(row.facts), concepts: JSON.parse(row.concepts),
-        files_modified: JSON.parse(row.files_modified), files_read: JSON.parse(row.files_read) };
+        files_modified: JSON.parse(row.files_modified), files_read: JSON.parse(row.files_read) } as any;
+      const itemSha = createHash('sha256').update(JSON.stringify(item), 'utf8').digest('hex');
+      if (reader) {
+        const seen = this.db.get('SELECT sha256 FROM review_reads WHERE reader=? AND item_id=?', [reader, row.id]);
+        // Unchanged items were already verified by this reader: never resend their text.
+        if (seen?.sha256 === itemSha) return { id: row.id, kind: item.kind, sha256: itemSha, unchanged: true };
+      }
+      item.sha256 = itemSha;
       return Buffer.byteLength(JSON.stringify(item), 'utf8') <= (item.kind === 'legacy' ? 2048 : 4096) ? item : {
-        id: row.id, kind: item.kind, detail_required: true,
+        id: row.id, kind: item.kind, detail_required: true, sha256: itemSha,
         reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
     };
     if (!more) {
@@ -1888,6 +1897,64 @@ export class DatabaseManager {
       .filter((r) => r.hybrid_score > 0.01 || ftsRows.length === 0)
       .sort((a, b) => b.hybrid_score - a.hybrid_score)
       .slice(0, limit);
+  }
+
+  // Additive-only tables for rule routing, task consolidation and review reads.
+  // Nothing here deletes or rewrites existing rows; there is no TTL cleanup.
+  private async ensureTaskTables(): Promise<void> {
+    const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
+      'review_reads', 'review_runs', 'legacy_compaction_links'];
+    const have = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wanted.map(() => '?').join(',')})`, wanted);
+    if (have.length === wanted.length) return;
+    await this.write(() => {
+      this.db.run(`CREATE TABLE IF NOT EXISTS tool_evidence (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL, success INTEGER NOT NULL, route_reason TEXT NOT NULL,
+        input_head TEXT NOT NULL, output_head TEXT NOT NULL, input_bytes INTEGER NOT NULL, output_bytes INTEGER NOT NULL,
+        source_sha256 TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_tool_evidence_session ON tool_evidence(session_id, created_at)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_event_buffer (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL, success INTEGER NOT NULL, input TEXT NOT NULL, output TEXT NOT NULL,
+        incomplete INTEGER NOT NULL DEFAULT 0, task_result_id TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, received_ms INTEGER NOT NULL)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_event_buffer_open ON task_event_buffer(session_id, task_result_id, received_ms)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_results (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, project_path TEXT NOT NULL,
+        agent_id TEXT NOT NULL, segment_index INTEGER NOT NULL, segment_count INTEGER NOT NULL,
+        event_count INTEGER NOT NULL, source_ids TEXT NOT NULL, trigger TEXT NOT NULL, status TEXT NOT NULL,
+        observation_id TEXT, content_sha256 TEXT, llm_calls INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+        source_kind TEXT NOT NULL DEFAULT 'task', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_results_task ON task_results(task_id, segment_index)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
+        observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_observation_content_hash ON observation_content_hashes(project_path, sha256)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS review_reads (
+        reader TEXT NOT NULL, item_id TEXT NOT NULL, sha256 TEXT NOT NULL, run_id TEXT,
+        read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(reader, item_id))`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS review_runs (
+        run_id TEXT PRIMARY KEY, reader TEXT NOT NULL, since TEXT NOT NULL, until TEXT NOT NULL,
+        cursor TEXT, status TEXT NOT NULL, metrics_json TEXT,
+        started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_review_runs_interval ON review_runs(reader, since, until, status)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS legacy_compaction_links (
+        legacy_observation_id TEXT PRIMARY KEY, task_result_id TEXT NOT NULL)`);
+    });
+  }
+
+  /** Read-only SQL access for additive task/review stores. */
+  public sqlAll(sql: string, values: any[] = []): any[] {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.db.all(sql, values);
+  }
+  public sqlGet(sql: string, values: any[] = []): any {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.db.get(sql, values);
+  }
+  /** Serialized write transaction for additive task/review stores. */
+  public async sqlWrite<T>(operation: (db: { run: (sql: string, values?: any[]) => any; get: (sql: string, values?: any[]) => any; all: (sql: string, values?: any[]) => any[] }) => T): Promise<T> {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.write(() => operation(this.db));
   }
 
   public close(): void {

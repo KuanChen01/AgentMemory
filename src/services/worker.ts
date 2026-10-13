@@ -51,6 +51,10 @@ import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger, llmBudgetOptions, recordLlmUsage } from './llm-budget';
 import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
+import { classifyToolEvent } from './event-classifier';
+import {
+  bufferCandidate, consolidateSession, openSessionsIdleSince, recoverInterruptedClaims, saveToolEvidence, taskIdleMs, TaskTrigger,
+} from './task-consolidation';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -87,6 +91,32 @@ interface QueuedToolLog {
 
 const logQueue: QueuedToolLog[] = [];
 let isProcessingQueue = false;
+// Task-level consolidation is the default; AGENTMEM_TASK_CONSOLIDATION=false keeps the
+// legacy per-event path (still behind the rule router) for compatibility testing only.
+const taskConsolidationEnabled = () => process.env.AGENTMEM_TASK_CONSOLIDATION !== 'false';
+let activeConsolidations = 0;
+const consolidationChain = new Map<string, Promise<unknown>>();
+function scheduleConsolidation(sessionId: string, trigger: TaskTrigger): Promise<unknown> {
+  activeConsolidations++;
+  const previous = consolidationChain.get(sessionId) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => consolidateSession(dbManager, sessionId, trigger))
+    .then(result => {
+      if (result.task_id) console.log(`[Task] Consolidated session ${sessionId} (${trigger}): ${result.segments} segment(s), ${result.llm_calls} LLM call(s)`);
+      return result;
+    })
+    .catch(err => console.error(`[Task] Consolidation failed for ${sessionId}: ${err.message}`))
+    .finally(() => { activeConsolidations--; if (consolidationChain.get(sessionId) === next) consolidationChain.delete(sessionId); });
+  consolidationChain.set(sessionId, next);
+  return next;
+}
+function sweepIdleTasks() {
+  if (!taskConsolidationEnabled()) return;
+  try {
+    for (const id of openSessionsIdleSince(dbManager, Date.now() - taskIdleMs())) {
+      if (!consolidationChain.has(id)) void scheduleConsolidation(id, 'idle_timeout');
+    }
+  } catch (err: any) { console.error(`[Task] Idle sweep failed: ${err.message}`); }
+}
 const ADMIN_HTML = renderAdminPageHtml(5000);
 
 function writeWorkerRuntimeStatus(state: 'running' | 'stopped', exitCode?: number) {
@@ -328,6 +358,10 @@ async function startServer() {
   await dbManager.initialize();
   console.log('AgentMemory SQLite database initialized.');
   applyDailyDigestSchedulerConfig(await dbManager.getDailyDigestSchedulerConfig());
+  const recovered = await recoverInterruptedClaims(dbManager);
+  if (recovered) console.log(`[Task] Restored ${recovered} interrupted buffered event(s)`);
+  const sweepMs = Math.max(1000, Math.min(60_000, Math.floor(taskIdleMs() / 4)));
+  setInterval(sweepIdleTasks, Number(process.env.AGENTMEM_TASK_SWEEP_MS) || sweepMs).unref();
 
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(PORT, () => {
@@ -360,7 +394,11 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
     res.json({
       policy,
       database: dbManager.getDatabaseDiagnostics(),
-      queue: { pending: logQueue.length, processing: isProcessingQueue },
+      queue: { pending: logQueue.length, processing: isProcessingQueue || activeConsolidations > 0,
+        consolidating: activeConsolidations,
+        open_task_events: dbManager.sqlGet('SELECT COUNT(*) AS n FROM task_event_buffer WHERE task_result_id IS NULL').n },
+      tasks: dbManager.sqlGet(`SELECT COUNT(DISTINCT task_id) AS tasks, COALESCE(SUM(llm_calls),0) AS llm_calls,
+        (SELECT COUNT(*) FROM tool_evidence) AS evidence_rows FROM task_results`),
       stats: {
         observations,
         sessions,
@@ -418,7 +456,7 @@ app.get('/admin/api/work-overview', adminOnlyGuard, async (req, res) => {
   try {
     if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
     res.json(await dbManager.getWorkOverview(String(req.query.since || ''), String(req.query.until || ''),
-      normalizeOptionalString(req.query.cursor)));
+      normalizeOptionalString(req.query.cursor), normalizeOptionalString(req.query.reader)));
   } catch (error: any) { res.status(400).json({ error: error.message }); }
 });
 
@@ -438,6 +476,56 @@ app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
       next_offset: stop < data.length ? stop : null,
       sha256: createHash('sha256').update(data).digest('hex') });
   } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// Review reads: a reader acknowledges the exact sha256 it verified, so unchanged
+// items are never sent to its model again. Changed content (new sha) is re-sent.
+app.post('/admin/api/review-reads', adminOnlyGuard, async (req, res) => {
+  try {
+    const { reader, run_id, items } = req.body || {};
+    if (typeof reader !== 'string' || !reader.trim() || !Array.isArray(items)) throw new Error('reader and items are required');
+    const valid = items.filter((i: any) => typeof i?.id === 'string' && /^[0-9a-f]{64}$/.test(String(i?.sha256)));
+    await dbManager.sqlWrite(sql => { for (const i of valid) sql.run(`INSERT INTO review_reads (reader,item_id,sha256,run_id)
+      VALUES (?,?,?,?) ON CONFLICT(reader,item_id) DO UPDATE SET sha256=excluded.sha256, run_id=excluded.run_id, read_at=CURRENT_TIMESTAMP`,
+      [reader, i.id, i.sha256, run_id || null]); });
+    res.json({ success: true, recorded: valid.length, rejected: items.length - valid.length });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// Resumable review runs keyed by reader + interval; the cursor is persisted per page.
+app.post('/admin/api/review-runs', adminOnlyGuard, async (req, res) => {
+  try {
+    const { reader, since, until } = req.body || {};
+    if (![reader, since, until].every(v => typeof v === 'string' && v.trim())) throw new Error('reader, since and until are required');
+    const existing = dbManager.sqlGet(`SELECT * FROM review_runs WHERE reader=? AND since=? AND until=? AND status IN ('running','incomplete')
+      ORDER BY started_at DESC LIMIT 1`, [reader, since, until]);
+    if (existing) return res.json({ resumed: true, run: existing });
+    const run_id = uuidv4();
+    await dbManager.sqlWrite(sql => sql.run(`INSERT INTO review_runs (run_id,reader,since,until,status) VALUES (?,?,?,?, 'running')`,
+      [run_id, reader, since, until]));
+    res.json({ resumed: false, run: dbManager.sqlGet('SELECT * FROM review_runs WHERE run_id=?', [run_id]) });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+app.post('/admin/api/review-runs/progress', adminOnlyGuard, async (req, res) => {
+  try {
+    const { run_id, cursor, status, metrics } = req.body || {};
+    if (!['running', 'incomplete', 'complete'].includes(status)) throw new Error('status must be running, incomplete or complete');
+    const changed = await dbManager.sqlWrite(sql => sql.run(`UPDATE review_runs SET cursor=?, status=?, metrics_json=?, updated_at=CURRENT_TIMESTAMP
+      WHERE run_id=?`, [cursor ?? null, status, metrics ? JSON.stringify(metrics) : null, run_id]).changes);
+    if (!changed) return res.status(404).json({ error: 'Unknown review run' });
+    res.json({ success: true });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// Manually close open tasks (all sessions or one); used by tests and the admin UI.
+app.post('/admin/api/tasks/flush', adminOnlyGuard, async (req, res) => {
+  try {
+    const only = normalizeOptionalString(req.body?.session_id);
+    const ids = only ? [only] : openSessionsIdleSince(dbManager, Number.MAX_SAFE_INTEGER);
+    const results = await Promise.all(ids.map(id => scheduleConsolidation(id, 'manual')));
+    res.json({ success: true, sessions: ids.length, results });
+  } catch (error: any) { res.status(500).json({ error: error.message }); }
 });
 
 app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
@@ -1046,9 +1134,18 @@ app.post('/tools', async (req, res) => {
       timestamp: Date.now()
     };
 
-    const skipReason = skipRawToolLog(logEntry);
-    if (skipReason) {
-      return res.json({ success: true, skipped: true, reason: skipReason, queueLength: logQueue.length });
+    // Rule routing happens before any model call or embedding.
+    const decision = classifyToolEvent(logEntry, await dbManager.getSessionPurpose(session_id));
+    if (decision.route === 'drop') {
+      return res.json({ success: true, skipped: true, route: 'drop', reason: decision.reason, queueLength: logQueue.length });
+    }
+    if (decision.route === 'evidence_only') {
+      await saveToolEvidence(dbManager, logEntry, decision);
+      return res.json({ success: true, route: 'evidence_only', reason: decision.reason, queueLength: logQueue.length });
+    }
+    if (taskConsolidationEnabled()) {
+      await bufferCandidate(dbManager, logEntry);
+      return res.json({ success: true, route: 'candidate', buffered: true, queueLength: logQueue.length });
     }
 
     logQueue.push(logEntry);
@@ -1060,6 +1157,15 @@ app.post('/tools', async (req, res) => {
     console.error('Error ingesting tool log:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Unable to ingest tool log.' });
   }
+});
+
+// 3b. Task boundary: the next user prompt closes the previous task of this session.
+app.post('/tasks/boundary', async (req, res) => {
+  const sessionId = normalizeOptionalString(req.body?.session_id);
+  if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
+  if (!(await isWriteEnabled())) return sendWriteDisabled(res);
+  if (taskConsolidationEnabled()) void scheduleConsolidation(sessionId, 'user_prompt');
+  res.json({ success: true, scheduled: taskConsolidationEnabled() });
 });
 
 // 4. Force Session Summary on Close
@@ -1079,6 +1185,7 @@ app.post('/sessions/close', async (req, res) => {
       status: 'completed'
     });
     console.log(`[Session] Closed session ${id}`);
+    if (taskConsolidationEnabled()) void scheduleConsolidation(String(id), 'session_close');
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

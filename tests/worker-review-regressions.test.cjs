@@ -30,7 +30,8 @@ async function fixture(run) {
   const start = async (overrides = {}) => {
     const env = { ...process.env, AGENTMEM_PORT: String(workerPort), AGENTMEM_ENV_PATH: envPath,
       AGENTMEM_RUNTIME_DIR: root, AGENTMEM_DB_PATH: path.join(root, 'test.db'),
-      AGENTMEM_DAILY_DIGEST_DISABLED: 'true', EMBEDDING_API_URL: '', AGENTMEM_HOOK_AUTOSTART: 'false' };
+      AGENTMEM_DAILY_DIGEST_DISABLED: 'true', EMBEDDING_API_URL: '', AGENTMEM_HOOK_AUTOSTART: 'false',
+      AGENTMEM_TASK_CONSOLIDATION: 'false' };
     for (const key of Object.keys(env)) if (key.startsWith('AGENTMEM_LLM_') || key.startsWith('DEEPSEEK_')) delete env[key];
     Object.assign(env, overrides);
     worker = spawn(process.execPath, ['dist/services/worker.js'], {
@@ -129,11 +130,16 @@ test('value filtering, review purpose and work APIs use isolated mock evidence o
     const base={session_id:'daily-review-fixture',project_path:'E:/New/Unregistered',agent_id:'grok',tool_name:'exec_command',success:true};
     await post('/sessions',{id:base.session_id,project_path:base.project_path,agent_id:'grok',purpose:'daily_review'});
     const before=(await (await get('/admin/api/overview')).json()).stats.observations;
+    // daily_review sessions are hard-skipped before any model call.
+    const dropped=await (await post('/tools',{...base,input:'read existing guide',output:'Known rules'})).json();
+    assert.equal(dropped.route,'drop'); assert.equal(requests.length,0);
+    assert.equal((await (await get('/admin/api/overview')).json()).stats.observations,before);
+    base.session_id='work-fixture';
     setMemory({record_kind:'skip',title:'Read existing guide',narrative:'Copied known rules',facts:['Known facts'],files_modified:[]});
-    await post('/tools',{...base,input:'read existing guide',output:'Known rules'});
+    await post('/tools',{...base,input:'summarize existing guide',output:'Known rules'});
     await settled(1);
     assert.equal((await (await get('/admin/api/overview')).json()).stats.observations,before);
-    assert.match(requests[0].body.messages[1].content,/Session purpose: daily_review/);
+    assert.match(requests[0].body.messages[1].content,/Session purpose: work/);
     assert.match(requests[0].body.messages[0].content,/record_kind/);
     setMemory({record_kind:'outcome',title:'Read deployed limit',narrative:'部署写明并发上限八个，第九个连接永久挂起',facts:[],files_modified:[]});
     await post('/tools',{...base,input:'inspect deployment',output:'concurrency eight; ninth hangs'});
