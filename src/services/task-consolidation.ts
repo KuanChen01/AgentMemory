@@ -210,6 +210,13 @@ export function skipRefusal(rendered: { truncated: boolean; omitted: number; cha
   return null;
 }
 
+/** files_modified of a legacy observation row (JSON text or array); unparsable text counts as one entry. */
+function legacyFilesModified(v: unknown): string[] {
+  if (Array.isArray(v)) return v.filter(Boolean).map(String);
+  const t = String(v ?? '').trim(); if (!t || t === '[]') return [];
+  try { const a = JSON.parse(t); return Array.isArray(a) ? a.filter(Boolean).map(String) : [t]; } catch { return [t]; }
+}
+
 async function markTaskComplete(db: DatabaseManager, taskId: string) {
   await db.sqlWrite(sql => sql.run(`INSERT INTO task_completions (task_id, completed_ms) VALUES (?, ?)
     ON CONFLICT(task_id) DO UPDATE SET completed_ms = excluded.completed_ms WHERE task_completions.completed_ms = 0`, [taskId, Date.now()]));
@@ -404,7 +411,9 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
         parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
           `Legacy per-step records of one session\nProject: ${first.project_path}\n` +
           `${rendered.omitted ? `NOTE: ${rendered.omitted} chars were omitted for the prompt budget; the source is incomplete.\n` : ''}\n${rendered.text}`, settings), true);
-        const refusal = parsed.skip ? skipRefusal(rendered) : null;
+        // Same shared policy as task results: legacy rows that recorded modified files may not end as 'skipped'.
+        const legacyTouched = seg.reduce((n: number, r: any) => n + legacyFilesModified(r.files_modified).length, 0);
+        const refusal = parsed.skip ? skipRefusal(rendered, false, legacyTouched) : null;
         if (refusal) {
           // An abbreviated source is never dropped as "skipped": keep it pending with the reason; legacy rows stay unlinked.
           status = 'pending';
