@@ -196,22 +196,6 @@ async function markTaskComplete(db: DatabaseManager, taskId: string) {
     ON CONFLICT(task_id) DO UPDATE SET completed_ms = excluded.completed_ms WHERE task_completions.completed_ms = 0`, [taskId, Date.now()]));
 }
 
-/**
- * Atomic dedup point: claim (project, content hash) for `observationId` and return the owner. The first claim wins;
- * a concurrent or later identical result sees another owner and is linked + flagged instead of saved. Re-claiming by
- * the same id (crash recovery) is idempotent and restores its observation_content_hashes row.
- */
-async function claimContentHash(db: DatabaseManager, observationId: string, projectPath: string, sha256: string): Promise<string> {
-  return db.sqlWrite(sql => {
-    const older = sql.get(`SELECT observation_id FROM observation_content_hashes WHERE project_path=? AND sha256=? ORDER BY rowid LIMIT 1`, [projectPath, sha256]);
-    sql.run(`INSERT OR IGNORE INTO content_hash_claims (project_path, sha256, observation_id) VALUES (?,?,?)`,
-      [projectPath, sha256, older?.observation_id || observationId]);
-    const owner = sql.get(`SELECT observation_id FROM content_hash_claims WHERE project_path=? AND sha256=?`, [projectPath, sha256]).observation_id;
-    if (owner === observationId) sql.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [observationId, projectPath, sha256]);
-    return owner;
-  });
-}
-
 /** Rows of a task: buffered calls plus legacy evidence rows frozen by earlier revisions (read-only). */
 function taskRows(db: DatabaseManager, taskId: string): any[] {
   const buffered = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,output,incomplete,received_ms,created_at
@@ -262,7 +246,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
       // so later identical results still deduplicate.
       observationId = existing.id; lastObservation = existing;
       contentHash = summaryHash(existing.project_path, existing, hashDay);
-      await claimContentHash(db, existing.id, existing.project_path, contentHash);
+      await db.ensureContentHash(existing.id, existing.project_path, contentHash);
     }
     else if (purpose === 'daily_review') { status = 'skipped'; lastError = 'daily_review session'; result.skipped++; }
     else {
@@ -297,17 +281,15 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
         };
         if ((rendered.omitted || atCapture) && !fallback) obs.narrative += `\n(${rendered.omitted + atCapture} chars of the task were omitted before synthesis; source incomplete.)`;
         contentHash = summaryHash(obs.project_path, obs, hashDay);
-        // Claim before saving: of concurrent identical results exactly one owns the hash and is saved.
-        const owner = await claimContentHash(db, obs.id, obs.project_path, contentHash);
-        const dup = owner !== obs.id ? { observation_id: owner } : null;
-        if (dup) {
+        // One transaction: link to an EXISTING observation with this hash, or save observation + hash together.
+        const known = db.sqlGet(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id=h.observation_id
+          WHERE h.project_path=? AND h.sha256=? AND h.observation_id<>?`, [obs.project_path, contentHash, obs.id]);
+        if (!known) obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')} ${obs.concepts.join(' ')}`);
+        const saved = await db.saveObservationDeduped(obs, contentHash, { id: `dup-${taskId}`, taskId });
+        if (saved.duplicateOf) {
           // Duplicate-looking content: link to the existing memory and flag it for a human; nothing is deleted.
-          status = 'duplicate'; observationId = dup.observation_id; result.duplicates++;
-          await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms)
-            VALUES (?,?,?,?,'needs_confirmation',?)`, [`dup-${taskId}`, taskId, dup.observation_id, contentHash, Date.now()]));
+          status = 'duplicate'; observationId = saved.duplicateOf; result.duplicates++;
         } else {
-          obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')} ${obs.concepts.join(' ')}`);
-          await db.saveObservation(obs);
           observationId = obs.id; lastObservation = obs;
           if (fallback) { status = 'fallback'; result.failed++; }
         }

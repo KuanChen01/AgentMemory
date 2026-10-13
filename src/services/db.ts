@@ -420,6 +420,9 @@ export function reviewItemHash(row: any): string {
   return createHash('sha256').update(JSON.stringify(reviewItem(row)), 'utf8').digest('hex');
 }
 
+/** Bump whenever ensureTaskTables() adds a table, index or column (round 9: dedup is transactional, claims unused). */
+const TASK_SCHEMA_REVISION = 9;
+
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
@@ -692,10 +695,18 @@ export class DatabaseManager {
   // Save observation
   public async saveObservation(obs: Observation): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
+    this.validateObservation(obs);
+
+    return this.write(() => this.insertObservationRows(obs));
+  }
+
+  private validateObservation(obs: Observation): void {
     if (obs.record_kind && !['outcome', 'context'].includes(obs.record_kind)) throw new Error('Invalid work-memory kind');
     if (obs.source_kind && !['tool', 'explicit', 'task', 'legacy_compacted'].includes(obs.source_kind)) throw new Error('Invalid work-memory source');
+  }
 
-    return this.write(() => {
+  /** Synchronous: callers run it inside a write transaction. */
+  private insertObservationRows(obs: Observation): void {
       const factsStr = JSON.stringify(obs.facts);
       const conceptsStr = JSON.stringify(obs.concepts);
       const filesReadStr = JSON.stringify(obs.files_read);
@@ -751,7 +762,35 @@ export class DatabaseManager {
       );
       if (obs.record_kind) this.db.run(`INSERT INTO observation_work_metadata VALUES (?, ?, ?)`,
         [obs.id, obs.record_kind, obs.source_kind || 'explicit']);
+  }
+
+  /**
+   * Atomic content dedup (one BEGIN IMMEDIATE transaction across connections): if an observation that EXISTS already
+   * carries this (project, content hash), link + flag `obs` as its duplicate; otherwise insert the observation and its
+   * hash together. Commit or roll back together, so a duplicate can only ever point to a real observation.
+   */
+  public async saveObservationDeduped(obs: Observation, sha256: string, flag: { id: string; taskId: string }):
+      Promise<{ duplicateOf: string | null }> {
+    if (!this.db) throw new Error('Database not initialized');
+    this.validateObservation(obs);
+    return this.write(() => {
+      const owner = this.db.get(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id = h.observation_id
+        WHERE h.project_path=? AND h.sha256=? AND h.observation_id<>? ORDER BY h.rowid LIMIT 1`, [obs.project_path, sha256, obs.id]);
+      if (owner) {
+        this.db.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms)
+          VALUES (?,?,?,?,'needs_confirmation',?)`, [flag.id, flag.taskId, owner.observation_id, sha256, Date.now()]);
+        return { duplicateOf: owner.observation_id as string };
+      }
+      if (!this.db.get(`SELECT 1 AS x FROM observations WHERE id=?`, [obs.id])) this.insertObservationRows(obs);
+      this.db.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [obs.id, obs.project_path, sha256]);
+      return { duplicateOf: null };
     });
+  }
+
+  /** Crash recovery: record the hash of an observation that exists (no-op otherwise). */
+  public async ensureContentHash(observationId: string, projectPath: string, sha256: string): Promise<void> {
+    await this.write(() => this.db.run(`INSERT OR IGNORE INTO observation_content_hashes (observation_id, project_path, sha256)
+      SELECT id, ?, ? FROM observations WHERE id=?`, [projectPath, sha256, observationId]));
   }
 
   public async getSessionPurpose(id: string): Promise<string> {
@@ -1931,8 +1970,15 @@ export class DatabaseManager {
   private async ensureTaskTables(): Promise<void> {
     const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
       'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'duplicate_flags'];
-    const have = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wanted.map(() => '?').join(',')})`, wanted);
-    if (have.length === wanted.length && !this.taskTablesNeedMigration()) return;
+    // Quick-skip only when the stored schema revision is current AND every table and index exists. Any change to the
+    // block below must bump TASK_SCHEMA_REVISION, so a database from an older revision always runs the (idempotent) upgrade.
+    const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open', 'idx_task_results_task',
+      'idx_observation_content_hash', 'idx_review_runs_interval'];
+    const have = this.db.all(`SELECT name FROM sqlite_master WHERE type IN ('table','index') AND name IN (${[...wanted, ...indexes].map(() => '?').join(',')})`,
+      [...wanted, ...indexes]);
+    const revision = this.columnsOf('task_schema_meta').size
+      ? Number(this.db.get(`SELECT value FROM task_schema_meta WHERE key='revision'`)?.value || 0) : 0;
+    if (revision === TASK_SCHEMA_REVISION && have.length === wanted.length + indexes.length && !this.taskTablesNeedMigration()) return;
     await this.write(() => {
       this.migrateTaskTablesFromV1();
       this.db.run(`CREATE TABLE IF NOT EXISTS tool_evidence (
@@ -1974,12 +2020,7 @@ export class DatabaseManager {
       this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
         observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_observation_content_hash ON observation_content_hashes(project_path, sha256)`);
-      // One owner per (project, content hash): the claim is the atomic dedup point for concurrent consolidations.
-      // Additive: existing hashes are copied in (first saved wins); nothing is removed.
-      this.db.run(`CREATE TABLE IF NOT EXISTS content_hash_claims (
-        project_path TEXT NOT NULL, sha256 TEXT NOT NULL, observation_id TEXT NOT NULL, PRIMARY KEY(project_path, sha256))`);
-      this.db.run(`INSERT OR IGNORE INTO content_hash_claims (project_path, sha256, observation_id)
-        SELECT project_path, sha256, observation_id FROM observation_content_hashes ORDER BY rowid`);
+      // content_hash_claims (f2afea2 only) is no longer used; an existing table is left in place untouched.
       this.db.run(`CREATE TABLE IF NOT EXISTS review_reads (
         reader TEXT NOT NULL, item_id TEXT NOT NULL, sha256 TEXT NOT NULL, run_id TEXT,
         read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(reader, item_id))`);
@@ -1990,6 +2031,9 @@ export class DatabaseManager {
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_review_runs_interval ON review_runs(reader, since, until, status)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS legacy_compaction_links (
         legacy_observation_id TEXT PRIMARY KEY, task_result_id TEXT NOT NULL)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+      this.db.run(`INSERT INTO task_schema_meta (key, value) VALUES ('revision', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+        [String(TASK_SCHEMA_REVISION)]);
     });
   }
 

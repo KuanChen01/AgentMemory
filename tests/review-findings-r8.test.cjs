@@ -26,13 +26,13 @@ const SAME = { record_kind: 'outcome', title: 'Tests pass after fix', narrative:
 test('C2 crash after saving the observation: retry restores its content hash, so later identical results dedup', async () => {
   await inProcess(async ({ db, stub, tc }) => {
     stub.setFixed(SAME);
-    const save = db.saveObservation.bind(db), write = db.sqlWrite.bind(db);
-    let saved = false, crashed = false;
-    db.saveObservation = async o => { const r = await save(o); saved = true; return r; };
-    db.sqlWrite = async op => { if (saved && !crashed) { crashed = true; throw new Error('injected crash after observation write'); } return write(op); };
+    // Crash after the observation (and its hash) were committed, before the task result is recorded (round 9: the
+    // observation write itself is atomic with its hash, so the injected fault is on the next write).
+    await db.sqlWrite(sql => { sql.run(`CREATE TABLE fault (on_ INTEGER)`); sql.run(`INSERT INTO fault VALUES (1)`);
+      sql.run(`CREATE TRIGGER fault_tr BEFORE INSERT ON task_results WHEN (SELECT on_ FROM fault)=1 BEGIN SELECT RAISE(ABORT, 'injected crash after observation write'); END`); });
     await buffer(tc, db, 'a1');
     await assert.rejects(tc.consolidateSession(db, 'a1', 'manual'), /injected crash/);
-    db.sqlWrite = write; db.saveObservation = save;
+    await db.sqlWrite(sql => sql.run(`UPDATE fault SET on_=0`));
     const taskId = db.sqlGet(`SELECT task_id FROM task_attempts LIMIT 1`).task_id;
     await tc.consolidateTask(db, taskId, 'retry');
     const id = `${taskId}-0`;
