@@ -147,10 +147,11 @@ export function renderTask(rows: any[], budget = taskCharBudget()): { text: stri
   let omitted = 0;
   // 1) No single call may dominate: keep its head and tail.
   const perCall = Math.max(1000, Math.floor(budget / 4));
-  const bounded = pieces.map(p => {
+  const cuts = pieces.map(() => 0);
+  const bounded = pieces.map((p, k) => {
     if (p.length <= perCall) return p;
     const head = Math.floor(perCall * 0.7), tail = perCall - head, cut = p.length - head - tail;
-    omitted += cut;
+    omitted += cut; cuts[k] = cut;
     return `${p.slice(0, head)}\n[... omitted ${cut} chars of this call ...]\n${p.slice(p.length - tail)}`;
   });
   // 2) Keep whole calls from the start (60%) and from the end (40%); one marker for the dropped middle.
@@ -161,8 +162,11 @@ export function renderTask(rows: any[], budget = taskCharBudget()): { text: stri
   while (i <= j && size(head) + bounded[i].length + 2 <= budget * 0.6) head.push(bounded[i++]);
   while (j >= i && size(tail) + bounded[j].length + 2 <= budget * 0.4) tail.unshift(bounded[j--]);
   const dropped = bounded.slice(i, j + 1);
-  const droppedChars = size(dropped);
-  omitted += droppedChars;
+  // Count SOURCE characters: a dropped call that was already cut adds only what stage 1 had not counted yet,
+  // and stage-1 marker text (not source) is never counted.
+  let droppedChars = 0;
+  for (let k = i; k <= j; k++) droppedChars += pieces[k].length + 2;
+  for (let k = i; k <= j; k++) omitted += pieces[k].length + 2 - cuts[k];
   const marker = dropped.length ? [`[... omitted ${droppedChars} chars: ${dropped.length} tool call(s) in the middle of this task ...]`] : [];
   return { text: [...head, ...marker, ...tail].join('\n\n'), truncated: true, omitted, chars };
 }
@@ -190,6 +194,22 @@ export function isTaskInFlight(taskId: string) { return inflight.has(taskId); }
 async function markTaskComplete(db: DatabaseManager, taskId: string) {
   await db.sqlWrite(sql => sql.run(`INSERT INTO task_completions (task_id, completed_ms) VALUES (?, ?)
     ON CONFLICT(task_id) DO UPDATE SET completed_ms = excluded.completed_ms WHERE task_completions.completed_ms = 0`, [taskId, Date.now()]));
+}
+
+/**
+ * Atomic dedup point: claim (project, content hash) for `observationId` and return the owner. The first claim wins;
+ * a concurrent or later identical result sees another owner and is linked + flagged instead of saved. Re-claiming by
+ * the same id (crash recovery) is idempotent and restores its observation_content_hashes row.
+ */
+async function claimContentHash(db: DatabaseManager, observationId: string, projectPath: string, sha256: string): Promise<string> {
+  return db.sqlWrite(sql => {
+    const older = sql.get(`SELECT observation_id FROM observation_content_hashes WHERE project_path=? AND sha256=? ORDER BY rowid LIMIT 1`, [projectPath, sha256]);
+    sql.run(`INSERT OR IGNORE INTO content_hash_claims (project_path, sha256, observation_id) VALUES (?,?,?)`,
+      [projectPath, sha256, older?.observation_id || observationId]);
+    const owner = sql.get(`SELECT observation_id FROM content_hash_claims WHERE project_path=? AND sha256=?`, [projectPath, sha256]).observation_id;
+    if (owner === observationId) sql.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [observationId, projectPath, sha256]);
+    return owner;
+  });
 }
 
 /** Rows of a task: buffered calls plus legacy evidence rows frozen by earlier revisions (read-only). */
@@ -236,7 +256,14 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     let status = 'saved', observationId: string | null = null, contentHash: string | null = null, lastError: string | null = null;
     let lastObservation: Observation | null = null; let parsed: ReturnType<typeof interpretWorkMemory> | null = null;
     const existing = (await db.getObservationsByIds([resultId]))[0];
-    if (existing) { observationId = existing.id; lastObservation = existing; }
+    const hashDay = String(rows[rows.length - 1].created_at || '').slice(0, 10);
+    if (existing) {
+      // Crash recovery: the observation was saved but the run stopped before finishing; restore its hash claim
+      // so later identical results still deduplicate.
+      observationId = existing.id; lastObservation = existing;
+      contentHash = summaryHash(existing.project_path, existing, hashDay);
+      await claimContentHash(db, existing.id, existing.project_path, contentHash);
+    }
     else if (purpose === 'daily_review') { status = 'skipped'; lastError = 'daily_review session'; result.skipped++; }
     else {
       const settings = resolveLlmSettings();
@@ -269,8 +296,10 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
           embedding: [], record_kind: fallback ? (anyFailure || touched.length ? 'outcome' : 'context') : parsed!.kind, source_kind: 'task',
         };
         if ((rendered.omitted || atCapture) && !fallback) obs.narrative += `\n(${rendered.omitted + atCapture} chars of the task were omitted before synthesis; source incomplete.)`;
-        contentHash = summaryHash(obs.project_path, obs, String(rows[rows.length - 1].created_at || '').slice(0, 10));
-        const dup = db.sqlGet(`SELECT observation_id FROM observation_content_hashes WHERE project_path=? AND sha256=?`, [obs.project_path, contentHash]);
+        contentHash = summaryHash(obs.project_path, obs, hashDay);
+        // Claim before saving: of concurrent identical results exactly one owns the hash and is saved.
+        const owner = await claimContentHash(db, obs.id, obs.project_path, contentHash);
+        const dup = owner !== obs.id ? { observation_id: owner } : null;
         if (dup) {
           // Duplicate-looking content: link to the existing memory and flag it for a human; nothing is deleted.
           status = 'duplicate'; observationId = dup.observation_id; result.duplicates++;
@@ -279,7 +308,6 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
         } else {
           obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')} ${obs.concepts.join(' ')}`);
           await db.saveObservation(obs);
-          await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO observation_content_hashes VALUES (?,?,?)`, [obs.id, obs.project_path, contentHash]));
           observationId = obs.id; lastObservation = obs;
           if (fallback) { status = 'fallback'; result.failed++; }
         }

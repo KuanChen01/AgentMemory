@@ -1974,6 +1974,12 @@ export class DatabaseManager {
       this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
         observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_observation_content_hash ON observation_content_hashes(project_path, sha256)`);
+      // One owner per (project, content hash): the claim is the atomic dedup point for concurrent consolidations.
+      // Additive: existing hashes are copied in (first saved wins); nothing is removed.
+      this.db.run(`CREATE TABLE IF NOT EXISTS content_hash_claims (
+        project_path TEXT NOT NULL, sha256 TEXT NOT NULL, observation_id TEXT NOT NULL, PRIMARY KEY(project_path, sha256))`);
+      this.db.run(`INSERT OR IGNORE INTO content_hash_claims (project_path, sha256, observation_id)
+        SELECT project_path, sha256, observation_id FROM observation_content_hashes ORDER BY rowid`);
       this.db.run(`CREATE TABLE IF NOT EXISTS review_reads (
         reader TEXT NOT NULL, item_id TEXT NOT NULL, sha256 TEXT NOT NULL, run_id TEXT,
         read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(reader, item_id))`);
