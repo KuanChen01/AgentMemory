@@ -1,4 +1,4 @@
-// Round-9 cross-review findings on PR #3 (b347cc5). Isolated: port 38889 worker / temp DBs, local LLM stub only.
+// Round-9 cross-review findings on PR #3 (b347cc5). Isolated: free-port worker / temp DBs, local LLM stub only.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -34,11 +34,11 @@ test('E1 writes disabled: idle sweep, retries and flush never consolidate; event
 });
 
 test('E2 closeTask failure at a task boundary is caught: error response, worker alive, task retryable', async () => {
-  await withWorker(async ({ post, get, idle, stub, dbPath, log }) => {
+  await withWorker(async ({ post, get, idle, stub, dbPath, log, base }) => {
     await post('/tools', ev('b1', 'apply_patch', 'edit', 'ok'));
     const raw = new Database(dbPath);
     raw.exec(`CREATE TRIGGER fault_freeze BEFORE UPDATE OF task_result_id ON task_event_buffer BEGIN SELECT RAISE(ABORT, 'injected freeze failure'); END`);
-    const res = await fetch('http://127.0.0.1:38889/tasks/boundary', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const res = await fetch(base + '/tasks/boundary', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: 'b1' }) });
     assert.equal(res.status, 500); assert.match((await res.json()).error, /boundary/i);
     assert.ok((await get('/admin/api/overview')).queue, 'worker still alive');

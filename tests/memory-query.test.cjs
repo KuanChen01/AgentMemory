@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -37,7 +38,7 @@ async function withDatabase(run) {
   }
 }
 
-test('resolveMemoryQuery applies policy, time slicing, layered context, and procedural skills', async () => {
+test('resolveMemoryQuery applies policy, time slicing, layered context, and procedural skills', { skip: skipDrive }, async () => {
   await withDatabase(async (db) => {
     await db.saveStateFact({
       project_path: 'E:/Repo/A',

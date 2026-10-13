@@ -1,5 +1,5 @@
 // Bounded, isolated tests for rule routing, task consolidation, review reads and legacy compaction.
-// Worker runs on port 38889 against a temp AGENTMEM_DB_PATH; the LLM is a local record/replay stub.
+// Worker runs on a fresh free port against a temp AGENTMEM_DB_PATH; the LLM is a local record/replay stub.
 // No real API calls are made and nothing outside os.tmpdir() is touched.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,7 +12,7 @@ const { createHash } = require('node:crypto');
 const { DatabaseManager } = require('../dist/services/db.js');
 const { classifyToolEvent, isReadOnlyCommand } = require('../dist/services/event-classifier.js');
 
-const PORT = 38889;
+const { freePort } = require('./helpers/task-worker.cjs');
 const TOKEN_CAP = 200_000;
 
 async function startStub() {
@@ -37,7 +37,7 @@ async function startStub() {
 
 async function withWorker(run, extraEnv = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-task-'));
-  const stub = await startStub();
+  const stub = await startStub(); const PORT = await freePort();
   const envPath = path.join(root, '.env');
   fs.writeFileSync(envPath, `AGENTMEM_LLM_API_URL=${stub.url}\nAGENTMEM_LLM_API_KEY=fixture-only\nAGENTMEM_LLM_MODEL=stub\n`);
   const env = { ...process.env };

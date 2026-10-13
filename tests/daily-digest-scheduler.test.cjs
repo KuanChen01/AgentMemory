@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -58,7 +59,7 @@ async function saveObservation(db, projectPath, createdAt) {
   });
 }
 
-test('findDailyDigestCatchUpTargets returns only project dates with observations and no successful digest', async () => {
+test('findDailyDigestCatchUpTargets returns only project dates with observations and no successful digest', { skip: skipDrive }, async () => {
   await withDatabase(async (db) => {
     await saveObservation(db, 'E:/Repo/A', '2026-06-08T08:00:00.000Z');
     await saveObservation(db, 'E:/Repo/B', '2026-06-07T08:00:00.000Z');
@@ -99,7 +100,7 @@ test('findDailyDigestCatchUpTargets returns only project dates with observations
   });
 });
 
-test('runDailyDigestCatchUp invokes the runner once per missing target in deterministic order', async () => {
+test('runDailyDigestCatchUp invokes the runner once per missing target in deterministic order', { skip: skipDrive }, async () => {
   await withDatabase(async (db) => {
     await saveObservation(db, 'E:/Repo/B', '2026-06-08T09:00:00.000Z');
     await saveObservation(db, 'E:/Repo/A', '2026-06-08T08:00:00.000Z');

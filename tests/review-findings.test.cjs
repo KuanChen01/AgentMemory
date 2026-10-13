@@ -1,4 +1,4 @@
-// Regression tests reproducing each cross-review finding on PR #3 (f28a49d). Isolated: port 38889, temp DB, stub LLM.
+// Regression tests reproducing each cross-review finding on PR #3 (f28a49d). Isolated: free port, temp DB, stub LLM.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { withWorker, ev } = require('./helpers/task-worker.cjs');

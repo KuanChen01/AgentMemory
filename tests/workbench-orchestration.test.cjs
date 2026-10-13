@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -133,7 +134,7 @@ function createReusableOverviewPayload() {
   });
 }
 
-test('workbench PowerShell script reports status for an inactive port', async () => {
+test('workbench PowerShell script reports status for an inactive port', { skip: skipShell }, async () => {
   const port = await findFreePort();
   const result = await runPowerShell(['-Action', 'status', '-Port', String(port)]);
 
@@ -142,7 +143,7 @@ test('workbench PowerShell script reports status for an inactive port', async ()
   assert.equal(result.stdout.includes(`Port  : ${port}`), true);
 });
 
-test('workbench PowerShell script no-ops when start is requested on an active port', async () => {
+test('workbench PowerShell script no-ops when start is requested on an active port', { skip: skipShell }, async () => {
   const server = http.createServer((req, res) => {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
@@ -161,7 +162,7 @@ test('workbench PowerShell script no-ops when start is requested on an active po
   }
 });
 
-test('workbench PowerShell script no-ops when stop is requested on an inactive port', async () => {
+test('workbench PowerShell script no-ops when stop is requested on an inactive port', { skip: skipShell }, async () => {
   const port = await findFreePort();
   const result = await runPowerShell(['-Action', 'stop', '-Port', String(port)]);
 
@@ -169,7 +170,7 @@ test('workbench PowerShell script no-ops when stop is requested on an inactive p
   assert.equal(result.stdout.includes('当前已停止'), true);
 });
 
-test('workbench PowerShell script reports inactive open-admin without launching anything', async () => {
+test('workbench PowerShell script reports inactive open-admin without launching anything', { skip: skipShell }, async () => {
   const port = await findFreePort();
   const result = await runPowerShell(['-Action', 'open-admin', '-Port', String(port)]);
 
@@ -177,7 +178,7 @@ test('workbench PowerShell script reports inactive open-admin without launching 
   assert.equal(result.stdout.includes('当前未启动，未打开 /admin。'), true);
 });
 
-test('start-workbench.cmd dispatches status mode and forwards --port', async () => {
+test('start-workbench.cmd dispatches status mode and forwards --port', { skip: skipShell }, async () => {
   const port = await findFreePort();
   const result = await runCmd(['status', '--port', String(port)]);
 
@@ -185,7 +186,7 @@ test('start-workbench.cmd dispatches status mode and forwards --port', async () 
   assert.equal(result.stdout.includes(`Port  : ${port}`), true);
 });
 
-test('workbench orchestration smoke covers start, status, restart, and stop on a temp HOME', async () => {
+test('workbench orchestration smoke covers start, status, restart, and stop on a temp HOME', { skip: skipShell }, async () => {
   const tempHome = makeTempHome();
   const env = makeProcessEnv(tempHome);
   const port = await findFreePort();

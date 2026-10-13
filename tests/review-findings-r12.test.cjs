@@ -1,4 +1,4 @@
-// Round-12: a normal task retry reuses its saved duplicate link (no new model call). Port 38889 worker, local stub only.
+// Round-12: a normal task retry reuses its saved duplicate link (no new model call). Free-port worker, local stub only.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');

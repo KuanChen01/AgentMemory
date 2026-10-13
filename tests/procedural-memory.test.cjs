@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -174,7 +175,7 @@ test('procedural skills can be promoted from digest candidates and track feedbac
   });
 });
 
-test('historical observation search excludes same-day future rows across mixed timestamp formats', async () => {
+test('historical observation search excludes same-day future rows across mixed timestamp formats', { skip: skipDrive }, async () => {
   await withDatabase(async (db) => {
     await db.saveObservation({
       id: randomUUID(),

@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -441,7 +442,7 @@ for (const mode of ['missing credentials', 'LLM HTTP failure']) {
   });
 }
 
-test('worker serves admin UI and admin APIs', async () => {
+test('worker serves admin UI and admin APIs', { skip: skipDrive }, async () => {
   const dbPath = makeDbPath();
   const port = makePort();
   const latestVersion = bumpSemVer(currentPackageVersion, 'patch');
@@ -778,7 +779,7 @@ test('worker admin LLM settings save model and test local connection', async () 
   }
 });
 
-test('worker admin daily digest APIs expose status and manual run', async () => {
+test('worker admin daily digest APIs expose status and manual run', { skip: skipDrive }, async () => {
   const dbPath = makeDbPath();
   const port = makePort();
   const envPath = path.join(os.tmpdir(), `agentmemory-worker-digest-${randomUUID()}.env`);
@@ -1001,7 +1002,7 @@ test('worker admin exposes policy-driven memory query and procedural skill lifec
   }
 });
 
-test('worker tool ingestion creates automatic post-task reviews visible in admin', async () => {
+test('worker tool ingestion creates automatic post-task reviews visible in admin', { skip: skipDrive }, async () => {
   const dbPath = makeDbPath();
   const port = makePort();
   const envPath = path.join(os.tmpdir(), `agentmemory-worker-post-task-${randomUUID()}.env`);

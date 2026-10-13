@@ -1,4 +1,4 @@
-// Shared isolated worker fixture: port 38889, temp DB, local record/replay LLM stub. No real API calls.
+// Shared isolated worker fixture: a fresh free port per worker, temp DB, local record/replay LLM stub. No real API calls.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -7,7 +7,13 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
 
-const PORT = 38889;
+// A free ephemeral port per worker (no fixed port shared across files/processes).
+async function freePort() {
+  const srv = http.createServer();
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  const { port } = srv.address(); await new Promise(r => srv.close(r));
+  return port;
+}
 
 async function startStub() {
   const calls = [];
@@ -33,7 +39,7 @@ async function startStub() {
 
 async function withWorker(run, extraEnv = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-task-'));
-  const stub = await startStub();
+  const stub = await startStub(); const PORT = await freePort();
   const envPath = path.join(root, '.env');
   fs.writeFileSync(envPath, `AGENTMEM_LLM_API_URL=${stub.url}\nAGENTMEM_LLM_API_KEY=fixture-only\nAGENTMEM_LLM_MODEL=stub\n`);
   const env = { ...process.env };
@@ -63,7 +69,7 @@ async function withWorker(run, extraEnv = {}) {
     throw Error('worker did not settle');
   };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  try { await run({ post, get, idle, sleep, stub, root, dbPath: env.AGENTMEM_DB_PATH, log: () => log }); }
+  try { await run({ post, get, idle, sleep, stub, root, base, port: PORT, dbPath: env.AGENTMEM_DB_PATH, log: () => log }); }
   finally {
     const exited = new Promise(r => worker.once('exit', r)); worker.kill(); await exited; await stub.close();
     assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir())));
@@ -74,4 +80,4 @@ async function withWorker(run, extraEnv = {}) {
 const ev = (session, tool_name, input, output, success = true, project = 'E:/Fixture/App') =>
   ({ session_id: session, project_path: project, agent_id: 'codex', tool_name, input, output, success });
 
-module.exports = { withWorker, startStub, ev, PORT };
+module.exports = { withWorker, startStub, ev, freePort };

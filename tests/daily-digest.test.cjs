@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -94,7 +95,7 @@ function llmDigest(overrides = {}) {
   };
 }
 
-test('runDailyMemoryDigest stores a structured digest from selected project observations', async () => {
+test('runDailyMemoryDigest stores a structured digest from selected project observations', { skip: skipDrive }, async () => {
   await withDatabase(async (db) => {
     const highSignal = await saveObservation(db);
     const lowSignal = await saveObservation(db, {
@@ -143,7 +144,7 @@ test('runDailyMemoryDigest stores a structured digest from selected project obse
   });
 });
 
-test('runDailyMemoryDigest skips without heuristics when LLM credentials are unavailable', async () => {
+test('runDailyMemoryDigest skips without heuristics when LLM credentials are unavailable', { skip: skipDrive }, async () => {
   await withDatabase(async (db) => {
     const highSignal = await saveObservation(db);
     let llmCalled = false;

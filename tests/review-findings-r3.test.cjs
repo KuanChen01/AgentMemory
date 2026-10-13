@@ -1,4 +1,4 @@
-// Round-3 DESKTOP review findings on PR #3 (4207968). Isolated: temp DBs, port 38889 worker, local LLM stub. No real API calls.
+// Round-3 DESKTOP review findings on PR #3 (4207968). Isolated: temp DBs, free-port worker, local LLM stub. No real API calls.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

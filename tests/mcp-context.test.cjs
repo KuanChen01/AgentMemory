@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -319,7 +320,7 @@ async function stopWorker(child, port) {
   });
 }
 
-test('MCP get_project_context renders the same curated structured context as /context', async () => {
+test('MCP get_project_context renders the same curated structured context as /context', { skip: skipDrive }, async () => {
   await withDatabase(async (db, dbPath) => {
     const port = makePort();
     const projectPath = 'E:/Repo/Antigravity';

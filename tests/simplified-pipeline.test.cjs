@@ -1,4 +1,4 @@
-// Simplified pipeline (claude-mem style, hooks only): single call per task, head/tail truncation, insert-once, duplicate flags. Isolated: temp DBs, port 38889 worker, local LLM stub. No real API calls.
+// Simplified pipeline (claude-mem style, hooks only): single call per task, head/tail truncation, insert-once, duplicate flags. Isolated: temp DBs, free-port worker, local LLM stub. No real API calls.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
