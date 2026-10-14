@@ -403,13 +403,15 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
   const plan = [...bySession.entries()].map(([session, items]) => {
     const asEvents = items.map(r => ({ ...r, tool_name: 'legacy:' + r.title, success: 1, incomplete: 0,
       input: '', output: `${r.title}\n${r.narrative}\nfacts: ${r.facts}\nfiles_modified: ${r.files_modified}` }));
-    // The task groups exactly the rows still unlinked now (a retry after a partial run is a new task over the rest).
-    const key = createHash('sha256').update(session + '\n' + items.filter((r: any) => !r.linked).map((r: any) => r.id).sort().join('\n')).digest('hex').slice(0, 24);
+
     // Only rows not yet linked are segmented (an interrupted run continues where it stopped; a linked row is never
     // summarized twice). Each segment's result id derives from ITS OWN source ids, so a re-run with another prompt
     // budget can never reuse a result that covered different rows.
     const all = legacySegments(asEvents.filter((r: any) => !r.linked));
     const segments = all.map((seg, index) => ({ seg, index, ids: seg.map((r: any) => r.id) }));
+    // The task is this exact segment plan over the rows still unlinked now: a retry after a partial run, or a run with
+    // another prompt budget, is a new task (its own task_id, segment_index 0..n-1); the same plan keeps its task.
+    const key = createHash('sha256').update(session + '\n' + segments.map(x => x.ids.join(',')).join('\n')).digest('hex').slice(0, 24);
     return { session, items: items.filter((r: any) => !r.linked), key, segments, total: all.length };
   }).filter(p => p.segments.length);
   const summary = { mode: options.apply ? 'apply' : 'dry-run', days: options.since ? null : options.days, since, until: to,
