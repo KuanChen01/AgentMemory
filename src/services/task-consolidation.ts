@@ -382,8 +382,9 @@ export function legacySegments(events: any[], budget = taskCharBudget()): any[][
  * Compress legacy per-step observations (no work metadata) of the last N days, or of an explicit
  * [since, until] window, into task-level results. Never deletes or edits legacy rows; links them instead.
  * A large session is split into consecutive segments that each fit the prompt budget (one model call each),
- * so the middle of a long session is never dropped. Idempotent: ids derive from the session's whole legacy
- * row set in the window (linked rows included), and segments whose rows are all linked are not compacted again.
+ * so the middle of a long session is never dropped; a single row larger than the budget is kept pending (never
+ * summarized from a truncated prompt). Idempotent: only unlinked rows are segmented, and each result id derives from
+ * that segment's own source ids; an existing result is reused only when its recorded source ids are exactly the same.
  */
 export async function compactLegacy(db: DatabaseManager, options: CompactLegacyOptions) {
   const until = options.until ? new Date(options.until) : null;
@@ -402,17 +403,21 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
   const plan = [...bySession.entries()].map(([session, items]) => {
     const asEvents = items.map(r => ({ ...r, tool_name: 'legacy:' + r.title, success: 1, incomplete: 0,
       input: '', output: `${r.title}\n${r.narrative}\nfacts: ${r.facts}\nfiles_modified: ${r.files_modified}` }));
-    const key = createHash('sha256').update(session + '\n' + items.map((r: any) => r.id).sort().join('\n')).digest('hex').slice(0, 24);
-    // Only segments that still have an unlinked row are worked on (an interrupted run continues where it stopped).
-    const all = legacySegments(asEvents);
-    const segments = all.map((seg, index) => ({ seg, index })).filter(x => x.seg.some((r: any) => !r.linked));
+    // The task groups exactly the rows still unlinked now (a retry after a partial run is a new task over the rest).
+    const key = createHash('sha256').update(session + '\n' + items.filter((r: any) => !r.linked).map((r: any) => r.id).sort().join('\n')).digest('hex').slice(0, 24);
+    // Only rows not yet linked are segmented (an interrupted run continues where it stopped; a linked row is never
+    // summarized twice). Each segment's result id derives from ITS OWN source ids, so a re-run with another prompt
+    // budget can never reuse a result that covered different rows.
+    const all = legacySegments(asEvents.filter((r: any) => !r.linked));
+    const segments = all.map((seg, index) => ({ seg, index, ids: seg.map((r: any) => r.id) }));
     return { session, items: items.filter((r: any) => !r.linked), key, segments, total: all.length };
   }).filter(p => p.segments.length);
   const summary = { mode: options.apply ? 'apply' : 'dry-run', days: options.since ? null : options.days, since, until: to,
     legacy_rows: plan.reduce((n, p) => n + p.items.length, 0),
     sessions: plan.length, planned_llm_calls: plan.reduce((n, p) => n + p.segments.length, 0),
     planned_chars: plan.reduce((n, p) => n + p.segments.reduce((m, x) => m + renderTask(x.seg).text.length, 0), 0),
-    llm_calls: 0, results_saved: 0, reused: 0, pending: 0, duplicates: 0, skipped: 0, rows_deleted: 0 };
+    llm_calls: 0, results_saved: 0, reused: 0, pending: 0, truncated: 0, duplicates: 0, skipped: 0, rows_deleted: 0,
+    pending_reasons: [] as string[] };
   if (!options.apply) return summary;
   const settings = resolveLlmSettings();
   if (!llmAvailable(settings)) throw new Error('compact-legacy --apply requires LLM credentials');
@@ -421,16 +426,28 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
     // instead of creating a second observation. Legacy rows are never edited or deleted.
     const key = p.key;
     const taskId = `legacy-task-${key}`;
-    for (const { seg, index: i } of p.segments) {
-      const first = seg[0]; const resultId = `legacy-${key}-${i}`;
+    for (const { seg, index: i, ids } of p.segments) {
+      const first = seg[0];
+      const resultId = 'legacy-' + createHash('sha256').update(p.session + '\n' + [...ids].sort().join('\n')).digest('hex').slice(0, 32);
       const rendered = renderTask(seg);
-      // Retry of an interrupted run: reuse what was already saved for this session key; no new model call.
-      const prior = db.sqlGet(`SELECT status, observation_id FROM task_results WHERE id=?`, [resultId]);
-      const reusedResult = savedResult(db, resultId, `dup-${resultId}`);
+      // Retry of an interrupted run: reuse only a result whose recorded source ids are exactly this segment's rows.
+      const prior = db.sqlGet(`SELECT status, observation_id, source_ids FROM task_results WHERE id=?`, [resultId]);
+      let priorIds: string[] | null = null;
+      try { priorIds = prior ? JSON.parse(prior.source_ids || '[]').map(String).sort() : null; } catch { priorIds = []; }
+      const sameSource = !!prior && JSON.stringify(priorIds) === JSON.stringify([...ids].sort());
+      if (prior && !sameSource) throw new Error(`compact-legacy: result ${resultId} exists but covers other source rows; refusing to reuse it`);
+      const reusedResult = (!prior || sameSource) ? savedResult(db, resultId, `dup-${resultId}`) : null;
       let observationId: string | null = null; let status = 'skipped'; let reason: string | null = null;
       let parsed: any = null;
       if (reusedResult) { observationId = reusedResult.observationId; status = reusedResult.status; summary.reused++; }
       else if (prior?.status === 'pending') { status = 'pending'; summary.reused++; }
+      else if (rendered.omitted > 0) {
+        // A single row larger than the prompt budget cannot be summarized whole: never compact a truncated source.
+        // It stays pending and unlinked (still delivered to the daily review as a legacy observation), no model call.
+        status = 'pending';
+        reason = `legacy source truncated (${rendered.omitted} of ${rendered.chars} chars omitted); not compacted, read the original rows`;
+        summary.truncated++;
+      }
       else {
         summary.llm_calls++;
         parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
@@ -445,7 +462,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
           reason = `legacy ${refusal}; model skip not accepted`;
         }
       }
-      if (status === 'pending') { summary.pending++; reason ||= 'legacy source truncated; kept pending'; }
+      if (status === 'pending') { summary.pending++; reason ||= 'legacy source truncated; kept pending'; summary.pending_reasons.push(`${resultId}: ${reason}`); }
       else if (parsed && !parsed.skip) {
         const obs: Observation = { id: resultId, session_id: p.session, project_path: first.project_path, agent_id: first.agent_id,
           title: parsed.title || 'Compacted legacy session', narrative: parsed.narrative, facts: parsed.facts, concepts: parsed.concepts,
@@ -468,7 +485,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
           ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id,
             llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=COALESCE(excluded.last_error, task_results.last_error)`,
           [resultId, taskId, p.session, first.project_path, first.agent_id, i, p.total, seg.length,
-            JSON.stringify(seg.map((r: any) => r.id)), 'legacy_compaction', status, observationId, called, reason]);
+            JSON.stringify(ids), 'legacy_compaction', status, observationId, called, reason]);
         // A pending (truncated) source stays unlinked, so it remains visible as not-yet-compacted.
         if (status !== 'pending') for (const r of seg) sql.run(`INSERT OR IGNORE INTO legacy_compaction_links VALUES (?,?)`, [r.id, resultId]);
       });

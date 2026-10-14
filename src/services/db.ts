@@ -882,6 +882,7 @@ export class DatabaseManager {
       item.sha256 = itemSha;
       return Buffer.byteLength(JSON.stringify(item), 'utf8') <= (item.kind === 'legacy' ? 2048 : 4096) ? item : {
         id: row.id, kind: item.kind, detail_required: true, sha256: itemSha,
+        project_path: row.project_path, agent_id: row.agent_id, created_at: row.created_at,
         reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
     };
     const legacyStub = (row: any) => {

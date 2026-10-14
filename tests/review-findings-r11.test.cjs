@@ -56,7 +56,7 @@ test('F2 compactLegacy: a truncated legacy source answered with skip stays pendi
     assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM task_results WHERE status='skipped'`).n, 0);
     assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM legacy_compaction_links`).n, 0, 'source stays visible as not compacted');
     const again = await tc.compactLegacy(db, { days: 7, apply: true });
-    assert.equal(stub.calls.length, 1, 'pending result reused, no repeated model call'); assert.equal(again.pending, 1);
+    assert.equal(stub.calls.length, 0, 'a source larger than the budget is never sent truncated; pending reused, no model call'); assert.equal(again.pending, 1);
     assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM observations WHERE id LIKE 'lt%'`).n, 1, 'legacy rows kept');
   }, { AGENTMEM_TASK_PROMPT_CHARS: '4000' });
 });
