@@ -363,41 +363,66 @@ export function taskRetryMs(env: NodeJS.ProcessEnv = process.env): number {
   return env.AGENTMEM_TASK_RETRY_MS?.trim() && Number.isFinite(ms) && ms >= 100 ? Math.trunc(ms) : 60_000;
 }
 
-export interface CompactLegacyOptions { days: number; apply: boolean; now?: Date; }
+export interface CompactLegacyOptions { days: number; apply: boolean; now?: Date; since?: string; until?: string; }
+
+const sqlTime = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
+
+/** Split one session's legacy rows (in rowid order) into consecutive segments that each render within the budget. */
+export function legacySegments(events: any[], budget = taskCharBudget()): any[][] {
+  const segments: any[][] = []; let current: any[] = [];
+  for (const e of events) {
+    if (current.length && renderTask([...current, e], Infinity).chars > budget) { segments.push(current); current = []; }
+    current.push(e);
+  }
+  if (current.length) segments.push(current);
+  return segments;
+}
 
 /**
- * Compress legacy per-step observations (no work metadata) of the last N days into
- * task-level results. Never deletes or edits legacy rows; links them instead.
- * Idempotent: already linked legacy rows are not compacted again.
+ * Compress legacy per-step observations (no work metadata) of the last N days, or of an explicit
+ * [since, until] window, into task-level results. Never deletes or edits legacy rows; links them instead.
+ * A large session is split into consecutive segments that each fit the prompt budget (one model call each),
+ * so the middle of a long session is never dropped. Idempotent: ids derive from the session's whole legacy
+ * row set in the window (linked rows included), and segments whose rows are all linked are not compacted again.
  */
 export async function compactLegacy(db: DatabaseManager, options: CompactLegacyOptions) {
-  const since = new Date((options.now || new Date()).getTime() - options.days * 86400_000).toISOString().slice(0, 19).replace('T', ' ');
-  const rows = db.sqlAll(`SELECT o.* FROM observations o
+  const until = options.until ? new Date(options.until) : null;
+  const sinceDate = options.since ? new Date(options.since)
+    : new Date((options.now || new Date()).getTime() - options.days * 86400_000);
+  if (!Number.isFinite(sinceDate.getTime()) || (until && (!Number.isFinite(until.getTime()) || until <= sinceDate)))
+    throw new Error('compact-legacy requires a valid since < until window');
+  const since = sqlTime(sinceDate); const to = until ? sqlTime(until) : null;
+  const rows = db.sqlAll(`SELECT o.*, l.legacy_observation_id AS linked FROM observations o
     LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
     LEFT JOIN legacy_compaction_links l ON l.legacy_observation_id=o.id
-    WHERE m.observation_id IS NULL AND l.legacy_observation_id IS NULL AND datetime(o.created_at) >= datetime(?)
-    ORDER BY o.session_id, o.rowid`, [since]);
+    WHERE m.observation_id IS NULL AND datetime(o.created_at) >= datetime(?)${to ? ' AND datetime(o.created_at) <= datetime(?)' : ''}
+    GROUP BY o.id ORDER BY o.session_id, o.rowid`, to ? [since, to] : [since]);
   const bySession = new Map<string, any[]>();
   for (const r of rows) { if (!bySession.has(r.session_id)) bySession.set(r.session_id, []); bySession.get(r.session_id)!.push(r); }
   const plan = [...bySession.entries()].map(([session, items]) => {
     const asEvents = items.map(r => ({ ...r, tool_name: 'legacy:' + r.title, success: 1, incomplete: 0,
       input: '', output: `${r.title}\n${r.narrative}\nfacts: ${r.facts}\nfiles_modified: ${r.files_modified}` }));
-    return { session, items, segments: [asEvents] };  // one call per session, head+tail bounded
-  });
-  const summary = { mode: options.apply ? 'apply' : 'dry-run', days: options.days, since, legacy_rows: rows.length,
+    const key = createHash('sha256').update(session + '\n' + items.map((r: any) => r.id).sort().join('\n')).digest('hex').slice(0, 24);
+    // Only segments that still have an unlinked row are worked on (an interrupted run continues where it stopped).
+    const all = legacySegments(asEvents);
+    const segments = all.map((seg, index) => ({ seg, index })).filter(x => x.seg.some((r: any) => !r.linked));
+    return { session, items: items.filter((r: any) => !r.linked), key, segments, total: all.length };
+  }).filter(p => p.segments.length);
+  const summary = { mode: options.apply ? 'apply' : 'dry-run', days: options.since ? null : options.days, since, until: to,
+    legacy_rows: plan.reduce((n, p) => n + p.items.length, 0),
     sessions: plan.length, planned_llm_calls: plan.reduce((n, p) => n + p.segments.length, 0),
-    planned_chars: plan.reduce((n, p) => n + renderTask(p.segments[0]).text.length, 0),
-    llm_calls: 0, results_saved: 0, reused: 0, pending: 0, rows_deleted: 0 };
+    planned_chars: plan.reduce((n, p) => n + p.segments.reduce((m, x) => m + renderTask(x.seg).text.length, 0), 0),
+    llm_calls: 0, results_saved: 0, reused: 0, pending: 0, duplicates: 0, skipped: 0, rows_deleted: 0 };
   if (!options.apply) return summary;
   const settings = resolveLlmSettings();
   if (!llmAvailable(settings)) throw new Error('compact-legacy --apply requires LLM credentials');
   for (const p of plan) {
     // Deterministic ids from the session's legacy row ids: an interrupted run retried later reuses the same result
     // instead of creating a second observation. Legacy rows are never edited or deleted.
-    const key = createHash('sha256').update(p.session + '\n' + p.items.map((r: any) => r.id).sort().join('\n')).digest('hex').slice(0, 24);
+    const key = p.key;
     const taskId = `legacy-task-${key}`;
-    for (let i = 0; i < p.segments.length; i++) {
-      const seg = p.segments[i]; const first = seg[0]; const resultId = `legacy-${key}-${i}`;
+    for (const { seg, index: i } of p.segments) {
+      const first = seg[0]; const resultId = `legacy-${key}-${i}`;
       const rendered = renderTask(seg);
       // Retry of an interrupted run: reuse what was already saved for this session key; no new model call.
       const prior = db.sqlGet(`SELECT status, observation_id FROM task_results WHERE id=?`, [resultId]);
@@ -432,16 +457,17 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
         if (!known) obs.embedding = await getEmbedding(`${obs.title} ${obs.narrative} ${obs.facts.join(' ')}`);
         // Same atomic path as task results: link + flag a look-alike, or save observation + hash together.
         const saved = await db.saveObservationDeduped(obs, { v2: hash, v1: summaryHash(obs.project_path, obs, day) }, { id: `dup-${resultId}`, taskId });
-        if (saved.duplicateOf) { observationId = saved.duplicateOf; status = 'duplicate'; }
+        if (saved.duplicateOf) { observationId = saved.duplicateOf; status = 'duplicate'; summary.duplicates++; }
         else { observationId = obs.id; status = 'saved'; summary.results_saved++; }
       }
+      if (status === 'skipped') summary.skipped++;
       const called = parsed ? 1 : 0;
       await db.sqlWrite(sql => {
         sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
           source_ids,trigger,status,observation_id,llm_calls,source_kind,last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'legacy_compacted',?)
           ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id,
             llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=COALESCE(excluded.last_error, task_results.last_error)`,
-          [resultId, taskId, p.session, first.project_path, first.agent_id, i, p.segments.length, seg.length,
+          [resultId, taskId, p.session, first.project_path, first.agent_id, i, p.total, seg.length,
             JSON.stringify(seg.map((r: any) => r.id)), 'legacy_compaction', status, observationId, called, reason]);
         // A pending (truncated) source stays unlinked, so it remains visible as not-yet-compacted.
         if (status !== 'pending') for (const r of seg) sql.run(`INSERT OR IGNORE INTO legacy_compaction_links VALUES (?,?)`, [r.id, resultId]);

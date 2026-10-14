@@ -506,6 +506,24 @@ app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
   } catch (error: any) { res.status(400).json({ error: error.message }); }
 });
 
+// One daily model summary (routing clue for a review): whole digest JSON with its version hash.
+app.get('/admin/api/work-digest', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    const id = String(req.query.id || '');
+    if (!id) throw new Error('Digest requires an ID');
+    const row = dbManager.sqlGet('SELECT id,project_path,local_date,status,source_count,source_observation_ids,model,generated_at,digest_json FROM daily_memory_digests WHERE id=?', [id]);
+    if (!row) return res.status(404).json({ error: 'Unknown digest ID' });
+    const text = String(row.digest_json ?? '');
+    if (Buffer.byteLength(text, 'utf8') > 256 * 1024) throw new Error('Digest exceeds one response; inspect the source');
+    let sources: string[] = [];
+    try { sources = JSON.parse(row.source_observation_ids || '[]'); } catch { sources = []; }
+    res.json({ id: row.id, project_path: row.project_path, local_date: row.local_date, status: row.status,
+      source_count: row.source_count, source_observation_ids: sources, model: row.model, generated_at: row.generated_at,
+      text, sha256: createHash('sha256').update(text, 'utf8').digest('hex') });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
 // Evidence of a task result: the bounded read-only inspections linked to the task (paged).
 app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
   try {

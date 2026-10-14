@@ -45,8 +45,9 @@ test('F1 compactLegacy retry after an interruption reuses the saved session resu
 });
 
 test('F2 compactLegacy: a truncated legacy source answered with skip stays pending with a reason, not skipped', async () => {
-  const big = (i, s) => `${s} step ${i} ` + 'x'.repeat(3000);
-  await legacy([['lt', 4, big]], async ({ db, stub, tc }) => {
+  // One legacy row larger than the whole prompt budget: even its own segment is abbreviated.
+  const big = (i, s) => `${s} step ${i} ` + 'x'.repeat(9000);
+  await legacy([['lt', 1, big]], async ({ db, stub, tc }) => {
     stub.setFixed({ record_kind: 'skip', title: '', narrative: '', facts: [], concepts: [], files_read: [], files_modified: [] });
     const res = await tc.compactLegacy(db, { days: 7, apply: true });
     assert.equal(res.pending, 1);
@@ -56,6 +57,6 @@ test('F2 compactLegacy: a truncated legacy source answered with skip stays pendi
     assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM legacy_compaction_links`).n, 0, 'source stays visible as not compacted');
     const again = await tc.compactLegacy(db, { days: 7, apply: true });
     assert.equal(stub.calls.length, 1, 'pending result reused, no repeated model call'); assert.equal(again.pending, 1);
-    assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM observations WHERE id LIKE 'lt%'`).n, 4, 'legacy rows kept');
+    assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM observations WHERE id LIKE 'lt%'`).n, 1, 'legacy rows kept');
   }, { AGENTMEM_TASK_PROMPT_CHARS: '4000' });
 });

@@ -818,14 +818,17 @@ export class DatabaseManager {
     const to = end.toISOString().slice(0, 19).replace('T', ' ');
     const observedHigh = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM observations').n;
     const sessionHigh = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM sessions').n;
-    let position = { version: 2, since, until, high: observedHigh, sessionHigh,
-      catalog: 0, after: 0, legacy: 0 };
+    let position: any = { version: 3, since, until, high: observedHigh, sessionHigh,
+      catalog: 0, after: 0, legacy: 0, legacyAfter: 0, digests: 0 };
     if (cursor) {
       let saved: any;
       try { saved = JSON.parse(Buffer.from(cursor, 'base64url').toString()); } catch { throw new Error('Invalid overview cursor'); }
-      if (saved.version !== 2 || saved.since !== since || saved.until !== until
-          || !['high','sessionHigh','catalog','after','legacy'].every(k => Number.isSafeInteger(saved[k]) && saved[k] >= 0)
-          || saved.high > observedHigh || saved.sessionHigh > sessionHigh || saved.after > saved.high || saved.legacy > 5)
+      // A version-2 cursor (samples-only legacy) continues with the complete legacy listing from its start.
+      if (saved && saved.version === 2) saved = { ...saved, version: 3, legacyAfter: 0, digests: 0 };
+      if (!saved || saved.version !== 3 || saved.since !== since || saved.until !== until
+          || !['high','sessionHigh','catalog','after','legacy','legacyAfter','digests'].every(k => Number.isSafeInteger(saved[k]) && saved[k] >= 0)
+          || saved.high > observedHigh || saved.sessionHigh > sessionHigh || saved.after > saved.high || saved.legacy > 5
+          || saved.legacyAfter > saved.high)
         throw new Error('Overview cursor conflicts with interval');
       position = saved;
     }
@@ -849,9 +852,9 @@ export class DatabaseManager {
         SUM(observation=1 AND record_kind IS NULL) AS legacy
       FROM activity GROUP BY project_path,agent_id ORDER BY project_path,agent_id LIMIT 21 OFFSET ?`,
       [high,from,to,position.sessionHigh,from,to,position.catalog]);
-    const payload: any = { version: 1, since, until, projects: [], memories: [], legacy_samples: [],
-      next_cursor: null, source_high_water: high, session_high_water: position.sessionHigh,
-      discovery_hint: 'Paged catalog of session starts and saved observations in this interval. Typed memories and at most five legacy samples are best-effort clues, not proof of inactivity or exhaustive outcomes. Verify promoted claims.' };
+    const payload: any = { version: 1, coverage: 2, since, until, projects: [], memories: [], legacy_samples: [], legacy_items: [],
+      daily_digests: [], next_cursor: null, source_high_water: high, session_high_water: position.sessionHigh,
+      discovery_hint: 'Paged catalog of session starts and saved observations in this interval. Every observation of the interval is delivered: typed memories in full, legacy (untyped) observations as title stubs in legacy_items (read the whole one with details). daily_digests are model summaries per project and local day: routing clues only, never proof of inactivity. Verify promoted claims.' };
     // Budget the entire encoded response, not just memories. Reserve cursor
     // space so a large catalog cannot strand the client on an oversized page.
     const add = (key: string, item: any) => {
@@ -873,12 +876,22 @@ export class DatabaseManager {
       if (reader) {
         const seen = this.db.get('SELECT sha256 FROM review_reads WHERE reader=? AND item_id=?', [reader, row.id]);
         // Unchanged items were already verified by this reader: never resend their text.
-        if (seen?.sha256 === itemSha) return { id: row.id, kind: item.kind, sha256: itemSha, unchanged: true };
+        if (seen?.sha256 === itemSha) return { id: row.id, kind: item.kind, sha256: itemSha, unchanged: true,
+          project_path: row.project_path, agent_id: row.agent_id, created_at: row.created_at };
       }
       item.sha256 = itemSha;
       return Buffer.byteLength(JSON.stringify(item), 'utf8') <= (item.kind === 'legacy' ? 2048 : 4096) ? item : {
         id: row.id, kind: item.kind, detail_required: true, sha256: itemSha,
         reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
+    };
+    const legacyStub = (row: any) => {
+      const sha256 = reviewItemHash(row);
+      const base: any = { id: row.id, kind: 'legacy', project_path: row.project_path, agent_id: row.agent_id,
+        session_id: row.session_id, created_at: row.created_at, sha256 };
+      if (reader && this.db.get('SELECT sha256 FROM review_reads WHERE reader=? AND item_id=?', [reader, row.id])?.sha256 === sha256)
+        return { ...base, unchanged: true };
+      return { ...base, title_only: true, title: String(row.title ?? '').slice(0, 200),
+        ...(row.compacted_into ? { compacted_into: row.compacted_into } : {}) };
     };
     if (!more) {
       const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS} FROM observations o
@@ -890,20 +903,37 @@ export class DatabaseManager {
       }
       more = !!this.db.get(`SELECT 1 FROM observations o JOIN observation_work_metadata m ON m.observation_id=o.id
         WHERE ${linkedWhere} AND o.rowid > ? LIMIT 1`, [high,from,to,from,to,position.after]);
-      // These are explicitly samples; omitted legacy text never becomes a queue.
-      const legacy = this.db.all(`SELECT * FROM (
-        SELECT o.*,ROW_NUMBER() OVER(PARTITION BY o.project_path,o.session_id ORDER BY o.rowid DESC) AS rank
+    }
+    if (!more) {
+      // Every legacy (untyped) observation of the interval, as a title stub with its version hash (whole text via details).
+      const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS},
+          (SELECT r.observation_id FROM legacy_compaction_links l JOIN task_results r ON r.id=l.task_result_id
+            WHERE l.legacy_observation_id=o.id AND r.observation_id IS NOT NULL LIMIT 1) AS compacted_into
         FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
-        WHERE ${where} AND m.record_kind IS NULL) WHERE rank=1 ORDER BY created_at DESC,id LIMIT 5`, [high,from,to]);
-      for (const row of legacy.slice(position.legacy)) {
-        if (!add('legacy_samples',memory(row))) break;
-        position.legacy++;
+        WHERE ${where} AND m.record_kind IS NULL AND o.rowid > ? ORDER BY o.rowid LIMIT 40`, [high,from,to,position.legacyAfter]);
+      for (const row of rows) {
+        if (!add('legacy_items', legacyStub(row))) break;
+        position.legacyAfter = row.position;
       }
-      more ||= position.legacy < legacy.length;
+      more = !!this.db.get(`SELECT 1 FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+        WHERE ${where} AND m.record_kind IS NULL AND o.rowid > ? LIMIT 1`, [high,from,to,position.legacyAfter]);
+    }
+    if (!more) {
+      // Daily model summaries of the local days this interval touches: routing clues, read with work-digest.
+      const digests = this.db.all(`SELECT id,project_path,local_date,status,source_count,digest_json FROM daily_memory_digests
+        WHERE local_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') ORDER BY local_date,project_path,id LIMIT 50 OFFSET ?`,
+        [from,to,position.digests]);
+      for (const d of digests) {
+        if (!add('daily_digests', { id: d.id, project_path: d.project_path, local_date: d.local_date, status: d.status,
+          source_count: d.source_count, sha256: createHash('sha256').update(String(d.digest_json ?? ''), 'utf8').digest('hex') })) break;
+        position.digests++;
+      }
+      more = !!this.db.get(`SELECT 1 FROM daily_memory_digests WHERE local_date BETWEEN date(?, '-1 day') AND date(?, '+1 day')
+        LIMIT 1 OFFSET ?`, [from,to,position.digests]);
     }
     if (more) payload.next_cursor = Buffer.from(JSON.stringify(position)).toString('base64url');
     if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > 12 * 1024
-        || (more && !payload.projects.length && !payload.memories.length && !payload.legacy_samples.length))
+        || (more && !payload.projects.length && !payload.memories.length && !payload.legacy_items.length && !payload.daily_digests.length))
       throw new Error('Overview routing metadata exceeds page budget; source requires inspection');
     return payload;
   }

@@ -38,19 +38,22 @@ test('global overview keeps unregistered agents, whole text, stable cursor and u
     const first=await db.getWorkOverview(...args);
     assert.equal(first.projects.reduce((n,p)=>n+p.observations,0),24);
     assert.ok(first.projects.some(p=>p.project_path==='E:/New/Unregistered'));
-    assert.equal(first.legacy_samples[0].kind,'legacy');
-    assert.equal(first.legacy_samples[0].narrative,'部署写明并发上限八个，第九个连接永久挂起');
+    assert.deepEqual(first.legacy_samples,[]);
     await db.saveObservation(make('late',{record_kind:'context'}));
-    let all=[...first.memories], cursor=first.next_cursor;
-    while(cursor){const next=await db.getWorkOverview(...args,cursor); all.push(...next.memories); cursor=next.next_cursor; assert.deepEqual(next.projects,[]);}
+    let all=[...first.memories], stubs=[...first.legacy_items], cursor=first.next_cursor;
+    while(cursor){const next=await db.getWorkOverview(...args,cursor); all.push(...next.memories); stubs.push(...next.legacy_items); cursor=next.next_cursor; assert.deepEqual(next.projects,[]);}
     assert.equal(all.length,23); assert.equal(new Set(all.map(m=>m.id)).size,23);
+    assert.equal(stubs.length,1); assert.equal(stubs[0].id,'0'); assert.equal(stubs[0].kind,'legacy'); assert.equal(stubs[0].title_only,true);
+    assert.equal(stubs[0].title,'Read config 0'); assert.ok(!('narrative' in stubs[0])); assert.equal(stubs[0].sha256,db.reviewHashById('0'));
     assert.equal(all.find(m=>m.id==='huge').detail_required,true);
     assert.ok(!('narrative' in all.find(m=>m.id==='huge')));
     assert.deepEqual((await db.getTimeline('E:/Vault')).filter(m=>m.id!=='late'),before);
     await assert.rejects(db.getWorkOverview(args[0],'2026-10-13T00:00:00Z',first.next_cursor),/cursor conflicts/);
     await assert.rejects(db.getWorkOverview('bad',args[1]),/valid/);
     db.close(); await db.initialize();
-    assert.equal((await db.getWorkOverview(...args)).legacy_samples[0].kind,'legacy');
+    let again=await db.getWorkOverview(...args), found=[...again.legacy_items];
+    while(again.next_cursor){again=await db.getWorkOverview(...args,again.next_cursor); found.push(...again.legacy_items);}
+    assert.equal(found[0].kind,'legacy');
   } finally {
     db.close(); if(old===undefined) delete process.env.AGENTMEM_DB_PATH; else process.env.AGENTMEM_DB_PATH=old;
     fs.rmSync(root,{recursive:true,force:true});
