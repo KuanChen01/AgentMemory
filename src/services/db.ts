@@ -883,6 +883,8 @@ export class DatabaseManager {
       return Buffer.byteLength(JSON.stringify(item), 'utf8') <= (item.kind === 'legacy' ? 2048 : 4096) ? item : {
         id: row.id, kind: item.kind, detail_required: true, sha256: itemSha,
         project_path: row.project_path, agent_id: row.agent_id, created_at: row.created_at,
+        // Round 30: the title (bounded like a legacy stub) lets a reader tell an outcome before opening the whole memory.
+        title: String(row.title ?? '').slice(0, 200),
         reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
     };
     const legacyStub = (row: any) => {
