@@ -499,7 +499,9 @@ app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
     // Whole memory in one response (bounded at 256 KiB); continuation offsets only for pathological sizes.
     let stop = Math.min(data.length, offset + 256 * 1024);
     while (stop < data.length && (data[stop] & 0xc0) === 0x80) stop--;
-    res.json({ id, offset, total_bytes: data.length, text: data.subarray(offset, stop).toString('utf8'),
+    // Structured attribution on EVERY response (first and continuation, any size): a reader never parses it out of text.
+    res.json({ id, offset, total_bytes: data.length, project_path: rows[0].project_path, agent_id: rows[0].agent_id,
+      created_at: rows[0].created_at, text: data.subarray(offset, stop).toString('utf8'),
       next_offset: stop < data.length ? stop : null,
       // Same version identity as the overview item, so a reader can tell that what it read is what it acknowledges.
       sha256: dbManager.reviewHashById(id), content_sha256: createHash('sha256').update(data).digest('hex') });
