@@ -421,7 +421,7 @@ export function reviewItemHash(row: any): string {
 }
 
 /** Bump whenever ensureTaskTables() adds a table, index or column (round 9: dedup is transactional, claims unused). */
-const TASK_SCHEMA_REVISION = 10;
+const TASK_SCHEMA_REVISION = 11;
 
 export class DatabaseManager {
   private dbPath: string;
@@ -1991,6 +1991,7 @@ export class DatabaseManager {
     if (revision === TASK_SCHEMA_REVISION && have.length === wanted.length + indexes.length && !this.taskTablesNeedMigration()) return;
     await this.write(() => {
       this.migrateTaskTablesFromV1();
+      this.repairV1TruncationFlags();
       this.db.run(`CREATE TABLE IF NOT EXISTS tool_evidence (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
         tool_name TEXT NOT NULL, success INTEGER NOT NULL, route_reason TEXT NOT NULL,
@@ -2069,6 +2070,28 @@ export class DatabaseManager {
    * intact; its rows are copied into the new table. task_results gains evidence_count and a unique
    * (task_id, segment_index) index. Nothing is deleted.
    */
+  /**
+   * Revision 11 repair (idempotent, flags only): databases migrated from v1 before the byte-length fix compared UTF-8
+   * byte counts with character counts, so complete non-ASCII evidence was flagged truncated. Clear the flag only for
+   * rows whose kept v1 source shows the full text was stored and whose migrated text is still that exact text.
+   * No evidence text is changed and nothing is deleted; really cut rows keep truncated=1.
+   */
+  private repairV1TruncationFlags(): void {
+    if (!this.columnsOf('tool_evidence').has('truncated')) return;
+    const backups = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND (name='tool_evidence_v1' OR name LIKE 'tool_evidence_v1_%')`);
+    let repaired = 0;
+    for (const { name } of backups) {
+      if (!/^tool_evidence_v1(_\d+)?$/.test(name)) continue;
+      const before = Number(this.db.get(`SELECT COUNT(*) AS n FROM tool_evidence WHERE truncated=1`)?.n || 0);
+      this.db.run(`UPDATE tool_evidence SET truncated=0 WHERE truncated=1 AND id IN (
+        SELECT b.id FROM ${name} b WHERE b.id = tool_evidence.id
+          AND b.input_bytes <= length(CAST(b.input_head AS BLOB)) AND b.output_bytes <= length(CAST(b.output_head AS BLOB))
+          AND tool_evidence.input = b.input_head AND tool_evidence.output = b.output_head)`);
+      repaired += before - Number(this.db.get(`SELECT COUNT(*) AS n FROM tool_evidence WHERE truncated=1`)?.n || 0);
+    }
+    if (repaired) console.error(`[Memory] cleared a wrong truncated flag on ${repaired} complete v1 evidence row(s); evidence unchanged.`);
+  }
+
   private migrateTaskTablesFromV1(): void {
     const evidence = this.columnsOf('tool_evidence');
     if (evidence.size > 0 && !evidence.has('task_id')) {
