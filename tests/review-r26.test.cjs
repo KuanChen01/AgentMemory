@@ -53,3 +53,42 @@ test('backfill: two pending oversize rows at budget 4000 are compacted under the
     assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM observations WHERE id IN ('w0','w1')`).n, 2, 'originals kept');
   });
 });
+
+for (const [who, sizes, budget, plan] of [['SC', [6000, 6000, 16000], '24000', [['m0', 'm1'], ['m2']]],
+                                         ['DESKTOP', [9000, 4500, 4500], '10000', [['m0'], ['m1', 'm2']]]]) {
+  test(`backfill round 27 (${who} repro): a pending row that fits whole under the new plan is compacted, not reused as pending`, async () => {
+    await fixture(async ({ db, stub, tc }) => {
+      for (let i = 0; i < 3; i++) await db.saveObservation(row('m' + i, i, `row${i} ` + 'q'.repeat(sizes[i])));
+      stub.setFixed(OUT(1));
+      process.env.AGENTMEM_TASK_PROMPT_CHARS = '4000';
+      const first = await tc.compactLegacy(db, { ...WIN, apply: true });
+      assert.equal(first.pending, 3); assert.equal(first.llm_calls, 0);
+      process.env.AGENTMEM_TASK_PROMPT_CHARS = budget;
+      const res = await tc.compactLegacy(db, { ...WIN, apply: true });
+      assert.equal(res.pending, 0, JSON.stringify(res)); assert.equal(res.llm_calls, 2); assert.equal(res.results_saved + res.duplicates, 2);
+      assert.ok(stub.calls.every(c => !/omitted/.test(c.user)), 'every row sent whole');
+      const saved = db.sqlAll(`SELECT task_id, segment_index, segment_count, source_ids, status, last_error FROM task_results
+        WHERE status IN ('saved','duplicate') ORDER BY segment_index`);
+      assert.deepEqual(saved.map(r => JSON.parse(r.source_ids).sort()), plan);
+      assert.deepEqual(saved.map(r => [r.segment_index, r.segment_count]), [[0, 2], [1, 2]], 'indexes follow the new plan');
+      assert.equal(new Set(saved.map(r => r.task_id)).size, 1, 'one task for the new plan');
+      assert.ok(saved.every(r => r.last_error === null), 'stale truncation reason cleared');
+      assert.equal(db.sqlGet(`SELECT COUNT(*) AS n FROM legacy_compaction_links`).n, 3);
+      const again = await tc.compactLegacy(db, { ...WIN, apply: true });
+      assert.equal(again.sessions, 0); assert.equal(again.llm_calls, 0);
+    });
+  });
+}
+
+test('backfill round 27: a pending row that still does not fit stays pending (reused, no model call)', async () => {
+  await fixture(async ({ db, stub, tc }) => {
+    await db.saveObservation(row('h0', 0, 'huge ' + 'q'.repeat(30000)));
+    stub.setFixed(OUT(1));
+    process.env.AGENTMEM_TASK_PROMPT_CHARS = '4000';
+    await tc.compactLegacy(db, { ...WIN, apply: true });
+    process.env.AGENTMEM_TASK_PROMPT_CHARS = '24000';
+    const res = await tc.compactLegacy(db, { ...WIN, apply: true });
+    assert.equal(res.pending, 1); assert.equal(res.reused, 1); assert.equal(res.llm_calls, 0); assert.equal(stub.calls.length, 0);
+    assert.match(res.pending_reasons[0], /truncated/);
+  });
+});

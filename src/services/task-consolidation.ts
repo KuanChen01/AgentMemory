@@ -442,7 +442,10 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
       let observationId: string | null = null; let status = 'skipped'; let reason: string | null = null;
       let parsed: any = null;
       if (reusedResult) { observationId = reusedResult.observationId; status = reusedResult.status; summary.reused++; }
-      else if (prior?.status === 'pending') { status = 'pending'; summary.reused++; }
+      // A pending result is reused only while its reason still holds under THIS plan/budget (the row still does not fit
+      // whole); once it fits, the model is called and the result follows the new plan (round 27).
+      else if (prior?.status === 'pending' && rendered.omitted > 0) { status = 'pending'; summary.reused++;
+        reason = `legacy source truncated (${rendered.omitted} of ${rendered.chars} chars omitted); not compacted, read the original rows`; }
       else if (rendered.omitted > 0) {
         // A single row larger than the prompt budget cannot be summarized whole: never compact a truncated source.
         // It stays pending and unlinked (still delivered to the daily review as a legacy observation), no model call.
@@ -485,7 +488,9 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
         sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
           source_ids,trigger,status,observation_id,llm_calls,source_kind,last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'legacy_compacted',?)
           ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id,
-            llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=COALESCE(excluded.last_error, task_results.last_error)`,
+            task_id=excluded.task_id, segment_index=excluded.segment_index, segment_count=excluded.segment_count,
+            llm_calls=task_results.llm_calls+excluded.llm_calls,
+            last_error=CASE WHEN excluded.status='pending' THEN COALESCE(excluded.last_error, task_results.last_error) ELSE excluded.last_error END`,
           [resultId, taskId, p.session, first.project_path, first.agent_id, i, p.total, seg.length,
             JSON.stringify(ids), 'legacy_compaction', status, observationId, called, reason]);
         // A pending (truncated) source stays unlinked, so it remains visible as not-yet-compacted.
