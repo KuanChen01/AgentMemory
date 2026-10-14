@@ -2084,7 +2084,7 @@ export class DatabaseManager {
       this.db.run(`INSERT INTO tool_evidence (id,session_id,project_path,agent_id,tool_name,success,route_reason,input,output,
         input_bytes,output_bytes,truncated,source_sha256,task_id,received_ms,created_at)
         SELECT id,session_id,project_path,agent_id,tool_name,success,route_reason,input_head,output_head,input_bytes,output_bytes,
-        CASE WHEN input_bytes > length(input_head) OR output_bytes > length(output_head) THEN 1 ELSE 0 END,
+        CASE WHEN input_bytes > length(CAST(input_head AS BLOB)) OR output_bytes > length(CAST(output_head AS BLOB)) THEN 1 ELSE 0 END,
         source_sha256,NULL,CAST(strftime('%s', created_at) AS INTEGER) * 1000,created_at FROM ${backup}`);
     }
     const results = this.columnsOf('task_results');
