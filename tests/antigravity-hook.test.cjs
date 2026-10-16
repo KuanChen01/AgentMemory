@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -11,7 +12,7 @@ const {
   resolveAntigravitySessionId,
 } = require('../dist/hooks/antigravity-hook.js');
 
-test('Antigravity hook resolves conversation and workspace identity', () => {
+test('Antigravity hook resolves conversation and workspace identity', { skip: skipDrive }, () => {
   const payload = {
     conversationId: 'conversation-123',
     workspacePaths: ['E:/Repo/Antigravity'],

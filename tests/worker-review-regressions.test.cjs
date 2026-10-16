@@ -11,11 +11,14 @@ async function fixture(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-review-'));
   const envPath = path.join(root, '.env');
   const requests = [];
+  let memory = null;
+  let summaryFailure = false;
   const llm = http.createServer(async (req, res) => {
     let text = ''; for await (const chunk of req) text += chunk;
     requests.push({ headers: req.headers, body: JSON.parse(text) });
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+    if (summaryFailure) { res.statusCode = 503; res.end('fixture synthesis unavailable'); return; }
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(memory || {
       title: 'Verified tool event recovery', narrative: 'Verified that a subsequent normal tool event was processed.',
       facts: ['Verified successful processing'], concepts: ['regression'], files_read: [], files_modified: [],
     }) } }] }));
@@ -27,7 +30,8 @@ async function fixture(run) {
   const start = async (overrides = {}) => {
     const env = { ...process.env, AGENTMEM_PORT: String(workerPort), AGENTMEM_ENV_PATH: envPath,
       AGENTMEM_RUNTIME_DIR: root, AGENTMEM_DB_PATH: path.join(root, 'test.db'),
-      AGENTMEM_DAILY_DIGEST_DISABLED: 'true', EMBEDDING_API_URL: '', AGENTMEM_HOOK_AUTOSTART: 'false' };
+      AGENTMEM_DAILY_DIGEST_DISABLED: 'true', EMBEDDING_API_URL: '', AGENTMEM_HOOK_AUTOSTART: 'false',
+      AGENTMEM_TASK_CONSOLIDATION: 'false' };
     for (const key of Object.keys(env)) if (key.startsWith('AGENTMEM_LLM_') || key.startsWith('DEEPSEEK_')) delete env[key];
     Object.assign(env, overrides);
     worker = spawn(process.execPath, ['dist/services/worker.js'], {
@@ -63,7 +67,7 @@ async function fixture(run) {
     }
     throw Error(`Queue failed to settle; LLM requests ${requests.length}/${expectedRequests}`);
   };
-  try { await start(); await run({ start, stop, post, get, settled, requests, envPath, worker: () => worker }); }
+  try { await start(); await run({ start, stop, post, get, settled, requests, envPath, worker: () => worker, setMemory: value => { memory = value; }, setSummaryFailure: value => { summaryFailure = value; } }); }
   finally {
     await stop(); await new Promise(resolve => llm.close(resolve));
     const resolved = path.resolve(root);
@@ -119,5 +123,91 @@ test('saved custom headers reach real mock summary requests after worker restart
       tool_name: 'exec_command', input: 'verify inherited headers', output: 'verification passed', success: true });
     await settled(2);
     assert.equal(requests[1].headers['x-test-header'], 'review "quoted" \\ value');
+  });
+});
+test('value filtering, review purpose and work APIs use isolated mock evidence only', async () => {
+  await fixture(async ({post,get,settled,requests,setMemory}) => {
+    const base={session_id:'daily-review-fixture',project_path:'E:/New/Unregistered',agent_id:'grok',tool_name:'exec_command',success:true};
+    await post('/sessions',{id:base.session_id,project_path:base.project_path,agent_id:'grok',purpose:'daily_review'});
+    const before=(await (await get('/admin/api/overview')).json()).stats.observations;
+    // daily_review sessions are hard-skipped before any model call.
+    const dropped=await (await post('/tools',{...base,input:'read existing guide',output:'Known rules'})).json();
+    assert.equal(dropped.route,'drop'); assert.equal(requests.length,0);
+    assert.equal((await (await get('/admin/api/overview')).json()).stats.observations,before);
+    base.session_id='work-fixture';
+    setMemory({record_kind:'skip',title:'Read existing guide',narrative:'Copied known rules',facts:['Known facts'],files_modified:[]});
+    await post('/tools',{...base,input:'summarize existing guide',output:'Known rules'});
+    await settled(1);
+    assert.equal((await (await get('/admin/api/overview')).json()).stats.observations,before);
+    assert.match(requests[0].body.messages[1].content,/Session purpose: work/);
+    assert.match(requests[0].body.messages[0].content,/record_kind/);
+    setMemory({record_kind:'outcome',title:'Read deployed limit',narrative:'部署写明并发上限八个，第九个连接永久挂起',facts:[],files_modified:[]});
+    await post('/tools',{...base,input:'inspect deployment',output:'concurrency eight; ninth hangs'});
+    await settled(2);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.version,1); assert.equal(view.memories.length,1);
+    assert.equal(view.memories[0].kind,'outcome');
+    assert.match(view.memories[0].narrative,/第九个/);
+    const detail=await (await get('/admin/api/work-details?'+new URLSearchParams({id:view.memories[0].id}))).json();
+    assert.equal(detail.next_offset,null); assert.match(detail.text,/第九个/);
+    assert.ok(detail.sha256);
+    assert.equal((await get('/admin/api/work-details?id=missing')).status,404);
+    await post('/admin/api/settings',{readEnabled:false});
+    assert.equal((await get('/admin/api/work-overview?'+qs)).status,503);
+  });
+});
+test('an attempted skip cannot erase actual failed tool evidence', async () => {
+  await fixture(async ({post,get,settled,setMemory}) => {
+    setMemory({record_kind:'skip',title:'',narrative:'',facts:[]});
+    await post('/tools',{session_id:'failed-review',project_path:'E:/Vault',agent_id:'codex',tool_name:'exec_command',success:false,
+      input:'review failed',output:'quota exhausted; 0 settled; checkpoint retained'});
+    await settled(1);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.memories.length,1); assert.equal(view.memories[0].kind,'outcome');
+    assert.match(view.memories[0].narrative,/quota exhausted; 0 settled; checkpoint retained/);
+  });
+});
+test('truncated synthesis input cannot be skipped as proven routine work', async () => {
+  await fixture(async ({post,get,settled,setMemory}) => {
+    setMemory({record_kind:'skip',title:'Read large file',narrative:'',facts:[]});
+    await post('/tools',{session_id:'partial-input',project_path:'E:/Large',agent_id:'codex',tool_name:'exec_command',success:true,
+      input:'read large config',output:'x'.repeat(80000)+' 部署写明并发上限八个，第九个连接永久挂起'});
+    await settled(1);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.memories.length,1); assert.equal(view.memories[0].kind,'context');
+    assert.match(view.memories[0].narrative,/unshown content remains unknown/);
+  });
+});
+
+test('successful source remains recoverable when synthesis fails without a second model call', async () => {
+  await fixture(async ({post,get,settled,setSummaryFailure,requests}) => {
+    setSummaryFailure(true);
+    await post('/tools',{session_id:'capture-error',project_path:'E:/Verified',agent_id:'codex',tool_name:'exec_command',success:true,
+      input:'verify build',output:'Build passed; durable deployment issue resolved'});
+    const status=await settled(1);
+    assert.equal(status.stats.observations,1); assert.equal(requests.length,1);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    const ref=view.memories[0]; assert.equal(ref.kind,'context');
+    const detail=await (await get('/admin/api/work-details?id='+ref.id)).json();
+    assert.match(detail.text,/Build passed; durable deployment issue resolved/);
+    assert.match(detail.text,/classification remains unknown/);
+  });
+});
+
+test('MCP errors and upstream truncation survive optimistic success and model skip', async () => {
+  await fixture(async ({post,get,settled,setMemory}) => {
+    setMemory({record_kind:'skip',title:'Routine read',facts:[]});
+    const base={session_id:'source-protection',project_path:'E:/Source',agent_id:'codex',tool_name:'exec_command',success:true,input:'inspect'};
+    await post('/tools',{...base,output:{isError:true,content:[]}}); await settled(1);
+    await post('/tools',{...base,output:'Warning: truncated output (original token count: 42000)\npartial result'}); await settled(2);
+    const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
+    const view=await (await get('/admin/api/work-overview?'+qs)).json();
+    assert.equal(view.memories.length,2); assert.equal(view.memories[0].kind,'outcome');
+    assert.match(view.memories[0].narrative,/isError/);
+    assert.equal(view.memories[1].kind,'context'); assert.match(view.memories[1].narrative,/unknown/);
   });
 });

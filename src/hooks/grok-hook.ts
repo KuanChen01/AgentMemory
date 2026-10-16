@@ -95,6 +95,7 @@ async function main() {
   }
 
   if (mode === 'user-prompt-submit') {
+    await postJson('/tasks/boundary', { session_id: resolveGrokSessionId(payload) });
     const prompt = String(payload.prompt || payload.userPrompt || '');
     const turnId = String(payload.promptId || payload.prompt_id || randomUUID());
     if (turnId && prompt) {

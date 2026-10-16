@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -69,7 +70,7 @@ function makeDigest(overrides = {}) {
   };
 }
 
-test('DatabaseManager upserts one daily digest per project and local date', async () => {
+test('DatabaseManager upserts one daily digest per project and local date', { skip: skipDrive }, async () => {
   await withDatabase(async (db) => {
     assert.equal(typeof db.saveDailyMemoryDigest, 'function');
     assert.equal(typeof db.getDailyMemoryDigest, 'function');

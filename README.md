@@ -477,3 +477,17 @@ If a smoke check fails, fix only issues directly related to `/admin`, runtime po
 
 ### 📄 License
 Apache-2.0 License
+
+## Work memory and global review overview
+
+Tool synthesis now returns `record_kind`: `outcome`, `context`, or `skip`. Routine events can stop before embedding/review; useful read-only findings and actual failed-tool evidence remain eligible. Missing/invalid classification is uncertain recovery context, not a keyword-based exclusion. The existing synthesis call is reused; this does not prove natural-language classification quality or quota savings.
+
+Synthesis failure retains bounded tool input/output as uncertain recovery context for successful events, or failure evidence for failed events, without another model/embedding call. Structured MCP `isError` and failing exit/status override optimistic caller success. Known upstream truncation markers and local capture limits prevent `skip` from treating unseen content as proven routine work.
+
+New additive metadata tables retain every existing observation unchanged as legacy. `record_memory` accepts optional `record_kind` (outcome/context), defaulting to outcome for explicit milestones. `/sessions` accepts purpose=work/daily_review and echoes the stored purpose. Review plumbing is distinguished from real failures/results by the synthesis prompt, not whole-session exclusion.
+
+`get_work_overview(since, until, cursor?)` and loopback `GET /admin/api/work-overview` page the catalog of recorded session starts and saved observations in the frozen interval, newly typed memories, and at most five whole legacy samples. Sessions without observations and projects without Vault registration remain visible; unrecorded work or dormant historical sessions are not claimed as covered. The entire JSON response is capped at 12 KiB, including catalog, references and cursor. Each memory is whole or a detail reference; legacy samples are not exhaustive and unshown text is not classified as inactivity. Cursor freezes both observation and session high-water and separate catalog/memory/sample positions, preserving boundary-second rescans. Do not treat imported older observations as automatically covered by a newer checkpoint. This draft replaces the earlier draft cursor encoding; no production migration or old queue adoption is performed.
+
+`GET /admin/api/work-details?id=ID&offset=BYTE_OFFSET` returns UTF-8 detail chunks (up to 8 KiB), next_offset and source SHA-256 for concrete continuation. Changed source requires inspection. Read-disabled workers return unavailable, not an empty successful overview. Existing startup/search/timeline/digest APIs remain for working-memory recovery; digests are clues, not a complete review ledger.
+
+This revision must be independently reviewed before production deployment. Source tests use temporary DBs and mocked LLMs; real capture quality and scheduled acceptance require separate authorization. No database/history pruning, real queue replay or scheduler activation is part of this repair.

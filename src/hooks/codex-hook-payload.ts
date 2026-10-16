@@ -1,4 +1,5 @@
 import path from 'path';
+import { toolResponseSucceeded } from '../services/tool-log-policy';
 
 export interface CodexToolLogPayload {
   input: unknown;
@@ -45,20 +46,5 @@ function firstDefined(...values: unknown[]): any {
 }
 
 function resolveSuccess(payload: Record<string, any>, response: any): boolean {
-  if (typeof payload.success === 'boolean') {
-    return payload.success;
-  }
-  if (response && typeof response === 'object') {
-    if (typeof response.success === 'boolean') {
-      return response.success;
-    }
-    const exitCode = firstDefined(response.exit_code, response.exitCode);
-    if (typeof exitCode === 'number') {
-      return exitCode === 0;
-    }
-    if (typeof response.status === 'string') {
-      return !/fail|error|cancel/i.test(response.status);
-    }
-  }
-  return true;
+  return toolResponseSucceeded(response, payload.success !== false && payload.isError !== true);
 }

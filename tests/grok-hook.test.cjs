@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -37,7 +38,7 @@ function runClaudeHookFromGrok(payload, port) {
   });
 }
 
-test('Grok hook maps session, success, failure, and close events to AgentMemory worker endpoints', async () => {
+test('Grok hook maps session, success, failure, and close events to AgentMemory worker endpoints', { skip: skipDrive }, async () => {
   const calls = [];
   const server = http.createServer((req, res) => {
     let body = '';

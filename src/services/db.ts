@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Database, retrySqliteBusy } from './sqlite';
 import { randomUUID } from 'crypto';
 import path from 'path';
@@ -24,6 +25,8 @@ export interface Observation {
   files_modified: string[];
   embedding: number[];
   created_at?: string;
+  record_kind?: 'outcome' | 'context';
+  source_kind?: 'tool' | 'explicit' | 'task' | 'legacy_compacted';
 }
 
 export interface Session {
@@ -32,6 +35,7 @@ export interface Session {
   agent_id: string;
   status: 'active' | 'completed';
   created_at?: string;
+  purpose?: 'work' | 'daily_review';
 }
 
 export interface SearchResult {
@@ -398,6 +402,27 @@ function normalizeTimeZone(value: string): string {
   return timeZone;
 }
 
+const reviewList = (v: any): any[] => Array.isArray(v) ? v : (typeof v === 'string' && v ? JSON.parse(v) : []);
+/** Canonical review shape of one memory; overview items and detail reads share this version identity. */
+export function reviewItem(row: any): any {
+  return { id: row.id, project_path: row.project_path, session_id: row.session_id, agent_id: row.agent_id,
+    created_at: row.created_at, kind: row.record_kind || 'legacy', source: row.source_kind || 'legacy',
+    title: row.title, narrative: row.narrative, facts: reviewList(row.facts), concepts: reviewList(row.concepts),
+    files_modified: reviewList(row.files_modified), files_read: reviewList(row.files_read),
+    // A deduplicated summary shared by several tasks changes version when new linked evidence arrives,
+    // so later reviews rediscover it (single-task items keep their existing hash).
+    ...(Number(row.evidence_tasks) > 1 ? { evidence_tasks: Number(row.evidence_tasks), evidence_items: Number(row.evidence_items) } : {}) };
+}
+const EVIDENCE_LINK_COLUMNS = `(SELECT COUNT(DISTINCT r.task_id) FROM task_results r WHERE r.observation_id=o.id) AS evidence_tasks,
+  ((SELECT COUNT(*) FROM tool_evidence e WHERE e.task_id IN (SELECT r.task_id FROM task_results r WHERE r.observation_id=o.id))
+   + (SELECT COUNT(*) FROM task_event_buffer b WHERE b.task_result_id IN (SELECT r.id FROM task_results r WHERE r.observation_id=o.id))) AS evidence_items`;
+export function reviewItemHash(row: any): string {
+  return createHash('sha256').update(JSON.stringify(reviewItem(row)), 'utf8').digest('hex');
+}
+
+/** Bump whenever ensureTaskTables() adds a table, index or column (round 9: dedup is transactional, claims unused). */
+const TASK_SCHEMA_REVISION = 11;
+
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
@@ -435,6 +460,18 @@ export class DatabaseManager {
           }
         });
       }
+      // Additive side tables preserve old observation bytes and schema-version
+      // compatibility. No historical inference/reclassification is performed.
+      const workTables = this.db.all(`SELECT name FROM sqlite_master WHERE type='table'
+        AND name IN ('observation_work_metadata','session_purposes')`);
+      if (workTables.length !== 2) await this.write(() => {
+        this.db.run(`CREATE TABLE IF NOT EXISTS observation_work_metadata (
+          observation_id TEXT PRIMARY KEY, record_kind TEXT NOT NULL,
+          source_kind TEXT NOT NULL)`);
+        this.db.run(`CREATE TABLE IF NOT EXISTS session_purposes (
+          session_id TEXT PRIMARY KEY, purpose TEXT NOT NULL)`);
+      });
+      await this.ensureTaskTables();
     } catch (err: any) {
       this.close();
       throw new Error(`Database initialization failed: ${err.message}`);
@@ -647,14 +684,29 @@ export class DatabaseManager {
          ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
         [session.id, session.project_path, normalizedAgentId, session.status]
       );
+      if (session.purpose) {
+        if (!['work', 'daily_review'].includes(session.purpose)) throw new Error('Invalid session purpose');
+        this.db.run(`INSERT INTO session_purposes VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET purpose=excluded.purpose`,
+          [session.id, session.purpose]);
+      }
     });
   }
 
   // Save observation
   public async saveObservation(obs: Observation): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
+    this.validateObservation(obs);
 
-    return this.write(() => {
+    return this.write(() => this.insertObservationRows(obs));
+  }
+
+  private validateObservation(obs: Observation): void {
+    if (obs.record_kind && !['outcome', 'context'].includes(obs.record_kind)) throw new Error('Invalid work-memory kind');
+    if (obs.source_kind && !['tool', 'explicit', 'task', 'legacy_compacted'].includes(obs.source_kind)) throw new Error('Invalid work-memory source');
+  }
+
+  /** Synchronous: callers run it inside a write transaction. */
+  private insertObservationRows(obs: Observation): void {
       const factsStr = JSON.stringify(obs.facts);
       const conceptsStr = JSON.stringify(obs.concepts);
       const filesReadStr = JSON.stringify(obs.files_read);
@@ -708,7 +760,185 @@ export class DatabaseManager {
          VALUES (?, ?, ?, ?, ?, ?)`,
         [obs.id, obs.title, obs.narrative, factsStr, conceptsStr, filesModStr]
       );
+      if (obs.record_kind) this.db.run(`INSERT INTO observation_work_metadata VALUES (?, ?, ?)`,
+        [obs.id, obs.record_kind, obs.source_kind || 'explicit']);
+  }
+
+  /**
+   * Atomic content dedup (one BEGIN IMMEDIATE transaction across connections): if an observation that EXISTS already
+   * carries this (project, content hash), link + flag `obs` as its duplicate; otherwise insert the observation and its
+   * hash together. Commit or roll back together, so a duplicate can only ever point to a real observation.
+   */
+  public async saveObservationDeduped(obs: Observation, hashes: { v2: string; v1: string }, flag: { id: string; taskId: string }):
+      Promise<{ duplicateOf: string | null }> {
+    if (!this.db) throw new Error('Database not initialized');
+    this.validateObservation(obs);
+    return this.write(() => {
+      // Exact (v2) match: link and flag as a duplicate.
+      const owner = this.db.get(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id = h.observation_id
+        WHERE h.project_path=? AND h.sha256=? AND h.hash_version=2 AND h.observation_id<>? ORDER BY h.rowid LIMIT 1`,
+        [obs.project_path, hashes.v2, obs.id]);
+      if (owner) {
+        this.db.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms,reason)
+          VALUES (?,?,?,?,'needs_confirmation',?,'exact content match')`, [flag.id, flag.taskId, owner.observation_id, hashes.v2, Date.now()]);
+        return { duplicateOf: owner.observation_id as string };
+      }
+      if (!this.db.get(`SELECT 1 AS x FROM observations WHERE id=?`, [obs.id])) this.insertObservationRows(obs);
+      this.db.run(`INSERT OR IGNORE INTO observation_content_hashes (observation_id, project_path, sha256, hash_version) VALUES (?,?,?,2)`,
+        [obs.id, obs.project_path, hashes.v2]);
+      // A match only under the legacy case-insensitive v1 hash may be a different result: keep the new observation
+      // and flag the pair for a human. Old rows are never rewritten.
+      const legacy = this.db.get(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id = h.observation_id
+        WHERE h.project_path=? AND h.sha256=? AND h.hash_version=1 AND h.observation_id<>? ORDER BY h.rowid LIMIT 1`,
+        [obs.project_path, hashes.v1, obs.id]);
+      if (legacy) this.db.run(`INSERT OR IGNORE INTO duplicate_flags (id,task_id,observation_id,matched_sha256,status,created_ms,reason)
+        VALUES (?,?,?,?,'needs_confirmation',?,'legacy case-insensitive match')`, [`v1-${flag.id}`, flag.taskId, legacy.observation_id, hashes.v1, Date.now()]);
+      return { duplicateOf: null };
     });
+  }
+
+  /** Crash recovery: record the hash of an observation that exists (no-op otherwise). */
+  public async ensureContentHash(observationId: string, projectPath: string, sha256: string): Promise<void> {
+    await this.write(() => this.db.run(`INSERT OR IGNORE INTO observation_content_hashes (observation_id, project_path, sha256, hash_version)
+      SELECT id, ?, ?, 2 FROM observations WHERE id=?`, [projectPath, sha256, observationId]));
+  }
+
+  public async getSessionPurpose(id: string): Promise<string> {
+    return this.db.get('SELECT purpose FROM session_purposes WHERE session_id=?', [id])?.purpose || 'work';
+  }
+
+  public async getWorkOverview(since: string, until: string, cursor?: string, reader?: string) {
+    if (!this.db) throw new Error('Database not initialized');
+    const start = new Date(since), end = new Date(until);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end)
+      throw new Error('Overview requires valid since < until timestamps');
+    // SQLite legacy timestamps have second precision: replay the boundary
+    // second, then let durable notes/outcome tasks handle idempotency.
+    const from = start.toISOString().slice(0, 19).replace('T', ' ');
+    const to = end.toISOString().slice(0, 19).replace('T', ' ');
+    const observedHigh = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM observations').n;
+    const sessionHigh = this.db.get('SELECT COALESCE(MAX(rowid),0) AS n FROM sessions').n;
+    let position: any = { version: 3, since, until, high: observedHigh, sessionHigh,
+      catalog: 0, after: 0, legacy: 0, legacyAfter: 0, digests: 0 };
+    if (cursor) {
+      let saved: any;
+      try { saved = JSON.parse(Buffer.from(cursor, 'base64url').toString()); } catch { throw new Error('Invalid overview cursor'); }
+      // A version-2 cursor (samples-only legacy) continues with the complete legacy listing from its start.
+      if (saved && saved.version === 2) saved = { ...saved, version: 3, legacyAfter: 0, digests: 0 };
+      if (!saved || saved.version !== 3 || saved.since !== since || saved.until !== until
+          || !['high','sessionHigh','catalog','after','legacy','legacyAfter','digests'].every(k => Number.isSafeInteger(saved[k]) && saved[k] >= 0)
+          || saved.high > observedHigh || saved.sessionHigh > sessionHigh || saved.after > saved.high || saved.legacy > 5
+          || saved.legacyAfter > saved.high)
+        throw new Error('Overview cursor conflicts with interval');
+      position = saved;
+    }
+    const { high } = position;
+    const where = `o.rowid <= ? AND datetime(o.created_at) >= datetime(?) AND datetime(o.created_at) <= datetime(?)`;
+    // A memory that gains a newly linked task (deduplicated summary) inside the window is in the window too,
+    // so evidence linked after the checkpoint is rediscovered (its version hash changes with the link).
+    const linkedWhere = `o.rowid <= ? AND ((datetime(o.created_at) >= datetime(?) AND datetime(o.created_at) <= datetime(?))
+      OR EXISTS (SELECT 1 FROM task_results lr WHERE lr.observation_id=o.id AND datetime(lr.created_at) >= datetime(?) AND datetime(lr.created_at) <= datetime(?)))`;
+    // Window activity includes session starts even if no observation was saved.
+    // Existing dormant sessions are not claimed as activity in this interval.
+    const catalog = this.db.all(`WITH activity AS (
+      SELECT o.project_path,o.agent_id,o.session_id,1 AS observation,m.record_kind FROM observations o
+      LEFT JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${where}
+      UNION ALL
+      SELECT s.project_path,s.agent_id,s.id,0,NULL FROM sessions s WHERE s.rowid <= ?
+        AND datetime(s.created_at) >= datetime(?) AND datetime(s.created_at) <= datetime(?)
+      ) SELECT project_path,agent_id,COUNT(DISTINCT session_id) AS sessions,
+        SUM(observation) AS observations, SUM(observation=1 AND record_kind='outcome') AS outcomes,
+        SUM(observation=1 AND record_kind='context') AS contexts,
+        SUM(observation=1 AND record_kind IS NULL) AS legacy
+      FROM activity GROUP BY project_path,agent_id ORDER BY project_path,agent_id LIMIT 21 OFFSET ?`,
+      [high,from,to,position.sessionHigh,from,to,position.catalog]);
+    const payload: any = { version: 1, coverage: 2, since, until, projects: [], memories: [], legacy_samples: [], legacy_items: [],
+      daily_digests: [], next_cursor: null, source_high_water: high, session_high_water: position.sessionHigh,
+      discovery_hint: 'Paged catalog of session starts and saved observations in this interval. Every observation of the interval is delivered: typed memories in full, legacy (untyped) observations as title stubs in legacy_items (read the whole one with details). daily_digests are model summaries per project and local day: routing clues only, never proof of inactivity. Verify promoted claims.' };
+    // Budget the entire encoded response, not just memories. Reserve cursor
+    // space so a large catalog cannot strand the client on an oversized page.
+    const add = (key: string, item: any) => {
+      payload[key].push(item);
+      if (Buffer.byteLength(JSON.stringify(payload), 'utf8') + 2048 > 12 * 1024) {
+        payload[key].pop(); return false;
+      }
+      return true;
+    };
+    let catalogDelivered = 0;
+    for (const row of catalog.slice(0,20)) {
+      if (!add('projects',row)) break;
+      catalogDelivered++; position.catalog++;
+    }
+    let more = catalogDelivered < catalog.length;
+    const memory = (row: any) => {
+      const item = reviewItem(row);
+      const itemSha = reviewItemHash(row);
+      if (reader) {
+        const seen = this.db.get('SELECT sha256 FROM review_reads WHERE reader=? AND item_id=?', [reader, row.id]);
+        // Unchanged items were already verified by this reader: never resend their text.
+        if (seen?.sha256 === itemSha) return { id: row.id, kind: item.kind, sha256: itemSha, unchanged: true,
+          project_path: row.project_path, agent_id: row.agent_id, created_at: row.created_at };
+      }
+      item.sha256 = itemSha;
+      return Buffer.byteLength(JSON.stringify(item), 'utf8') <= (item.kind === 'legacy' ? 2048 : 4096) ? item : {
+        id: row.id, kind: item.kind, detail_required: true, sha256: itemSha,
+        project_path: row.project_path, agent_id: row.agent_id, created_at: row.created_at,
+        // Round 30: the title (bounded like a legacy stub) lets a reader tell an outcome before opening the whole memory.
+        title: String(row.title ?? '').slice(0, 200),
+        reason: 'Whole memory exceeds overview size; no excerpt used to decide inactivity' };
+    };
+    const legacyStub = (row: any) => {
+      const sha256 = reviewItemHash(row);
+      const base: any = { id: row.id, kind: 'legacy', project_path: row.project_path, agent_id: row.agent_id,
+        session_id: row.session_id, created_at: row.created_at, sha256 };
+      if (reader && this.db.get('SELECT sha256 FROM review_reads WHERE reader=? AND item_id=?', [reader, row.id])?.sha256 === sha256)
+        return { ...base, unchanged: true };
+      return { ...base, title_only: true, title: String(row.title ?? '').slice(0, 200),
+        ...(row.compacted_into ? { compacted_into: row.compacted_into } : {}) };
+    };
+    if (!more) {
+      const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS} FROM observations o
+        JOIN observation_work_metadata m ON m.observation_id=o.id WHERE ${linkedWhere} AND o.rowid > ?
+        ORDER BY o.rowid LIMIT 20`, [high,from,to,from,to,position.after]);
+      for (const row of rows) {
+        if (!add('memories',memory(row))) break;
+        position.after = row.position;
+      }
+      more = !!this.db.get(`SELECT 1 FROM observations o JOIN observation_work_metadata m ON m.observation_id=o.id
+        WHERE ${linkedWhere} AND o.rowid > ? LIMIT 1`, [high,from,to,from,to,position.after]);
+    }
+    if (!more) {
+      // Every legacy (untyped) observation of the interval, as a title stub with its version hash (whole text via details).
+      const rows = this.db.all(`SELECT o.*,o.rowid AS position,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS},
+          (SELECT r.observation_id FROM legacy_compaction_links l JOIN task_results r ON r.id=l.task_result_id
+            WHERE l.legacy_observation_id=o.id AND r.observation_id IS NOT NULL LIMIT 1) AS compacted_into
+        FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+        WHERE ${where} AND m.record_kind IS NULL AND o.rowid > ? ORDER BY o.rowid LIMIT 40`, [high,from,to,position.legacyAfter]);
+      for (const row of rows) {
+        if (!add('legacy_items', legacyStub(row))) break;
+        position.legacyAfter = row.position;
+      }
+      more = !!this.db.get(`SELECT 1 FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+        WHERE ${where} AND m.record_kind IS NULL AND o.rowid > ? LIMIT 1`, [high,from,to,position.legacyAfter]);
+    }
+    if (!more) {
+      // Daily model summaries of the local days this interval touches: routing clues, read with work-digest.
+      const digests = this.db.all(`SELECT id,project_path,local_date,status,source_count,digest_json FROM daily_memory_digests
+        WHERE local_date BETWEEN date(?, '-1 day') AND date(?, '+1 day') ORDER BY local_date,project_path,id LIMIT 50 OFFSET ?`,
+        [from,to,position.digests]);
+      for (const d of digests) {
+        if (!add('daily_digests', { id: d.id, project_path: d.project_path, local_date: d.local_date, status: d.status,
+          source_count: d.source_count, sha256: createHash('sha256').update(String(d.digest_json ?? ''), 'utf8').digest('hex') })) break;
+        position.digests++;
+      }
+      more = !!this.db.get(`SELECT 1 FROM daily_memory_digests WHERE local_date BETWEEN date(?, '-1 day') AND date(?, '+1 day')
+        LIMIT 1 OFFSET ?`, [from,to,position.digests]);
+    }
+    if (more) payload.next_cursor = Buffer.from(JSON.stringify(position)).toString('base64url');
+    if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > 12 * 1024
+        || (more && !payload.projects.length && !payload.memories.length && !payload.legacy_items.length && !payload.daily_digests.length))
+      throw new Error('Overview routing metadata exceeds page budget; source requires inspection');
+    return payload;
   }
 
   // Get project timeline (chronological observations)
@@ -727,6 +957,14 @@ export class DatabaseManager {
   }
 
   // Get multiple observations by their IDs
+  /** Overview version hash of one memory, computed from the raw row exactly like getWorkOverview. */
+  public reviewHashById(id: string): string | null {
+    if (!this.db) throw new Error('Database not initialized');
+    const row = this.db.get(`SELECT o.*,m.record_kind,m.source_kind,${EVIDENCE_LINK_COLUMNS} FROM observations o
+      LEFT JOIN observation_work_metadata m ON m.observation_id=o.id WHERE o.id=?`, [id]);
+    return row ? reviewItemHash(row) : null;
+  }
+
   public async getObservationsByIds(ids: string[]): Promise<Observation[]> {
     if (!this.db) throw new Error('Database not initialized');
     if (ids.length === 0) return [];
@@ -1768,6 +2006,167 @@ export class DatabaseManager {
       .filter((r) => r.hybrid_score > 0.01 || ftsRows.length === 0)
       .sort((a, b) => b.hybrid_score - a.hybrid_score)
       .slice(0, limit);
+  }
+
+  // Additive-only tables for rule routing, task consolidation and review reads.
+  // Nothing here deletes or rewrites existing rows; there is no TTL cleanup.
+  private async ensureTaskTables(): Promise<void> {
+    const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
+      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'duplicate_flags'];
+    // Quick-skip only when the stored schema revision is current AND every table and index exists. Any change to the
+    // block below must bump TASK_SCHEMA_REVISION, so a database from an older revision always runs the (idempotent) upgrade.
+    const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open', 'idx_task_results_task',
+      'idx_observation_content_hash', 'idx_review_runs_interval'];
+    const have = this.db.all(`SELECT name FROM sqlite_master WHERE type IN ('table','index') AND name IN (${[...wanted, ...indexes].map(() => '?').join(',')})`,
+      [...wanted, ...indexes]);
+    const revision = this.columnsOf('task_schema_meta').size
+      ? Number(this.db.get(`SELECT value FROM task_schema_meta WHERE key='revision'`)?.value || 0) : 0;
+    if (revision === TASK_SCHEMA_REVISION && have.length === wanted.length + indexes.length && !this.taskTablesNeedMigration()) return;
+    await this.write(() => {
+      this.migrateTaskTablesFromV1();
+      this.repairV1TruncationFlags();
+      this.db.run(`CREATE TABLE IF NOT EXISTS tool_evidence (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL, success INTEGER NOT NULL, route_reason TEXT NOT NULL,
+        input TEXT NOT NULL, output TEXT NOT NULL, input_bytes INTEGER NOT NULL, output_bytes INTEGER NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0, source_sha256 TEXT NOT NULL, task_id TEXT, received_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_tool_evidence_session ON tool_evidence(session_id, task_id, received_ms)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_tool_evidence_task ON tool_evidence(task_id)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_event_buffer (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL, success INTEGER NOT NULL, input TEXT NOT NULL, output TEXT NOT NULL,
+        incomplete INTEGER NOT NULL DEFAULT 0, task_result_id TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, received_ms INTEGER NOT NULL)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_event_buffer_open ON task_event_buffer(session_id, task_result_id, received_ms)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_results (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, project_path TEXT NOT NULL,
+        agent_id TEXT NOT NULL, segment_index INTEGER NOT NULL, segment_count INTEGER NOT NULL,
+        event_count INTEGER NOT NULL, source_ids TEXT NOT NULL, trigger TEXT NOT NULL, status TEXT NOT NULL,
+        observation_id TEXT, content_sha256 TEXT, llm_calls INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+        source_kind TEXT NOT NULL DEFAULT 'task', evidence_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(task_id, segment_index))`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_attempts (
+        task_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+        updated_ms INTEGER NOT NULL)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_results_task ON task_results(task_id, segment_index)`);
+      // Whole-task completion marker (additive). Tasks already finished by an earlier revision are backfilled
+      // from task_results that have no frozen rows left, so they are not re-run.
+      const hadCompletions = this.columnsOf('task_completions').size > 0;
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_completions (task_id TEXT PRIMARY KEY, completed_ms INTEGER NOT NULL)`);
+      if (!hadCompletions) this.db.run(`INSERT OR IGNORE INTO task_completions (task_id, completed_ms)
+        SELECT DISTINCT r.task_id, 0 FROM task_results r WHERE NOT EXISTS
+          (SELECT 1 FROM task_event_buffer b WHERE b.task_result_id = 'task:' || r.task_id)`);
+      // Duplicate-looking summaries are linked and flagged for a human; never deleted automatically.
+      this.db.run(`CREATE TABLE IF NOT EXISTS duplicate_flags (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, observation_id TEXT NOT NULL, matched_sha256 TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'needs_confirmation', created_ms INTEGER NOT NULL)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS observation_content_hashes (
+        observation_id TEXT PRIMARY KEY, project_path TEXT NOT NULL, sha256 TEXT NOT NULL)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_observation_content_hash ON observation_content_hashes(project_path, sha256)`);
+      // Revision 10 (additive): hash version (existing rows are v1, case-insensitive) and a flag reason.
+      if (!this.columnsOf('observation_content_hashes').has('hash_version'))
+        this.db.run(`ALTER TABLE observation_content_hashes ADD COLUMN hash_version INTEGER NOT NULL DEFAULT 1`);
+      if (!this.columnsOf('duplicate_flags').has('reason')) this.db.run(`ALTER TABLE duplicate_flags ADD COLUMN reason TEXT`);
+      // content_hash_claims (f2afea2 only) is no longer used; an existing table is left in place untouched.
+      this.db.run(`CREATE TABLE IF NOT EXISTS review_reads (
+        reader TEXT NOT NULL, item_id TEXT NOT NULL, sha256 TEXT NOT NULL, run_id TEXT,
+        read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(reader, item_id))`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS review_runs (
+        run_id TEXT PRIMARY KEY, reader TEXT NOT NULL, since TEXT NOT NULL, until TEXT NOT NULL,
+        cursor TEXT, status TEXT NOT NULL, metrics_json TEXT,
+        started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_review_runs_interval ON review_runs(reader, since, until, status)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS legacy_compaction_links (
+        legacy_observation_id TEXT PRIMARY KEY, task_result_id TEXT NOT NULL)`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+      this.db.run(`INSERT INTO task_schema_meta (key, value) VALUES ('revision', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+        [String(TASK_SCHEMA_REVISION)]);
+    });
+  }
+
+  private columnsOf(table: string): Set<string> {
+    return new Set(this.db.all(`PRAGMA table_info(${table})`).map((c: any) => c.name));
+  }
+
+  private taskTablesNeedMigration(): boolean {
+    const evidence = this.columnsOf('tool_evidence');
+    const results = this.columnsOf('task_results');
+    const hashes = this.columnsOf('observation_content_hashes'); const flags = this.columnsOf('duplicate_flags');
+    return (evidence.size > 0 && !evidence.has('task_id')) || (results.size > 0 && !results.has('evidence_count'))
+      || (hashes.size > 0 && !hashes.has('hash_version')) || (flags.size > 0 && !flags.has('reason'));
+  }
+
+  /**
+   * Explicit, additive migration for databases created by the first PR #3 revision (f28a49d).
+   * tool_evidence v1 (input_head/output_head NOT NULL, no task_id) is renamed to tool_evidence_v1 and kept
+   * intact; its rows are copied into the new table. task_results gains evidence_count and a unique
+   * (task_id, segment_index) index. Nothing is deleted.
+   */
+  /**
+   * Revision 11 repair (idempotent, flags only): databases migrated from v1 before the byte-length fix compared UTF-8
+   * byte counts with character counts, so complete non-ASCII evidence was flagged truncated. Clear the flag only for
+   * rows whose kept v1 source shows the full text was stored and whose migrated text is still that exact text.
+   * No evidence text is changed and nothing is deleted; really cut rows keep truncated=1.
+   */
+  private repairV1TruncationFlags(): void {
+    if (!this.columnsOf('tool_evidence').has('truncated')) return;
+    const backups = this.db.all(`SELECT name FROM sqlite_master WHERE type='table' AND (name='tool_evidence_v1' OR name LIKE 'tool_evidence_v1_%')`);
+    let repaired = 0;
+    for (const { name } of backups) {
+      if (!/^tool_evidence_v1(_\d+)?$/.test(name)) continue;
+      const before = Number(this.db.get(`SELECT COUNT(*) AS n FROM tool_evidence WHERE truncated=1`)?.n || 0);
+      this.db.run(`UPDATE tool_evidence SET truncated=0 WHERE truncated=1 AND id IN (
+        SELECT b.id FROM ${name} b WHERE b.id = tool_evidence.id
+          AND b.input_bytes <= length(CAST(b.input_head AS BLOB)) AND b.output_bytes <= length(CAST(b.output_head AS BLOB))
+          AND tool_evidence.input = b.input_head AND tool_evidence.output = b.output_head)`);
+      repaired += before - Number(this.db.get(`SELECT COUNT(*) AS n FROM tool_evidence WHERE truncated=1`)?.n || 0);
+    }
+    if (repaired) console.error(`[Memory] cleared a wrong truncated flag on ${repaired} complete v1 evidence row(s); evidence unchanged.`);
+  }
+
+  private migrateTaskTablesFromV1(): void {
+    const evidence = this.columnsOf('tool_evidence');
+    if (evidence.size > 0 && !evidence.has('task_id')) {
+      const backup = this.columnsOf('tool_evidence_v1').size ? `tool_evidence_v1_${Date.now()}` : 'tool_evidence_v1';
+      this.db.run(`DROP INDEX IF EXISTS idx_tool_evidence_session`);
+      this.db.run(`ALTER TABLE tool_evidence RENAME TO ${backup}`);
+      this.db.run(`CREATE TABLE tool_evidence (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_path TEXT NOT NULL, agent_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL, success INTEGER NOT NULL, route_reason TEXT NOT NULL,
+        input TEXT NOT NULL, output TEXT NOT NULL, input_bytes INTEGER NOT NULL, output_bytes INTEGER NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0, source_sha256 TEXT NOT NULL, task_id TEXT, received_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      this.db.run(`INSERT INTO tool_evidence (id,session_id,project_path,agent_id,tool_name,success,route_reason,input,output,
+        input_bytes,output_bytes,truncated,source_sha256,task_id,received_ms,created_at)
+        SELECT id,session_id,project_path,agent_id,tool_name,success,route_reason,input_head,output_head,input_bytes,output_bytes,
+        CASE WHEN input_bytes > length(CAST(input_head AS BLOB)) OR output_bytes > length(CAST(output_head AS BLOB)) THEN 1 ELSE 0 END,
+        source_sha256,NULL,CAST(strftime('%s', created_at) AS INTEGER) * 1000,created_at FROM ${backup}`);
+    }
+    const results = this.columnsOf('task_results');
+    if (results.size > 0 && !results.has('evidence_count')) {
+      this.db.run(`ALTER TABLE task_results ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (results.size > 0) {
+      const dupes = this.db.get(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM task_results GROUP BY task_id, segment_index HAVING COUNT(*) > 1)`);
+      if (!dupes?.n) this.db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_task_results_segment ON task_results(task_id, segment_index)`);
+      else console.error('[Memory] task_results has duplicate (task_id, segment_index) rows; unique index not created, rows kept.');
+    }
+  }
+
+  /** Read-only SQL access for additive task/review stores. */
+  public sqlAll(sql: string, values: any[] = []): any[] {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.db.all(sql, values);
+  }
+  public sqlGet(sql: string, values: any[] = []): any {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.db.get(sql, values);
+  }
+  /** Serialized write transaction for additive task/review stores. */
+  public async sqlWrite<T>(operation: (db: { run: (sql: string, values?: any[]) => any; get: (sql: string, values?: any[]) => any; all: (sql: string, values?: any[]) => any[] }) => T): Promise<T> {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.write(() => operation(this.db));
   }
 
   public close(): void {

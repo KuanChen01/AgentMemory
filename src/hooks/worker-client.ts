@@ -207,6 +207,16 @@ async function ensureWorkerAvailable(port: string | number): Promise<boolean> {
   }
 }
 
+/**
+ * Set by automated jobs that must not be captured as work (the Obsidian daily review launcher sets
+ * AGENTMEMORY_SKIP_CAPTURE=daily_review). Every hook goes through fetchAgentMemoryWorker, so one check here keeps
+ * the job's own tool events, prompts and session starts out of the memory pipeline for all agents.
+ */
+export function captureSuppressed(env: NodeJS.ProcessEnv = process.env): string | null {
+  const value = String(env.AGENTMEMORY_SKIP_CAPTURE || '').trim();
+  return value && !/^(0|false|no|off)$/i.test(value) ? value : null;
+}
+
 export async function fetchAgentMemoryWorker(
   port: string | number,
   endpoint: string,
@@ -214,6 +224,7 @@ export async function fetchAgentMemoryWorker(
   timeoutMs: number = resolveHookTimeoutMs(),
   autoStart: boolean = true
 ): Promise<Response | null> {
+  if (captureSuppressed()) return null;   // behaves like an unavailable worker: hooks fail open, nothing is sent
   const firstAttempt = await attemptWorkerFetch(port, endpoint, init, timeoutMs);
   if (firstAttempt.response || !firstAttempt.unavailable || !autoStart || !shouldAutoStartWorker()) {
     return firstAttempt.response;

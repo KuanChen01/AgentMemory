@@ -50,7 +50,9 @@ async function main() {
         tool_name: toolLog.toolName,
         input: toolLog.input,
         output: toolLog.output,
-        success: toolLog.success
+        success: toolLog.success,
+        // Insert-once id (when Codex provides one): a retried hook delivery is stored once.
+        call_id: payload.call_id ?? payload.tool_use_id ?? payload.toolUseId ?? undefined,
       })
     });
     if (stuckQuery) {

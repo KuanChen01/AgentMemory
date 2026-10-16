@@ -39,3 +39,10 @@ test('Codex PostToolUse parser preserves failures and legacy output fields', () 
   assert.equal(legacy.output, 'legacy output');
   assert.equal(legacy.success, true);
 });
+
+test('MCP errors override outer success without interpreting ordinary text', () => {
+  for (const tool_response of [{isError:true,content:[]},{exit_code:2},{success:false},{status:'failed'}])
+    assert.equal(parseCodexPostToolPayload({success:true,tool_response}).success,false);
+  assert.equal(parseCodexPostToolPayload({tool_response:{isError:false,content:[]}}).success,true);
+  assert.equal(parseCodexPostToolPayload({tool_response:'Documentation example: isError:true'}).success,true);
+});

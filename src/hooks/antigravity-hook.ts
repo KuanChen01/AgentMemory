@@ -7,7 +7,7 @@ import {
   renderProjectContextView,
 } from '../services/context-view';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
-import { fetchAgentMemoryWorker } from './worker-client';
+import { captureSuppressed, fetchAgentMemoryWorker } from './worker-client';
 import {
   beginRecallTurn, clearRecallSession, hasRecallTurn, latestAntigravityPrompt, markStuckRecall, noteToolFailure,
   recallForTask, setPreparedRecall, takePreparedRecall,
@@ -335,6 +335,11 @@ async function handleStop(payload: AntigravityHookPayload) {
 async function main() {
   const mode = String(process.argv[2] || '') as HookMode;
   const stdin = await readStdin();
+  if (captureSuppressed()) {
+    // e.g. the daily review's own agy run: no capture, no recall injection, no session close.
+    jsonOutput({});
+    return;
+  }
   let payload: AntigravityHookPayload = {};
   if (stdin.trim()) {
     try {

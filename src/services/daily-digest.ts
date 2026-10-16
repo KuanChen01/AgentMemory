@@ -125,6 +125,14 @@ export async function runDailyMemoryDigest(
     return { digest, localDate, selection };
   }
 
+  // Hash dedup: identical sources + prompt version already summarized successfully
+  // means another model call cannot add information.
+  const existing = await input.dbManager.getDailyMemoryDigest({ projectPath: input.projectPath, localDate }).catch(() => null);
+  if (existing && existing.status === 'success' && existing.prompt_version === DAILY_DIGEST_PROMPT_VERSION
+      && [...existing.source_observation_ids].sort().join(',') === [...selectedIds].sort().join(',')) {
+    return { digest: existing, localDate, selection };
+  }
+
   try {
     const request = buildDailyDigestChatRequest(
       input.projectPath,

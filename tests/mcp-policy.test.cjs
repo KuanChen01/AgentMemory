@@ -1,3 +1,4 @@
+const { skipShell, skipDrive } = require('./helpers/platform.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -155,7 +156,7 @@ test('MCP read tools return a disabled message when read policy is off', async (
   });
 });
 
-test('MCP memory_timeline exposes bounded pages', async () => {
+test('MCP memory_timeline exposes bounded pages', { skip: skipDrive }, async () => {
   await withSeededDatabase(async (db, dbPath) => {
     await db.saveObservation({
       id: randomUUID(), session_id: randomUUID(), project_path: 'E:/Repo/A', agent_id: 'grok',

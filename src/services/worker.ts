@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createHash } from 'crypto';
 import {
   DailyDigestSchedulerConfig,
   DatabaseManager,
@@ -48,7 +49,13 @@ import { buildReleaseManifest } from './release';
 import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger, llmBudgetOptions, recordLlmUsage } from './llm-budget';
-import { normalizeToolLogText, skipRawToolLog } from './tool-log-policy';
+import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
+import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
+import { classifyToolEvent } from './event-classifier';
+import {
+  bufferEvent, consolidateTask, freezeOpenTask, frozenTasks, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
+  stuckTaskCount, taskIdleMs, taskRetryMs, TaskTrigger,
+} from './task-consolidation';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -85,6 +92,53 @@ interface QueuedToolLog {
 
 const logQueue: QueuedToolLog[] = [];
 let isProcessingQueue = false;
+// Task-level consolidation is the default; AGENTMEM_TASK_CONSOLIDATION=false keeps the
+// legacy per-event path (still behind the rule router) for compatibility testing only.
+const taskConsolidationEnabled = () => process.env.AGENTMEM_TASK_CONSOLIDATION !== 'false';
+let activeConsolidations = 0;
+const consolidationChain = new Map<string, Promise<unknown>>();
+const lastAttemptMs = new Map<string, number>();
+// Each task's event set is frozen when its boundary arrives; only that frozen task is consolidated.
+function scheduleTask(sessionId: string, taskId: string, trigger: TaskTrigger): Promise<unknown> {
+  activeConsolidations++;
+  lastAttemptMs.set(taskId, Date.now());
+  const previous = consolidationChain.get(sessionId) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+      // Writes disabled: never call the model or save; the frozen task and its events stay for later.
+      if (!(await isWriteEnabled())) { console.log(`[Task] Writes disabled; task ${taskId} of ${sessionId} kept for later`); return { task_id: null } as any; }
+      return consolidateTask(dbManager, taskId, trigger);
+    })
+    .then(result => {
+      if (result.task_id) console.log(`[Task] Consolidated task ${taskId} of ${sessionId} (${trigger}): ${result.segments} segment(s), ${result.llm_calls} LLM call(s)`);
+      return result;
+    })
+    .catch(err => console.error(`[Task] Consolidation failed for task ${taskId} (${sessionId}); kept frozen for retry: ${err.message}`))
+    .finally(() => { activeConsolidations--; if (consolidationChain.get(sessionId) === next) consolidationChain.delete(sessionId); });
+  consolidationChain.set(sessionId, next);
+  return next;
+}
+async function closeTask(sessionId: string, trigger: TaskTrigger): Promise<string | null> {
+  const taskId = await freezeOpenTask(dbManager, sessionId);
+  if (taskId) void scheduleTask(sessionId, taskId, trigger);
+  return taskId;
+}
+function retryFrozenTasks(force = false): Promise<unknown>[] {
+  const now = Date.now(); const jobs: Promise<unknown>[] = [];
+  for (const t of frozenTasks(dbManager)) {
+    if (isTaskInFlight(t.task_id)) continue;
+    if (!force && now - (lastAttemptMs.get(t.task_id) || 0) < taskRetryMs()) continue;
+    jobs.push(scheduleTask(t.session_id, t.task_id, 'manual'));
+  }
+  return jobs;
+}
+async function sweepIdleTasks() {
+  if (!taskConsolidationEnabled()) return;
+  try {
+    if (!(await isWriteEnabled())) return;   // nothing is frozen, consolidated or retried while writes are disabled
+    for (const id of openSessionsIdleSince(dbManager, Date.now() - taskIdleMs())) await closeTask(id, 'idle_timeout');
+    retryFrozenTasks();
+  } catch (err: any) { console.error(`[Task] Idle sweep failed: ${err.message}`); }
+}
 const ADMIN_HTML = renderAdminPageHtml(5000);
 
 function writeWorkerRuntimeStatus(state: 'running' | 'stopped', exitCode?: number) {
@@ -326,6 +380,12 @@ async function startServer() {
   await dbManager.initialize();
   console.log('AgentMemory SQLite database initialized.');
   applyDailyDigestSchedulerConfig(await dbManager.getDailyDigestSchedulerConfig());
+  const recovered = await recoverInterruptedClaims(dbManager);
+  if (recovered) console.log(`[Task] Restored ${recovered} interrupted buffered event(s)`);
+  const sweepMs = Math.max(1000, Math.min(60_000, Math.floor(taskIdleMs() / 4)));
+  setInterval(() => { void sweepIdleTasks(); }, Number(process.env.AGENTMEM_TASK_SWEEP_MS) || sweepMs).unref();
+  // Frozen tasks left by a previous process are retried promptly.
+  for (const t of frozenTasks(dbManager)) lastAttemptMs.set(t.task_id, 0);
 
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(PORT, () => {
@@ -358,7 +418,13 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
     res.json({
       policy,
       database: dbManager.getDatabaseDiagnostics(),
-      queue: { pending: logQueue.length, processing: isProcessingQueue },
+      queue: { pending: logQueue.length, processing: isProcessingQueue || activeConsolidations > 0,
+        consolidating: activeConsolidations,
+        open_task_events: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM task_event_buffer WHERE task_result_id IS NULL OR task_result_id LIKE 'task:%'`).n,
+        stuck_tasks: stuckTaskCount(dbManager),
+        duplicate_flags: dbManager.sqlGet(`SELECT COUNT(*) AS n FROM duplicate_flags WHERE status='needs_confirmation'`).n },
+      tasks: dbManager.sqlGet(`SELECT COUNT(DISTINCT task_id) AS tasks, COALESCE(SUM(llm_calls),0) AS llm_calls,
+        (SELECT COUNT(*) FROM tool_evidence) AS evidence_rows FROM task_results`),
       stats: {
         observations,
         sessions,
@@ -410,6 +476,136 @@ app.get('/admin/api/records', adminOnlyGuard, async (req, res) => {
     console.error('Error fetching admin records:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/admin/api/work-overview', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    res.json(await dbManager.getWorkOverview(String(req.query.since || ''), String(req.query.until || ''),
+      normalizeOptionalString(req.query.cursor), normalizeOptionalString(req.query.reader)));
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+app.get('/admin/api/work-details', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    const id = String(req.query.id || '');
+    const offset = Number(req.query.offset || 0);
+    if (!id || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Detail requires an ID and nonnegative byte offset');
+    const rows = await dbManager.getObservationsByIds([id]);
+    if (rows.length !== 1) return res.status(404).json({ error: 'Unknown memory ID' });
+    const data = Buffer.from(JSON.stringify(toAdminObservation(rows[0])), 'utf8');
+    if (offset > data.length || (offset < data.length && (data[offset] & 0xc0) === 0x80)) throw new Error('Offset outside a UTF-8 boundary');
+    // Whole memory in one response (bounded at 256 KiB); continuation offsets only for pathological sizes.
+    let stop = Math.min(data.length, offset + 256 * 1024);
+    while (stop < data.length && (data[stop] & 0xc0) === 0x80) stop--;
+    // Structured attribution on EVERY response (first and continuation, any size): a reader never parses it out of text.
+    res.json({ id, offset, total_bytes: data.length, project_path: rows[0].project_path, agent_id: rows[0].agent_id,
+      created_at: rows[0].created_at, title: String(rows[0].title ?? '').slice(0, 200), text: data.subarray(offset, stop).toString('utf8'),
+      next_offset: stop < data.length ? stop : null,
+      // Same version identity as the overview item, so a reader can tell that what it read is what it acknowledges.
+      sha256: dbManager.reviewHashById(id), content_sha256: createHash('sha256').update(data).digest('hex') });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// One daily model summary (routing clue for a review): whole digest JSON with its version hash.
+app.get('/admin/api/work-digest', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    const id = String(req.query.id || '');
+    if (!id) throw new Error('Digest requires an ID');
+    const row = dbManager.sqlGet('SELECT id,project_path,local_date,status,source_count,source_observation_ids,model,generated_at,digest_json FROM daily_memory_digests WHERE id=?', [id]);
+    if (!row) return res.status(404).json({ error: 'Unknown digest ID' });
+    const text = String(row.digest_json ?? '');
+    if (Buffer.byteLength(text, 'utf8') > 256 * 1024) throw new Error('Digest exceeds one response; inspect the source');
+    let sources: string[] = [];
+    try { sources = JSON.parse(row.source_observation_ids || '[]'); } catch { sources = []; }
+    res.json({ id: row.id, project_path: row.project_path, local_date: row.local_date, status: row.status,
+      source_count: row.source_count, source_observation_ids: sources, model: row.model, generated_at: row.generated_at,
+      text, sha256: createHash('sha256').update(text, 'utf8').digest('hex') });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// Evidence of a task result: the bounded read-only inspections linked to the task (paged).
+app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) return res.status(503).json({ disabled: true, error: READ_DISABLED_MESSAGE });
+    const id = String(req.query.id || ''); const offset = Number(req.query.offset || 0);
+    if (!id || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Evidence requires an observation ID and nonnegative item offset');
+    // Every task linked to this memory (deduplicated summaries can be shared by several tasks).
+    const tasks = dbManager.sqlAll('SELECT DISTINCT task_id FROM task_results WHERE observation_id=? ORDER BY rowid', [id]).map((t: any) => t.task_id);
+    if (!tasks.length) return res.status(404).json({ error: 'No task evidence for this memory' });
+    const marks = tasks.map(() => '?').join(',');
+    // Buffered tool calls of every linked task plus legacy (read-only) evidence rows of earlier revisions.
+    const rows = dbManager.sqlAll(`SELECT * FROM (
+        SELECT b.id, r.task_id, b.tool_name, b.success, b.input, b.output, length(b.input) AS input_bytes, length(b.output) AS output_bytes,
+          b.incomplete AS truncated, NULL AS source_sha256, b.created_at, b.received_ms FROM task_event_buffer b
+          JOIN task_results r ON r.id = b.task_result_id WHERE r.task_id IN (${marks})
+        UNION ALL SELECT id, task_id, tool_name, success, input, output, input_bytes, output_bytes, truncated, source_sha256, created_at, received_ms
+          FROM tool_evidence WHERE task_id IN (${marks}))
+      ORDER BY received_ms, id LIMIT 21 OFFSET ?`, [...tasks, ...tasks, offset]);
+    const task = { task_id: tasks[0] };
+    const items: any[] = []; let bytes = 0;
+    for (const row of rows.slice(0, 20)) {
+      const size = Buffer.byteLength(JSON.stringify(row));
+      if (items.length && bytes + size > 48 * 1024) break;
+      items.push({ ...row, success: !!row.success, truncated: !!row.truncated }); bytes += size;
+    }
+    const more = items.length < rows.length;
+    res.json({ id, task_id: task.task_id, task_ids: tasks, offset, items, next_offset: more ? offset + items.length : null });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// Review reads: a reader acknowledges the exact sha256 it verified, so unchanged
+// items are never sent to its model again. Changed content (new sha) is re-sent.
+app.post('/admin/api/review-reads', adminOnlyGuard, async (req, res) => {
+  try {
+    const { reader, run_id, items } = req.body || {};
+    if (typeof reader !== 'string' || !reader.trim() || !Array.isArray(items)) throw new Error('reader and items are required');
+    const valid = items.filter((i: any) => typeof i?.id === 'string' && /^[0-9a-f]{64}$/.test(String(i?.sha256)));
+    await dbManager.sqlWrite(sql => { for (const i of valid) sql.run(`INSERT INTO review_reads (reader,item_id,sha256,run_id)
+      VALUES (?,?,?,?) ON CONFLICT(reader,item_id) DO UPDATE SET sha256=excluded.sha256, run_id=excluded.run_id, read_at=CURRENT_TIMESTAMP`,
+      [reader, i.id, i.sha256, run_id || null]); });
+    res.json({ success: true, recorded: valid.length, rejected: items.length - valid.length });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// Resumable review runs keyed by reader + interval; the cursor is persisted per page.
+app.post('/admin/api/review-runs', adminOnlyGuard, async (req, res) => {
+  try {
+    const { reader, since, until } = req.body || {};
+    if (![reader, since, until].every(v => typeof v === 'string' && v.trim())) throw new Error('reader, since and until are required');
+    const existing = dbManager.sqlGet(`SELECT * FROM review_runs WHERE reader=? AND since=? AND until=? AND status IN ('running','incomplete')
+      ORDER BY started_at DESC LIMIT 1`, [reader, since, until]);
+    if (existing) return res.json({ resumed: true, run: existing });
+    const run_id = uuidv4();
+    await dbManager.sqlWrite(sql => sql.run(`INSERT INTO review_runs (run_id,reader,since,until,status) VALUES (?,?,?,?, 'running')`,
+      [run_id, reader, since, until]));
+    res.json({ resumed: false, run: dbManager.sqlGet('SELECT * FROM review_runs WHERE run_id=?', [run_id]) });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+app.post('/admin/api/review-runs/progress', adminOnlyGuard, async (req, res) => {
+  try {
+    const { run_id, cursor, status, metrics } = req.body || {};
+    if (!['running', 'incomplete', 'complete'].includes(status)) throw new Error('status must be running, incomplete or complete');
+    const changed = await dbManager.sqlWrite(sql => sql.run(`UPDATE review_runs SET cursor=?, status=?, metrics_json=?, updated_at=CURRENT_TIMESTAMP
+      WHERE run_id=?`, [cursor ?? null, status, metrics ? JSON.stringify(metrics) : null, run_id]).changes);
+    if (!changed) return res.status(404).json({ error: 'Unknown review run' });
+    res.json({ success: true });
+  } catch (error: any) { res.status(400).json({ error: error.message }); }
+});
+
+// Manually close open tasks (all sessions or one); used by tests and the admin UI.
+app.post('/admin/api/tasks/flush', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isWriteEnabled())) return sendWriteDisabled(res);
+    const only = normalizeOptionalString(req.body?.session_id);
+    const ids = only ? [only] : openSessionsIdleSince(dbManager, Number.MAX_SAFE_INTEGER);
+    for (const id of ids) await closeTask(id, 'manual');
+    const results = await Promise.all([...retryFrozenTasks(true), ...[...consolidationChain.values()]]);
+    res.json({ success: true, sessions: ids.length, results });
+  } catch (error: any) { res.status(500).json({ error: error.message }); }
 });
 
 app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
@@ -967,7 +1163,7 @@ app.post('/state', async (req, res) => {
 
 // 2. Start/Update Session
 app.post('/sessions', async (req, res) => {
-  const { id, project_path, agent_id, status } = req.body;
+  const { id, project_path, agent_id, status, purpose } = req.body;
   if (!id || !project_path || !agent_id) {
     return res.status(400).json({ error: 'Missing required session parameters' });
   }
@@ -982,12 +1178,12 @@ app.post('/sessions', async (req, res) => {
       id,
       project_path: normalizedPath,
       agent_id,
-      status: status || 'active'
+      status: status || 'active', purpose
     };
 
     await dbManager.saveSession(session);
     console.log(`[Session] Registered session ${id} for agent ${agent_id} on ${normalizedPath}`);
-    res.json({ success: true });
+    res.json({ success: true, purpose: await dbManager.getSessionPurpose(id) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1014,13 +1210,22 @@ app.post('/tools', async (req, res) => {
       tool_name,
       input: normalizeToolLogText(input),
       output: normalizeToolLogText(output),
-      success: !!success,
+      success: toolResponseSucceeded(output, !!success),
       timestamp: Date.now()
     };
 
-    const skipReason = skipRawToolLog(logEntry);
-    if (skipReason) {
-      return res.json({ success: true, skipped: true, reason: skipReason, queueLength: logQueue.length });
+    // Rule routing happens before any model call or embedding.
+    const decision = classifyToolEvent(logEntry, await dbManager.getSessionPurpose(session_id));
+    if (decision.route === 'drop') {
+      return res.json({ success: true, skipped: true, route: 'drop', reason: decision.reason, queueLength: logQueue.length });
+    }
+    if (taskConsolidationEnabled()) {
+      // Hooks are the sole capture source; every tool event joins the session's open task.
+      // Insert-once by tool call id when the hook provides one.
+      const callId = normalizeOptionalString(req.body?.call_id ?? req.body?.tool_use_id ?? req.body?.id);
+      if (callId) logEntry.id = `hook:${session_id}:${callId}`;
+      const inserted = await bufferEvent(dbManager, logEntry);
+      return res.json({ success: true, route: 'task', buffered: inserted, duplicate: !inserted, queueLength: logQueue.length });
     }
 
     logQueue.push(logEntry);
@@ -1031,6 +1236,22 @@ app.post('/tools', async (req, res) => {
   } catch (err: any) {
     console.error('Error ingesting tool log:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Unable to ingest tool log.' });
+  }
+});
+
+// 3b. Task boundary: the next user prompt closes the previous task of this session.
+app.post('/tasks/boundary', async (req, res) => {
+  const sessionId = normalizeOptionalString(req.body?.session_id);
+  if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
+  if (!(await isWriteEnabled())) return sendWriteDisabled(res);
+  // Freeze before responding: later events can never join this task.
+  try {
+    const taskId = taskConsolidationEnabled() ? await closeTask(sessionId, 'user_prompt') : null;
+    res.json({ success: true, scheduled: !!taskId, task_id: taskId });
+  } catch (err: any) {
+    // The task stays open (nothing was frozen) and is closed by the next boundary or the idle sweep.
+    console.error(`[Task] Task boundary failed for ${sessionId}; task kept open for retry: ${err.message}`);
+    if (!res.headersSent) res.status(500).json({ error: 'Task boundary failed; task kept for retry.' });
   }
 });
 
@@ -1051,6 +1272,7 @@ app.post('/sessions/close', async (req, res) => {
       status: 'completed'
     });
     console.log(`[Session] Closed session ${id}`);
+    if (taskConsolidationEnabled()) await closeTask(String(id), 'session_close');
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1184,6 +1406,7 @@ async function handleSummarization(log: QueuedToolLog) {
     return;
   }
 
+  try {
   const requestUrl = `${rawApiUrl.trim().replace(/\/+$/, '')}/chat/completions`;
 
   // Parse custom headers if configured (will fail loudly if invalid JSON)
@@ -1203,6 +1426,7 @@ async function handleSummarization(log: QueuedToolLog) {
 
   // Build the summarization prompt
   const systemPrompt = `You are a developer memory synthesis assistant.
+${WORK_MEMORY_PROMPT}
 Your task is to analyze a raw tool execution log and compress it into a clean, structured JSON "Observation".
 Extract the architectural decisions, bug fixes, files read/modified, and key learnings.
 Keep the narrative under 120 words, facts and concepts to at most 5 each, and file lists to at most 10 each.
@@ -1211,6 +1435,7 @@ Only record evidence present in the log. Do not infer completed changes from int
 You MUST respond with a valid JSON object ONLY. Do not write any markdown blocks or reasoning steps.
 JSON Schema:
 {
+  "record_kind": "outcome | context | skip",
   "title": "Short title describing the main action or fix",
   "narrative": "A descriptive paragraph explaining the context, problem encountered, reasoning, and resolution.",
   "facts": ["Fact 1", "Fact 2"],
@@ -1219,19 +1444,22 @@ JSON Schema:
   "files_modified": ["file1.ts"]
 }`;
 
-  const userPrompt = `Tool Name: ${log.tool_name}
+  const inputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_INPUT_MAX_CHARS, 10000, 1000, 30000);
+  const outputLimit = boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_MAX_CHARS, 20000, 1000, 60000);
+  const incompleteSource = incompleteToolSource(log.input, log.output, inputLimit, outputLimit);
+  const userPrompt = `Session purpose: ${await dbManager.getSessionPurpose(log.session_id)}
+Tool Name: ${log.tool_name}
 Status: ${log.success ? 'Success' : 'Failure'}
 Project Location: ${log.project_path}
 Agent: ${log.agent_id}
 
 [TOOL INPUT]
-${boundToolText(log.input, boundedEnvInteger(process.env.AGENTMEM_TOOL_INPUT_MAX_CHARS, 10000, 1000, 30000))}
+${boundToolText(log.input, inputLimit)}
 
 [TOOL OUTPUT]
-${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_MAX_CHARS, 20000, 1000, 60000))}
+${boundToolText(log.output, outputLimit)}
 `;
 
-  try {
     const requestBody: any = {
       model: modelName,
       messages: [
@@ -1268,7 +1496,20 @@ ${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_M
     if (!content) throw new Error('Empty response from LLM API');
 
     // Resilient parsing of JSON content
-    const parsedObs = parseJSONContent(content);
+    const parsedObs = interpretWorkMemory(parseJSONContent(content), log.success);
+    if (parsedObs.skip && incompleteSource) {
+      parsedObs.skip = false;
+      parsedObs.kind = 'context';
+      parsedObs.title ||= `Incomplete source for ${log.tool_name}`;
+      parsedObs.narrative += '\nSource may have been abbreviated before synthesis; unshown content remains unknown. Inspect the original source before resolving value.';
+    }
+    if (parsedObs.skip) {
+      console.log(`[Memory] Skipped routine tool event ${log.id} before embedding/review`);
+      return;
+    }
+    if (!log.success) {
+      parsedObs.narrative += `\nObserved failed tool output (recovery evidence, not a verified diagnosis): ${boundToolText(log.output, 2000)}`;
+    }
 
     // Compute embedding for vector search
     const textToEmbed = `${parsedObs.title} ${parsedObs.narrative} ${parsedObs.facts.join(' ')} ${parsedObs.concepts.join(' ')}`;
@@ -1285,23 +1526,17 @@ ${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_M
       concepts: parsedObs.concepts || [],
       files_read: parsedObs.files_read || [],
       files_modified: parsedObs.files_modified || [],
-      embedding
+      embedding, record_kind: parsedObs.kind, source_kind: 'tool'
     };
 
-    const writeDecision = decideObservationWritePolicy({
-      observation,
-      source: 'tool_log',
-    });
-
-    if (writeDecision.action === 'skip') {
-      console.log(`[Memory] Skipped observation for session ${log.session_id}: ${writeDecision.reasons.join(' | ')}`);
-      return;
-    }
-
     await dbManager.saveObservation(observation);
-    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation);
+    // A post-review failure must not re-save an observation already captured.
+    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation).catch(err => {
+      console.error(`[Memory] Post-task review failed after capture: ${err.message}`);
+      return { review: null, decision: { reasons: ['Post-task review unavailable'] } };
+    });
     console.log(
-      `[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}" (${writeDecision.action})`
+      `[Memory] Successfully recorded observation for session ${log.session_id}: "${observation.title}" (${parsedObs.kind})`
     );
     if (postTaskResult.review) {
       console.log(
@@ -1321,40 +1556,30 @@ ${boundToolText(log.output, boundedEnvInteger(process.env.AGENTMEM_TOOL_OUTPUT_M
 
 // Fallback logic if LLM fails or API keys are missing
 async function saveMockObservation(log: QueuedToolLog, reason: string) {
-  // Without a summary, successful raw executions contain no extracted outcome
-  // or file evidence. A summarizer diagnostic must not promote them into memory.
-  if (log.success) return;
-
-  const textToEmbed = `Raw observation for ${log.tool_name}. ${reason}`;
-  const embedding = await getEmbedding(textToEmbed);
-  const failedOutput = log.output.trim().slice(0, 500);
+  // Capture failure is uncertainty, never proof that a successful event had no
+  // value. Keep bounded source evidence without another model/embedding call.
+  const kind = log.success ? 'context' : 'outcome';
 
   const observation: Observation = {
     id: log.id,
     session_id: log.session_id,
     project_path: log.project_path,
     agent_id: log.agent_id,
-    title: `Tool failure: ${log.tool_name}`,
-    narrative: `Tool execution failed while memory summarization was unavailable. ${reason}.${failedOutput ? ` Output: ${failedOutput}` : ''}`,
+    title: `${log.success ? 'Capture incomplete' : 'Tool failure'}: ${log.tool_name}`,
+    narrative: `Memory synthesis unavailable; outcome classification remains unknown. ${reason.slice(0, 500)}\nInput: ${boundToolText(log.input, 2000)}\nOutput: ${boundToolText(log.output, 4000)}`,
     facts: [`Executed ${log.tool_name}`, `Success status: ${log.success}`],
     concepts: ['tool_execution'],
     files_read: [],
     files_modified: [],
-    embedding
+    embedding: [], record_kind: kind, source_kind: 'tool'
   };
 
   const writeDecision = decideObservationWritePolicy({
     observation,
-    source: 'tool_log',
+    source: 'tool_log', classification: kind,
   });
   if (writeDecision.action !== 'skip') {
     await dbManager.saveObservation(observation);
-    const postTaskResult = await runAutomaticPostTaskReview(dbManager, observation);
-    if (postTaskResult.review) {
-      console.log(
-        `[Memory] Saved fallback post-task review for observation ${observation.id}: "${observation.title}"`
-      );
-    }
   }
 }
 

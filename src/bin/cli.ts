@@ -43,6 +43,10 @@ interface ParsedOptions {
   purgeAll?: boolean;
   setVersion?: string;
   strict?: boolean;
+  days?: number;
+  since?: string;
+  until?: string;
+  apply?: boolean;
 }
 
 function parseOptions(tokens: string[]): ParsedOptions {
@@ -89,6 +93,21 @@ function parseOptions(tokens: string[]): ParsedOptions {
           parsed.port = Number(nextToken);
         }
         index += 1;
+        break;
+      case '--days':
+        if (Number.isSafeInteger(Number(nextToken)) && Number(nextToken) > 0) parsed.days = Number(nextToken);
+        index += 1;
+        break;
+      case '--since':
+      case '--until': {
+        const at = new Date(String(nextToken || ''));
+        if (!nextToken || !Number.isFinite(at.getTime())) throw new Error(`${token} requires an ISO timestamp`);
+        parsed[token === '--since' ? 'since' : 'until'] = at.toISOString();
+        index += 1;
+        break;
+      }
+      case '--apply':
+        parsed.apply = true;
         break;
       case '--purge-all':
         parsed.purgeAll = true;
@@ -139,9 +158,24 @@ async function main() {
     case 'release-bump':
       bumpReleaseVersion(options);
       break;
+    case 'compact-legacy':
+      await runCompactLegacy(options);
+      break;
     default:
       printHelp();
   }
+}
+
+async function runCompactLegacy(options: ParsedOptions) {
+  const { DatabaseManager } = await import('../services/db');
+  const { compactLegacy } = await import('../services/task-consolidation');
+  const db = new DatabaseManager();
+  await db.initialize();
+  try {
+    const summary = await compactLegacy(db, { days: options.days ?? 7, apply: !!options.apply, since: options.since, until: options.until });
+    console.log(JSON.stringify(summary, null, 2));
+    if (!options.apply) console.log('Dry run only (default). Re-run with --apply to write task-level results; legacy rows are never deleted.');
+  } finally { db.close(); }
 }
 
 function printHelp() {
@@ -158,6 +192,7 @@ Usage:
   agentmem release-manifest [--json]
   agentmem release-plan --next <patch|minor|major>
   agentmem release-bump (--next <patch|minor|major> | --set-version <x.y.z>)
+  agentmem compact-legacy [--days 7 | --since ISO [--until ISO]] [--apply]   (dry-run by default; never deletes or edits rows)
 `);
 }
 
