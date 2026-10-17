@@ -37,7 +37,7 @@ function firstJsonObject(text: string): string | null {
 
 export function parseJsonContent(rawText: string): any {
   const trimmed = String(rawText ?? '').trim();
-  const fenced = trimmed.match(/^```[a-zA-Z0-9_-]*\s*\n?([\s\S]*?)\n?\s*```$/);
+  const fenced = trimmed.match(/^```[a-zA-Z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```/);
   const body = fenced ? fenced[1].trim() : trimmed;
   try { return JSON.parse(body); } catch {
     const object = firstJsonObject(body);
@@ -49,7 +49,8 @@ export function parseJsonContent(rawText: string): any {
 const TRANSIENT_CODES = /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|UND_ERR_\w+)$/;
 export function isTransientFetchError(error: any): boolean {
   for (let e = error, depth = 0; e && depth < 4; e = e.cause, depth++) {
-    if (e.name === 'TimeoutError' || e.name === 'AbortError') return true;
+    // A timed-out attempt is not retried: a hung provider would otherwise block the serial queue 3x longer.
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') return false;
     if (TRANSIENT_CODES.test(String(e.code || ''))) return true;
     if (/fetch failed|terminated|socket hang up|other side closed/i.test(String(e.message || ''))) return true;
   }
@@ -102,6 +103,8 @@ export async function callLlmJson(kind: 'observation' | 'daily_digest', system: 
     } catch (error: any) {
       if (attempt >= 1) throw error;
       console.warn(`[LLM] ${kind} response unusable (${error.message}); asking once more`);
+      body.messages.push({ role: 'assistant', content: String(content || '').slice(0, 2000) },
+        { role: 'user', content: 'That was not a valid JSON object. Reply with the JSON object only, following the schema.' });
     }
   }
 }

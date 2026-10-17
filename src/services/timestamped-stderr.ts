@@ -22,7 +22,7 @@ export function installTimestampedStderr(stream: NodeJS.WriteStream = process.st
   const stamp = createLineTimestamper();
   (stream as any).write = (chunk: any, ...rest: any[]) => {
     const text = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array ? Buffer.from(chunk).toString('utf8') : String(chunk);
-    const encodingArgs = typeof rest[0] === 'string' ? rest.slice(1) : rest;
-    return original(stamp(text), ...encodingArgs);
+    const callback = rest.find(arg => typeof arg === 'function');
+    return callback ? original(stamp(text), 'utf8', callback) : original(stamp(text), 'utf8');
   };
 }

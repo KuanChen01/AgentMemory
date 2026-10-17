@@ -49,10 +49,10 @@ import {
 import { buildReleaseManifest } from './release';
 import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
-import { boundToolText, boundedEnvInteger, llmBudgetOptions, recordLlmUsage } from './llm-budget';
+import { boundToolText, boundedEnvInteger } from './llm-budget';
 import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
-import { callLlmJson } from './llm-client';
+import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { initializeWithLockRetry } from './db-init-retry';
 import { classifyToolEvent } from './event-classifier';
 import {
@@ -1379,13 +1379,10 @@ async function processQueue() {
 
 // Generalized LLM API Summarization Logic
 async function handleSummarization(log: QueuedToolLog) {
-  const apiKey = process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
-  const rawApiUrl = process.env.AGENTMEM_LLM_API_URL || process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1';
-  const modelName = process.env.AGENTMEM_LLM_MODEL || 'deepseek-chat';
-
-  // If no API key is specified and it is not a local Ollama setup (which doesn't require a key), save raw observation
-  const isLocalOllama = rawApiUrl.includes('localhost') || rawApiUrl.includes('127.0.0.1');
-  if (!apiKey && !isLocalOllama) {
+  // If no API key is specified and it is not a local (loopback) endpoint, save raw observation
+  let available = true;   // invalid AGENTMEM_LLM_HEADERS surfaces below as a summarization failure (raw fallback)
+  try { available = llmAvailable(resolveLlmSettings()); } catch { /* handled by callLlmJson */ }
+  if (!available) {
     console.warn('[Warning] LLM API credentials not found in environment. Saving raw observation without LLM summarization.');
     await saveMockObservation(log, 'Missing LLM API credentials. Running in Raw Mode.');
     return;
