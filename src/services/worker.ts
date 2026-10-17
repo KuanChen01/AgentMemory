@@ -1,3 +1,4 @@
+import { installTimestampedStderr } from './timestamped-stderr';
 import express, { Request, Response } from 'express';
 import fs from 'fs';
 import os from 'os';
@@ -51,6 +52,8 @@ import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger, llmBudgetOptions, recordLlmUsage } from './llm-budget';
 import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
 import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
+import { callLlmJson } from './llm-client';
+import { initializeWithLockRetry } from './db-init-retry';
 import { classifyToolEvent } from './event-classifier';
 import {
   bufferEvent, consolidateTask, freezeOpenTask, frozenTasks, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
@@ -377,7 +380,7 @@ function normalizeDailyDigestSchedulerBody(body: any) {
 
 // Initialize database before starting the server
 async function startServer() {
-  await dbManager.initialize();
+  await initializeWithLockRetry(() => dbManager.initialize());
   console.log('AgentMemory SQLite database initialized.');
   applyDailyDigestSchedulerConfig(await dbManager.getDailyDigestSchedulerConfig());
   const recovered = await recoverInterruptedClaims(dbManager);
@@ -1374,24 +1377,6 @@ async function processQueue() {
   }
 }
 
-// Highly resilient JSON extractor that works even if LLMs return markdown code blocks
-function parseJSONContent(rawText: string): any {
-  const trimmed = rawText.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch (e) {
-    const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        return JSON.parse(jsonMatch[0]);
-      } catch (innerErr) {
-        // Fall through to throw error
-      }
-    }
-    throw new Error('Failed to parse JSON response from LLM');
-  }
-}
-
 // Generalized LLM API Summarization Logic
 async function handleSummarization(log: QueuedToolLog) {
   const apiKey = process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY;
@@ -1407,23 +1392,6 @@ async function handleSummarization(log: QueuedToolLog) {
   }
 
   try {
-  const requestUrl = `${rawApiUrl.trim().replace(/\/+$/, '')}/chat/completions`;
-
-  // Parse custom headers if configured (will fail loudly if invalid JSON)
-  let customHeaders: Record<string, string> = {};
-  if (process.env.AGENTMEM_LLM_HEADERS) {
-    customHeaders = JSON.parse(process.env.AGENTMEM_LLM_HEADERS);
-  }
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...customHeaders
-  };
-
-  if (!headers['Authorization'] && !headers['authorization'] && apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
-
   // Build the summarization prompt
   const systemPrompt = `You are a developer memory synthesis assistant.
 ${WORK_MEMORY_PROMPT}
@@ -1460,43 +1428,7 @@ ${boundToolText(log.input, inputLimit)}
 ${boundToolText(log.output, outputLimit)}
 `;
 
-    const requestBody: any = {
-      model: modelName,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature: 0.1,
-      ...llmBudgetOptions(rawApiUrl, modelName, 'observation'),
-    };
-
-    // Only send response_format if JSON Mode is not explicitly disabled
-    const disableJsonMode = process.env.AGENTMEM_LLM_DISABLE_JSON_MODE === 'true';
-    if (!disableJsonMode) {
-      requestBody.response_format = { type: 'json_object' };
-    }
-
-    const startedAt = Date.now();
-    const response = await fetch(requestUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(60000),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`LLM API error: ${response.status} - ${errText}`);
-    }
-
-    const data: any = await response.json();
-    recordLlmUsage('observation', data, Date.now() - startedAt);
-    if (data.choices?.[0]?.finish_reason === 'length') throw new Error('Observation exceeded output token budget');
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) throw new Error('Empty response from LLM API');
-
-    // Resilient parsing of JSON content
-    const parsedObs = interpretWorkMemory(parseJSONContent(content), log.success);
+    const parsedObs = interpretWorkMemory(await callLlmJson('observation', systemPrompt, userPrompt), log.success);
     if (parsedObs.skip && incompleteSource) {
       parsedObs.skip = false;
       parsedObs.kind = 'context';
@@ -1584,6 +1516,7 @@ async function saveMockObservation(log: QueuedToolLog, reason: string) {
 }
 
 // Run server
+installTimestampedStderr();
 startServer().catch((err) => {
   console.error('Fatal server startup error:', err);
   process.exit(1);

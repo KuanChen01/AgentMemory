@@ -41,7 +41,7 @@ async function withWorker(run, extraEnv = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-task-'));
   const stub = await startStub(); const PORT = await freePort();
   const envPath = path.join(root, '.env');
-  fs.writeFileSync(envPath, `AGENTMEM_LLM_API_URL=${stub.url}\nAGENTMEM_LLM_API_KEY=fixture-only\nAGENTMEM_LLM_MODEL=stub\n`);
+  fs.writeFileSync(envPath, `AGENTMEM_LLM_API_URL=${stub.url}\nAGENTMEM_LLM_API_KEY=fixture-only\nAGENTMEM_LLM_MODEL=stub\nAGENTMEM_LLM_RETRY_BASE_MS=1\n`);
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith('AGENTMEM_') || k.startsWith('DEEPSEEK_')) delete env[k];
   Object.assign(env, { AGENTMEM_PORT: String(PORT), AGENTMEM_ENV_PATH: envPath, AGENTMEM_RUNTIME_DIR: root,

@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.1.1] - 2026-10-17
+
+### Fixed
+- LLM JSON parsing strips ``` code fences and extracts the first balanced `{...}` object; unparseable or empty content is re-asked exactly once.
+- LLM requests retry transient network errors (`fetch failed`, `terminated`, resets, timeouts) and HTTP 429/5xx up to 2 times with exponential backoff (`AGENTMEM_LLM_RETRY_BASE_MS`, default 1000). 4xx is never retried.
+- The per-event summarizer now uses the shared LLM client (removes a duplicate request/parse path).
+- Missing or non-array LLM list fields (`facts`, `concepts`, `files_read`, `files_modified`) are treated as `[]` and logged.
+- Worker startup waits up to ~10 s (`AGENTMEM_DB_INIT_RETRY_MS`) when SQLite reports `database is locked`.
+- Hook autostart does not spawn a second worker when `worker.pid` names a live process that `worker-status.json` reports as running.
+- Every line written to `worker.err.log` is prefixed with an ISO timestamp.
+
 ## [2.1.0] - 2026-10-17
 
 Upgrade note: back up the AgentMemory DB before upgrading. Schema migrations are additive and run automatically on first start, but the `tool_evidence` table rebuild is one-way.

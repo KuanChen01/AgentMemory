@@ -16,16 +16,70 @@ export function llmAvailable(settings: LlmSettings): boolean {
   return Boolean(settings.apiKey) || /localhost|127\.0\.0\.1|\[::1\]/.test(settings.apiUrl);
 }
 
+/** Returns the first balanced {...} object in text (string-aware), or null. */
+function firstJsonObject(text: string): string | null {
+  for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+    let depth = 0, inString = false, escaped = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false; else if (ch === '\\') escaped = true; else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) {
+        const candidate = text.slice(start, i + 1);
+        try { JSON.parse(candidate); return candidate; } catch { break; }
+      }
+    }
+  }
+  return null;
+}
+
 export function parseJsonContent(rawText: string): any {
-  const trimmed = rawText.trim();
-  try { return JSON.parse(trimmed); } catch {
-    const match = trimmed.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
+  const trimmed = String(rawText ?? '').trim();
+  const fenced = trimmed.match(/^```[a-zA-Z0-9_-]*\s*\n?([\s\S]*?)\n?\s*```$/);
+  const body = fenced ? fenced[1].trim() : trimmed;
+  try { return JSON.parse(body); } catch {
+    const object = firstJsonObject(body);
+    if (object) return JSON.parse(object);
     throw new Error('Failed to parse JSON response from LLM');
   }
 }
 
-/** One chat completion returning parsed JSON. Exactly one HTTP request per call. */
+const TRANSIENT_CODES = /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|UND_ERR_\w+)$/;
+export function isTransientFetchError(error: any): boolean {
+  for (let e = error, depth = 0; e && depth < 4; e = e.cause, depth++) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') return true;
+    if (TRANSIENT_CODES.test(String(e.code || ''))) return true;
+    if (/fetch failed|terminated|socket hang up|other side closed/i.test(String(e.message || ''))) return true;
+  }
+  return false;
+}
+
+export interface RetryOptions { timeoutMs: number; retries?: number; baseDelayMs?: number; }
+/** fetch with a per-attempt timeout; retries transient network errors and HTTP 429/5xx with exponential backoff. */
+export async function fetchWithRetry(url: string, init: RequestInit, opts: RetryOptions): Promise<Response> {
+  const retries = opts.retries ?? 2;
+  const envBase = Number(process.env.AGENTMEM_LLM_RETRY_BASE_MS);
+  const baseDelayMs = opts.baseDelayMs ?? (Number.isFinite(envBase) && envBase >= 0 ? envBase : 1000);
+  for (let attempt = 0; ; attempt++) {
+    let failure: any;
+    try {
+      const response = await fetch(url, { ...init, signal: AbortSignal.timeout(opts.timeoutMs) });
+      if (response.ok || attempt >= retries || !(response.status === 429 || response.status >= 500)) return response;
+      await response.body?.cancel().catch(() => undefined);
+      failure = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      if (attempt >= retries || !isTransientFetchError(error)) throw error;
+      failure = error;
+    }
+    console.warn(`[LLM] attempt ${attempt + 1} failed (${failure?.message || failure}); retrying`);
+    await new Promise(resolve => setTimeout(resolve, baseDelayMs * 2 ** attempt));
+  }
+}
+
+/** One chat completion returning parsed JSON. Transient network/5xx failures are retried inside fetchWithRetry;
+ *  unparseable content gets exactly one re-ask before the error propagates. */
 export async function callLlmJson(kind: 'observation' | 'daily_digest', system: string, user: string, settings = resolveLlmSettings()): Promise<any> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...settings.headers };
   if (!headers.Authorization && !headers.authorization && settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
@@ -33,14 +87,21 @@ export async function callLlmJson(kind: 'observation' | 'daily_digest', system: 
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     ...llmBudgetOptions(settings.apiUrl, settings.model, kind) };
   if (!settings.disableJsonMode) body.response_format = { type: 'json_object' };
-  const startedAt = Date.now();
-  const response = await fetch(`${settings.apiUrl}/chat/completions`, { method: 'POST', headers,
-    body: JSON.stringify(body), signal: AbortSignal.timeout(90000) });
-  if (!response.ok) throw new Error(`LLM API error: ${response.status} - ${(await response.text()).slice(0, 500)}`);
-  const data: any = await response.json();
-  recordLlmUsage(kind, data, Date.now() - startedAt);
-  if (data.choices?.[0]?.finish_reason === 'length') throw new Error(`${kind} exceeded output token budget`);
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error('Empty response from LLM API');
-  return parseJsonContent(String(content));
+  for (let attempt = 0; ; attempt++) {
+    const startedAt = Date.now();
+    const response = await fetchWithRetry(`${settings.apiUrl}/chat/completions`, { method: 'POST', headers,
+      body: JSON.stringify(body) }, { timeoutMs: 90000 });
+    if (!response.ok) throw new Error(`LLM API error: ${response.status} - ${(await response.text()).slice(0, 500)}`);
+    const data: any = await response.json();
+    recordLlmUsage(kind, data, Date.now() - startedAt);
+    if (data.choices?.[0]?.finish_reason === 'length') throw new Error(`${kind} exceeded output token budget`);
+    const content = data.choices?.[0]?.message?.content;
+    try {
+      if (!content) throw new Error('Empty response from LLM API');
+      return parseJsonContent(String(content));
+    } catch (error: any) {
+      if (attempt >= 1) throw error;
+      console.warn(`[LLM] ${kind} response unusable (${error.message}); asking once more`);
+    }
+  }
 }
