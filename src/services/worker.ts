@@ -462,6 +462,40 @@ app.get('/admin/api/home-summary', adminOnlyGuard, async (req, res) => {
   }
 });
 
+app.get('/admin/api/activity', adminOnlyGuard, async (req, res) => {
+  try {
+    const readQuery = (key: string): string | undefined => {
+      const value = req.query[key];
+      if (Array.isArray(value)) throw new Error('Invalid activity request: repeated query parameter');
+      if (value === undefined) return undefined;
+      if (typeof value !== 'string') throw new Error('Invalid activity request: query parameter');
+      return value;
+    };
+    const given = (value: string | undefined) => (value === undefined || value === '' ? undefined : value);
+    const tz = given(readQuery('tz_offset_minutes'));
+    const limit = given(readQuery('limit'));
+    const kind = given(readQuery('kind'));
+    const cursor = given(readQuery('cursor'));
+    res.json(await dbManager.getAdminActivity({
+      from: readQuery('from') ?? '',
+      to: readQuery('to') ?? '',
+      tzOffsetMinutes: tz === undefined ? undefined : Number(tz),
+      project: given(readQuery('project')),
+      agent: given(readQuery('agent')),
+      kind: kind as 'typed' | 'legacy' | 'all' | undefined,
+      limit: limit === undefined ? undefined : Number(limit),
+      cursor: cursor ?? null,
+    }));
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid activity request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin activity:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/admin/api/release-check', adminOnlyGuard, async (_req, res) => {
   try {
     res.json(await checkLatestRelease());

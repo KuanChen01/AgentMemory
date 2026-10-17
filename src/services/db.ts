@@ -423,6 +423,266 @@ export function reviewItemHash(row: any): string {
 /** Bump whenever ensureTaskTables() adds a table, index or column (round 9: dedup is transactional, claims unused). */
 const TASK_SCHEMA_REVISION = 11;
 
+type ActivityEra = 'v2.1' | 'legacy' | 'mixed' | null;
+
+const ACTIVITY_MAX_WINDOW_MS = 120 * 24 * 60 * 60 * 1000;
+const ACTIVITY_CURSOR_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+interface NormalizedAdminActivity {
+  fromIso: string;
+  toIso: string;
+  fromSql: string;
+  toSql: string;
+  fromMs: number;
+  toMs: number;
+  offset: number;
+  shift: string;
+  project?: string;
+  agent?: string;
+  kind: 'typed' | 'legacy' | 'all';
+  limit: number;
+  cursor: { t: string; r: number } | null;
+}
+
+interface ActivityQuery {
+  name: string;
+  sql: string;
+  params: any[];
+}
+
+function invalidActivity(detail: string): Error {
+  return new Error(`Invalid activity request: ${detail}`);
+}
+
+function activitySqlTime(date: Date): string {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function activityInstant(value: string, label: 'from' | 'to'): Date {
+  if (typeof value !== 'string' || value.trim() === '') throw invalidActivity(`${label} is required`);
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) throw invalidActivity(label);
+  return new Date(ms);
+}
+
+function activityOffset(value: number | undefined): number {
+  if (value === undefined) return 0;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < -840 || value > 840) {
+    throw invalidActivity('tz_offset_minutes');
+  }
+  return value;
+}
+
+function activityLimit(value: number | undefined): number {
+  if (value === undefined) return 50;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 100) {
+    throw invalidActivity('limit');
+  }
+  return value;
+}
+
+function activityKind(value: string | undefined): 'typed' | 'legacy' | 'all' {
+  if (value === undefined || value === '') return 'typed';
+  if (value === 'typed' || value === 'legacy' || value === 'all') return value;
+  throw invalidActivity('kind');
+}
+
+function activityExact(value: string | undefined, label: string): string | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (typeof value !== 'string') throw invalidActivity(label);
+  return value;
+}
+
+function decodeActivityCursor(cursor: string): { t: string; r: number } {
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalidActivity('cursor');
+  let parsed: any;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+  } catch {
+    throw invalidActivity('cursor');
+  }
+  const t = parsed?.t;
+  const r = parsed?.r;
+  if (typeof t !== 'string' || !ACTIVITY_CURSOR_TIME.test(t) || !Number.isSafeInteger(r)) throw invalidActivity('cursor');
+  const ms = Date.parse(`${t.replace(' ', 'T')}Z`);
+  if (!Number.isFinite(ms) || activitySqlTime(new Date(ms)) !== t) throw invalidActivity('cursor');
+  return { t, r };
+}
+
+function normalizeAdminActivity(options: {
+  from: string; to: string; tzOffsetMinutes?: number; project?: string; agent?: string;
+  kind?: 'typed' | 'legacy' | 'all'; limit?: number; cursor?: string | null;
+}): NormalizedAdminActivity {
+  const from = activityInstant(options.from, 'from');
+  const to = activityInstant(options.to, 'to');
+  if (!(to.getTime() > from.getTime())) throw invalidActivity('to must be after from');
+  if (to.getTime() - from.getTime() > ACTIVITY_MAX_WINDOW_MS) throw invalidActivity('window exceeds 120 days');
+  const offset = activityOffset(options.tzOffsetMinutes);
+  let cursor: { t: string; r: number } | null = null;
+  if (options.cursor !== undefined && options.cursor !== null && options.cursor !== '') {
+    if (typeof options.cursor !== 'string') throw invalidActivity('cursor');
+    cursor = decodeActivityCursor(options.cursor);
+  }
+  return {
+    fromIso: from.toISOString(),
+    toIso: to.toISOString(),
+    fromSql: activitySqlTime(from),
+    toSql: activitySqlTime(to),
+    fromMs: from.getTime(),
+    toMs: to.getTime(),
+    offset,
+    shift: `${offset >= 0 ? '+' : ''}${offset} minutes`,
+    project: activityExact(options.project, 'project'),
+    agent: activityExact(options.agent, 'agent'),
+    kind: activityKind(options.kind as string | undefined),
+    limit: activityLimit(options.limit),
+    cursor,
+  };
+}
+
+function activityDayList(fromMs: number, toMs: number, offsetMinutes: number): string[] {
+  const localDay = (ms: number) => new Date(ms + offsetMinutes * 60000).toISOString().slice(0, 10);
+  const startMs = Date.parse(`${localDay(fromMs)}T00:00:00.000Z`);
+  const endMs = Date.parse(`${localDay(toMs - 1)}T00:00:00.000Z`);
+  const days: string[] = [];
+  for (let ms = startMs; ms <= endMs && days.length <= 121; ms += 86400000) {
+    days.push(new Date(ms).toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+function activityCard(row: any) {
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    day: row.day,
+    kind: row.kind,
+    source: row.source ?? null,
+    fallback: Number(row.fallback) === 1,
+    title: row.title,
+    project_path: row.project_path,
+    agent_id: row.agent_id,
+    files_count: Number(row.files_count) || 0,
+    files_modified_count: Number(row.files_modified_count) || 0,
+    facts_count: Number(row.facts_count) || 0,
+    task_count: Number(row.task_count) || 0,
+    has_review: Number(row.has_review) === 1,
+  };
+}
+
+const ACTIVITY_JOINS = `FROM observations o
+    LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+    LEFT JOIN task_results r ON r.id=o.id`;
+const ACTIVITY_OUTCOME = `SUM(CASE WHEN m.record_kind='outcome' THEN 1 ELSE 0 END)`;
+const ACTIVITY_CONTEXT = `SUM(CASE WHEN m.record_kind='context' THEN 1 ELSE 0 END)`;
+const ACTIVITY_FALLBACK = `SUM(CASE WHEN m.record_kind IN ('outcome','context') AND r.status='fallback' THEN 1 ELSE 0 END)`;
+const ACTIVITY_LEGACY = `SUM(CASE WHEN m.record_kind IS NULL OR m.record_kind NOT IN ('outcome','context') THEN 1 ELSE 0 END)`;
+const ACTIVITY_NATIVE = `SUM(CASE WHEN m.record_kind IN ('outcome','context') AND IFNULL(m.source_kind,'')!='legacy_compacted' THEN 1 ELSE 0 END)`;
+// WHEN matches only TRUE, so a missing metadata row (NULL kind) falls through and counts as old.
+const ACTIVITY_OLD = `SUM(CASE WHEN m.record_kind IN ('outcome','context') AND IFNULL(m.source_kind,'')!='legacy_compacted' THEN 0 ELSE 1 END)`;
+const ACTIVITY_FILES_READ = `CASE WHEN json_valid(o.files_read) AND json_type(o.files_read)='array' THEN o.files_read ELSE '[]' END`;
+const ACTIVITY_FILES_MOD = `CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN o.files_modified ELSE '[]' END`;
+
+function activityScope(project?: string, agent?: string): { sql: string; params: any[] } {
+  const params: any[] = [];
+  let sql = '';
+  if (project !== undefined) {
+    sql += ' AND LOWER(o.project_path)=LOWER(?)';
+    params.push(project);
+  }
+  if (agent !== undefined) {
+    sql += ' AND LOWER(o.agent_id)=LOWER(?)';
+    params.push(agent);
+  }
+  return { sql, params };
+}
+
+function activityKindSql(kind: 'typed' | 'legacy' | 'all'): string {
+  if (kind === 'typed') return ` AND m.record_kind IN ('outcome','context')`;
+  if (kind === 'legacy') return ` AND (m.record_kind IS NULL OR m.record_kind NOT IN ('outcome','context'))`;
+  return '';
+}
+
+function buildAdminActivityQueries(input: NormalizedAdminActivity): ActivityQuery[] {
+  const windowSql = 'datetime(o.created_at) >= ? AND datetime(o.created_at) < ?';
+  const scope = activityScope(input.project, input.agent);
+  const queries: ActivityQuery[] = [
+    {
+      name: 'breakdown',
+      sql: `SELECT o.project_path, o.agent_id,
+          ${ACTIVITY_OUTCOME} AS outcome,
+          ${ACTIVITY_CONTEXT} AS context,
+          ${ACTIVITY_FALLBACK} AS fallback,
+          ${ACTIVITY_LEGACY} AS legacy
+        ${ACTIVITY_JOINS}
+        WHERE ${windowSql}
+        GROUP BY o.project_path, o.agent_id
+        ORDER BY (outcome + context + legacy) DESC, o.project_path, o.agent_id
+        LIMIT 200`,
+      params: [input.fromSql, input.toSql],
+    },
+    {
+      name: 'days',
+      sql: `SELECT date(datetime(o.created_at), ?) AS day,
+          ${ACTIVITY_OUTCOME} AS outcome,
+          ${ACTIVITY_CONTEXT} AS context,
+          ${ACTIVITY_FALLBACK} AS fallback,
+          ${ACTIVITY_LEGACY} AS legacy,
+          ${ACTIVITY_NATIVE} AS native,
+          ${ACTIVITY_OLD} AS old
+        ${ACTIVITY_JOINS}
+        WHERE ${windowSql}${scope.sql}
+        GROUP BY day`,
+      params: [input.shift, input.fromSql, input.toSql, ...scope.params],
+    },
+  ];
+  if (input.limit <= 0) return queries;
+
+  // A cursor inside the window becomes the index range's upper bound, so a later page starts its index scan at the
+  // cursor instead of walking (and discarding) every newer row of the window first.
+  const params: any[] = [input.shift, input.fromSql];
+  let cardsWindowSql = windowSql;
+  let cursorSql = '';
+  if (input.cursor && input.cursor.t < input.toSql) {
+    cardsWindowSql = 'datetime(o.created_at) >= ? AND datetime(o.created_at) <= ?';
+    cursorSql = ' AND (datetime(o.created_at) < ? OR o.rowid < ?)';
+    params.push(input.cursor.t, input.cursor.t, input.cursor.r);
+  } else if (input.cursor) {
+    cursorSql = ' AND (datetime(o.created_at) < ? OR (datetime(o.created_at) = ? AND o.rowid < ?))';
+    params.push(input.toSql, input.cursor.t, input.cursor.t, input.cursor.r);
+  } else {
+    params.push(input.toSql);
+  }
+  params.push(...scope.params, input.limit + 1);
+  // DISTINCT over UNION ALL matches the distinct union of the two file arrays. Plain UNION
+  // plans as a sorter and reports USE TEMP B-TREE FOR ORDER BY on the cards query.
+  queries.push({
+    name: 'cards',
+    sql: `SELECT o.id, o.created_at, o.rowid AS cursor_rowid, datetime(o.created_at) AS cursor_time,
+        date(datetime(o.created_at), ?) AS day,
+        CASE WHEN m.record_kind IN ('outcome','context') THEN m.record_kind ELSE 'legacy' END AS kind,
+        m.source_kind AS source,
+        CASE WHEN m.record_kind IN ('outcome','context') AND r.status='fallback' THEN 1 ELSE 0 END AS fallback,
+        substr(o.title, 1, 200) AS title,
+        o.project_path, o.agent_id,
+        (SELECT COUNT(DISTINCT value) FROM (
+          SELECT value FROM json_each(${ACTIVITY_FILES_READ})
+          UNION ALL
+          SELECT value FROM json_each(${ACTIVITY_FILES_MOD})
+        )) AS files_count,
+        CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN json_array_length(o.files_modified) ELSE 0 END AS files_modified_count,
+        CASE WHEN json_valid(o.facts) AND json_type(o.facts)='array' THEN json_array_length(o.facts) ELSE 0 END AS facts_count,
+        (SELECT COUNT(*) FROM task_results t WHERE t.observation_id=o.id) AS task_count,
+        EXISTS(SELECT 1 FROM post_task_reviews p WHERE p.source_observation_id=o.id) AS has_review
+      ${ACTIVITY_JOINS}
+      WHERE ${cardsWindowSql}${cursorSql}${scope.sql}${activityKindSql(input.kind)}
+      ORDER BY datetime(o.created_at) DESC, o.rowid DESC
+      LIMIT ?`,
+    params,
+  });
+  return queries;
+}
+
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
@@ -2252,6 +2512,92 @@ export class DatabaseManager {
       digests: { latest: latestDigest, latest_day_projects: latestDayProjects, failed_recent: failedDigests },
       vault_review: { last_successful_review_at: vaultValue },
     };
+  }
+
+  /**
+   * Read-only Activity aggregates. The window is half-open on datetime(created_at)
+   * so idx_observations_created_dt can drive every scan. Nothing is written.
+   */
+  public async getAdminActivity(options: {
+    from: string; to: string; tzOffsetMinutes?: number; project?: string; agent?: string;
+    kind?: 'typed' | 'legacy' | 'all'; limit?: number; cursor?: string | null;
+  }) {
+    if (!this.db) throw new Error('Database not initialized');
+    const normalized = normalizeAdminActivity(options);
+    const queries = buildAdminActivityQueries(normalized);
+    const rowsOf = (name: string) => {
+      const query = queries.find((item) => item.name === name);
+      return query ? this.db.all(query.sql, query.params) : [];
+    };
+
+    const dayList = activityDayList(normalized.fromMs, normalized.toMs, normalized.offset);
+    const byDay = new Map(dayList.map((day) => [day, {
+      day, outcome: 0, context: 0, fallback: 0, legacy: 0, era: null as ActivityEra,
+    }]));
+    const totals = { memories: 0, outcome: 0, context: 0, fallback: 0, legacy: 0 };
+    for (const row of rowsOf('days')) {
+      const outcome = Number(row.outcome) || 0;
+      const context = Number(row.context) || 0;
+      const fallback = Number(row.fallback) || 0;
+      const legacy = Number(row.legacy) || 0;
+      const native = Number(row.native) || 0;
+      const old = Number(row.old) || 0;
+      totals.outcome += outcome;
+      totals.context += context;
+      totals.fallback += fallback;
+      totals.legacy += legacy;
+      const bucket = byDay.get(row.day);
+      if (!bucket) continue;
+      bucket.outcome = outcome;
+      bucket.context = context;
+      bucket.fallback = fallback;
+      bucket.legacy = legacy;
+      bucket.era = native && old ? 'mixed' : native ? 'v2.1' : old ? 'legacy' : null;
+    }
+    totals.memories = totals.outcome + totals.context;
+
+    let cards: any[] = [];
+    let nextCursor: string | null = null;
+    if (normalized.limit > 0) {
+      const fetched = rowsOf('cards');
+      const page = fetched.length > normalized.limit ? fetched.slice(0, normalized.limit) : fetched;
+      cards = page.map(activityCard);
+      if (fetched.length > normalized.limit && page.length) {
+        const last = page[page.length - 1];
+        nextCursor = Buffer.from(JSON.stringify({ t: last.cursor_time, r: Number(last.cursor_rowid) })).toString('base64url');
+      }
+    }
+
+    return {
+      from: normalized.fromIso,
+      to: normalized.toIso,
+      tz_offset_minutes: normalized.offset,
+      totals,
+      breakdown: rowsOf('breakdown').map((row: any) => ({
+        project_path: row.project_path,
+        agent_id: row.agent_id,
+        outcome: Number(row.outcome) || 0,
+        context: Number(row.context) || 0,
+        fallback: Number(row.fallback) || 0,
+        legacy: Number(row.legacy) || 0,
+      })),
+      days: dayList.map((day) => byDay.get(day)!),
+      cards,
+      next_cursor: nextCursor,
+    };
+  }
+
+  /** EXPLAIN QUERY PLAN of each getAdminActivity query, using that method's SQL. */
+  public explainAdminActivity(options: {
+    from: string; to: string; tzOffsetMinutes?: number; project?: string; agent?: string;
+    kind?: 'typed' | 'legacy' | 'all'; limit?: number; cursor?: string | null;
+  }): { name: string; plan: string }[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const queries = buildAdminActivityQueries(normalizeAdminActivity(options));
+    return queries.map((query) => ({
+      name: query.name,
+      plan: this.db.all(`EXPLAIN QUERY PLAN ${query.sql}`, query.params).map((row: any) => row.detail).join('\n'),
+    }));
   }
 
   /** Read-only SQL access for additive task/review stores. */
