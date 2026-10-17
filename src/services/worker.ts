@@ -496,6 +496,36 @@ app.get('/admin/api/activity', adminOnlyGuard, async (req, res) => {
   }
 });
 
+app.get('/admin/api/memory-detail', adminOnlyGuard, async (req, res) => {
+  try {
+    const id = req.query.id;
+    if (Array.isArray(id)) throw new Error('Invalid memory-detail request: repeated id');
+    if (typeof id !== 'string' || id.length === 0 || id.length > 512) {
+      throw new Error('Invalid memory-detail request: id');
+    }
+    const includeRaw = req.query.include_trace;
+    if (Array.isArray(includeRaw) || (includeRaw !== undefined && typeof includeRaw !== 'string')) {
+      throw new Error('Invalid memory-detail request: include_trace');
+    }
+    if (includeRaw !== undefined && includeRaw !== '0' && includeRaw !== '1') {
+      throw new Error('Invalid memory-detail request: include_trace');
+    }
+    const detail = await dbManager.getAdminMemoryDetail(id, { includeTrace: includeRaw === '1' });
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown memory ID' });
+      return;
+    }
+    res.json(detail);
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid memory-detail request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin memory detail:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/admin/api/release-check', adminOnlyGuard, async (_req, res) => {
   try {
     res.json(await checkLatestRelease());

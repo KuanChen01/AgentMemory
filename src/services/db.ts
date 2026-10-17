@@ -683,6 +683,101 @@ function buildAdminActivityQueries(input: NormalizedAdminActivity): ActivityQuer
   return queries;
 }
 
+/** Task rows for one memory. getAdminMemoryDetail and its EXPLAIN test share this text. */
+export const ADMIN_MEMORY_DETAIL_TASKS_SQL =
+  `SELECT id, task_id, segment_index, segment_count, event_count, evidence_count, status, trigger, llm_calls, source_kind, substr(COALESCE(last_error,''),1,300) AS last_error, created_at FROM task_results WHERE observation_id=? ORDER BY rowid`;
+
+const ADMIN_MEMORY_DETAIL_TRACE_BYTES = 64 * 1024;
+
+export interface AdminMemoryDetail {
+  memory: {
+    id: string;
+    session_id: string;
+    project_path: string;
+    agent_id: string;
+    created_at: string;
+    kind: 'outcome' | 'context' | 'legacy';
+    source: string | null;
+    fallback: boolean;
+    title: string;
+    narrative: string;
+    facts: unknown[];
+    concepts: unknown[];
+    files_read: unknown[];
+    files_modified: unknown[];
+  };
+  tasks: Array<{
+    id: string;
+    task_id: string;
+    segment_index: number;
+    segment_count: number;
+    event_count: number;
+    evidence_count: number;
+    status: string;
+    trigger: string;
+    llm_calls: number;
+    source_kind: string;
+    last_error: string | null;
+    created_at: string;
+  }>;
+  duplicate_flags: Array<{
+    id: string;
+    task_id: string;
+    status: string;
+    reason: string | null;
+  }>;
+  review: null | {
+    id: string;
+    status: string;
+    query_text: string;
+    matched_skill_titles: unknown[];
+    recommendation_states: unknown[];
+    generated_at: string;
+    bounded_context?: unknown;
+    decision_trace?: unknown;
+    temporal_diagnostics?: unknown;
+  };
+  compacted_into: string | null;
+  evidence_available: boolean;
+}
+
+function parseJsonArrayOrEmpty(text: unknown): unknown[] {
+  if (typeof text !== 'string') return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Prefix of at most maxBytes UTF-8 bytes that never splits a code point. */
+function utf8Prefix(text: string, maxBytes: number): string {
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.length <= maxBytes) return text;
+  let end = maxBytes;
+  // A continuation byte is 10xxxxxx. Walk back onto the leading byte and drop that code point.
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
+  return buf.subarray(0, end).toString('utf8');
+}
+
+function boundedJsonText(text: unknown): unknown {
+  const raw = typeof text === 'string' ? text : '';
+  const totalBytes = Buffer.byteLength(raw, 'utf8');
+  if (totalBytes <= ADMIN_MEMORY_DETAIL_TRACE_BYTES) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return {
+    truncated: true,
+    total_bytes: totalBytes,
+    text: utf8Prefix(raw, ADMIN_MEMORY_DETAIL_TRACE_BYTES),
+  };
+}
+
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
@@ -2598,6 +2693,105 @@ export class DatabaseManager {
       name: query.name,
       plan: this.db.all(`EXPLAIN QUERY PLAN ${query.sql}`, query.params).map((row: any) => row.detail).join('\n'),
     }));
+  }
+
+  /**
+   * Read-only Activity detail for one memory. Null when no observation has this id.
+   * Review trace documents are selected only when includeTrace is set, and each is capped at 64 KiB.
+   */
+  public async getAdminMemoryDetail(id: string, options: { includeTrace?: boolean } = {}): Promise<AdminMemoryDetail | null> {
+    if (!this.db) throw new Error('Database not initialized');
+    const includeTrace = options.includeTrace === true;
+    // fb is not named r: the compacted_into subquery is the getWorkOverview text and owns alias r.
+    const row = this.db.get(
+      `SELECT o.id, o.session_id, o.project_path, o.agent_id, o.created_at, o.title, o.narrative,
+          o.facts, o.concepts, o.files_read, o.files_modified,
+          CASE WHEN m.record_kind IN ('outcome','context') THEN m.record_kind ELSE 'legacy' END AS kind,
+          m.source_kind AS source,
+          CASE WHEN m.record_kind IN ('outcome','context') AND fb.status='fallback' THEN 1 ELSE 0 END AS fallback,
+          (SELECT r.observation_id FROM legacy_compaction_links l JOIN task_results r ON r.id=l.task_result_id
+            WHERE l.legacy_observation_id=o.id AND r.observation_id IS NOT NULL LIMIT 1) AS compacted_into
+        FROM observations o
+        LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+        LEFT JOIN task_results fb ON fb.id=o.id
+        WHERE o.id=?`,
+      [id],
+    );
+    if (!row) return null;
+
+    const tasks = this.db.all(ADMIN_MEMORY_DETAIL_TASKS_SQL, [id]).map((task: any) => ({
+      id: task.id,
+      task_id: task.task_id,
+      segment_index: Number(task.segment_index),
+      segment_count: Number(task.segment_count),
+      event_count: Number(task.event_count),
+      evidence_count: Number(task.evidence_count),
+      status: task.status,
+      trigger: task.trigger,
+      llm_calls: Number(task.llm_calls),
+      source_kind: task.source_kind,
+      last_error: task.last_error ? String(task.last_error) : null,
+      created_at: task.created_at,
+    }));
+    const duplicateFlags = this.db.all(
+      `SELECT id, task_id, status, reason FROM duplicate_flags WHERE observation_id=? ORDER BY created_ms, id LIMIT 100`,
+      [id],
+    ).map((flag: any) => ({
+      id: flag.id,
+      task_id: flag.task_id,
+      status: flag.status,
+      reason: flag.reason ?? null,
+    }));
+    const reviewRow = this.db.get(
+      includeTrace
+        ? `SELECT id, status, query_text, matched_skill_titles_json, recommendation_states_json, generated_at,
+              bounded_context_json, decision_trace_json, temporal_diagnostics_json
+            FROM post_task_reviews WHERE source_observation_id=?`
+        : `SELECT id, status, query_text, matched_skill_titles_json, recommendation_states_json, generated_at
+            FROM post_task_reviews WHERE source_observation_id=?`,
+      [id],
+    );
+    let review: AdminMemoryDetail['review'] = null;
+    if (reviewRow) {
+      review = {
+        id: reviewRow.id,
+        status: reviewRow.status,
+        query_text: reviewRow.query_text,
+        matched_skill_titles: parseJsonArrayOrEmpty(reviewRow.matched_skill_titles_json),
+        recommendation_states: parseJsonArrayOrEmpty(reviewRow.recommendation_states_json),
+        generated_at: reviewRow.generated_at,
+      };
+      if (includeTrace) {
+        review.bounded_context = boundedJsonText(reviewRow.bounded_context_json);
+        review.decision_trace = boundedJsonText(reviewRow.decision_trace_json);
+        review.temporal_diagnostics = boundedJsonText(reviewRow.temporal_diagnostics_json);
+      }
+    }
+
+    const kind = row.kind === 'outcome' || row.kind === 'context' ? row.kind : 'legacy';
+    return {
+      memory: {
+        id: row.id,
+        session_id: row.session_id,
+        project_path: row.project_path,
+        agent_id: row.agent_id,
+        created_at: row.created_at,
+        kind,
+        source: row.source ?? null,
+        fallback: Number(row.fallback) === 1,
+        title: row.title,
+        narrative: row.narrative,
+        facts: parseJsonArrayOrEmpty(row.facts),
+        concepts: parseJsonArrayOrEmpty(row.concepts),
+        files_read: parseJsonArrayOrEmpty(row.files_read),
+        files_modified: parseJsonArrayOrEmpty(row.files_modified),
+      },
+      tasks,
+      duplicate_flags: duplicateFlags,
+      review,
+      compacted_into: row.compacted_into ?? null,
+      evidence_available: tasks.length > 0,
+    };
   }
 
   /** Read-only SQL access for additive task/review stores. */
