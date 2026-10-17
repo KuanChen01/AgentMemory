@@ -2988,6 +2988,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         activatePanel(devPanel);
       }
       activateView(trigger.getAttribute("data-nav-target"));
+      // Legacy panels sit below the hero and the tab dock, and "View all" is clicked from the bottom of Home,
+      // so bring the opened panel (or the top of any other view) into sight.
+      const panel = devPanel && state.activeView === "devToolsView" ? document.getElementById(devPanel) : null;
+      if (panel) {
+        panel.scrollIntoView({ block: "start" });
+      } else {
+        window.scrollTo(0, 0);
+      }
     });
 
     els.devToolsToggle.addEventListener("change", () => {

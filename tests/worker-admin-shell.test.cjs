@@ -97,6 +97,20 @@ test('Developer tools toggle defaults off and wraps every legacy panel intact', 
   }
 });
 
+test('backdrop blur is limited to the sidebar and surfaces of the visible view', () => {
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)[1].replace(/\/\*[\s\S]*?\*\//g, '');
+  const selectors = [];
+  for (const [, selectorText, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (/(^|[;\s])(-webkit-)?backdrop-filter\s*:/.test(body)) {
+      selectors.push(...selectorText.split(',').map((selector) => selector.trim()));
+    }
+  }
+  assert.ok(selectors.length > 0);
+  for (const selector of selectors) {
+    assert.match(selector, /^\.sidebar\b|\.is-active\b/, `${selector} would blur hidden surfaces`);
+  }
+});
+
 test('every i18n key used by the markup and the shell exists in en and zh-CN', () => {
   const en = ADMIN_UI_TRANSLATIONS.en;
   const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];

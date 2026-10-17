@@ -26,22 +26,25 @@ export const ADMIN_UI_THEME = `
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
     --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
     --text: #0b1220;
-    --text-2: rgba(15, 23, 42, 0.62);
-    --text-3: rgba(15, 23, 42, 0.45);
+    --text-2: rgba(15, 23, 42, 0.72);
+    --text-3: rgba(15, 23, 42, 0.64);
     --ok: #30d158;
     --warn: #ff9f0a;
     --err: #ff453a;
     --kind-outcome: #0a84ff;
     --kind-context: #8e6cf6;
     --kind-legacy: #a7adb8;
-    --glass-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.52));
-    --glass-sheen: radial-gradient(120% 70% at 0% 0%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%);
-    --glass-border: rgba(255, 255, 255, 0.75);
+    --glass-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.42));
+    --glass-sheen: radial-gradient(110% 70% at 0% 0%, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 52%);
+    --glass-border: rgba(255, 255, 255, 0.30);
+    --glass-rim: linear-gradient(135deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.9) 10%, rgba(255, 255, 255, 0.38) 30%, rgba(255, 255, 255, 0.06) 52%, rgba(255, 255, 255, 0.14) 78%, rgba(255, 255, 255, 0.6));
     --glass-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.25),
-      0 1px 2px rgba(15, 23, 42, 0.04),
-      0 12px 32px -12px rgba(30, 60, 110, 0.18);
+      inset 0 1px 0 rgba(255, 255, 255, 0.85),
+      inset 0 18px 26px -20px rgba(255, 255, 255, 0.9),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.22),
+      0 1px 2px rgba(20, 40, 80, 0.05),
+      0 6px 16px -8px rgba(30, 64, 120, 0.10),
+      0 26px 60px -24px rgba(30, 64, 120, 0.28);
     --glass-blur: blur(24px) saturate(1.6);
     --r-card: 24px;
     --r-sidebar: 28px;
@@ -64,25 +67,30 @@ export const ADMIN_UI_THEME = `
     margin: 0;
     font-family: var(--font);
     color: var(--ink);
-    background: #eef3f8;
+    background: #e9f0f7;
     -webkit-font-smoothing: antialiased;
   }
 
-  /* The only background layer: static pastel blobs, blurred once and never repainted by the poll. */
+  /* The only background layer: static pastel shapes, blurred once and never repainted by the poll.
+     Aqua flows across the top (behind the top bar and health cards), lavender washes the middle-left,
+     peach glows bottom-right. Centres stay off the corners so nothing reads as a hot spot. */
   body::before {
     content: "";
     position: fixed;
-    inset: -12%;
+    inset: -10%;
     z-index: -1;
     pointer-events: none;
     background:
-      radial-gradient(32% 36% at 86% 8%, rgba(120, 205, 235, 0.36), rgba(120, 205, 235, 0) 70%),
-      radial-gradient(34% 48% at 6% 34%, rgba(120, 205, 235, 0.55), rgba(120, 205, 235, 0) 70%),
-      radial-gradient(42% 42% at 94% 90%, rgba(255, 196, 160, 0.45), rgba(255, 196, 160, 0) 70%),
-      radial-gradient(38% 38% at 54% 52%, rgba(190, 180, 255, 0.35), rgba(190, 180, 255, 0) 70%),
-      radial-gradient(30% 30% at 26% 96%, rgba(255, 196, 160, 0.26), rgba(255, 196, 160, 0) 70%),
-      linear-gradient(160deg, #f3f7fb, #e9eff6 55%, #f1ece9);
-    filter: blur(40px);
+      radial-gradient(46% 30% at 58% 14%, rgba(125, 200, 240, 0.70), rgba(125, 200, 240, 0) 74%),
+      radial-gradient(30% 36% at 84% 28%, rgba(112, 192, 240, 0.62), rgba(112, 192, 240, 0) 74%),
+      radial-gradient(30% 20% at 32% 10%, rgba(140, 208, 242, 0.55), rgba(140, 208, 242, 0) 74%),
+      radial-gradient(18% 22% at 10% 16%, rgba(140, 208, 242, 0.40), rgba(140, 208, 242, 0) 74%),
+      radial-gradient(28% 32% at 12% 56%, rgba(186, 172, 250, 0.52), rgba(186, 172, 250, 0) 74%),
+      radial-gradient(24% 22% at 42% 64%, rgba(196, 186, 255, 0.30), rgba(196, 186, 255, 0) 74%),
+      radial-gradient(36% 34% at 84% 88%, rgba(255, 190, 150, 0.60), rgba(255, 190, 150, 0) 74%),
+      radial-gradient(24% 22% at 62% 98%, rgba(255, 204, 170, 0.38), rgba(255, 204, 170, 0) 74%),
+      linear-gradient(165deg, #edf3f9, #e7eef6 50%, #f2ebe7);
+    filter: blur(44px);
     transform: translateZ(0);
   }
 
@@ -151,10 +159,11 @@ export const ADMIN_UI_THEME = `
     box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.84);
   }
 
-  /* Only the outer legacy surfaces blur; nested cards stay plain translucent to keep GPU cost low. */
-  .hero,
-  .glassPanel,
-  .dock {
+  /* Only the visible outer legacy surfaces blur (hero, tab dock, the open panel); nested and hidden
+     cards stay plain translucent to keep GPU cost low. */
+  .devToolsView.is-active .hero,
+  .devToolsView.is-active .dock,
+  .devToolsView.is-active .viewPanel.is-active {
     backdrop-filter: blur(26px) saturate(1.45);
     -webkit-backdrop-filter: blur(26px) saturate(1.45);
   }
@@ -526,6 +535,8 @@ export const ADMIN_UI_THEME = `
     display: none;
     border-radius: var(--panel-radius);
     padding: 22px;
+    /* Clears the sticky tab dock when a sidebar link scrolls the panel into view. */
+    scroll-margin-top: 96px;
   }
 
   .viewPanel.is-active {
@@ -1016,7 +1027,7 @@ export const ADMIN_UI_THEME = `
     border-radius: var(--r-card);
   }
 
-  /* Bright 1px liquid-glass rim: white at the top-left, fading out across the card. */
+  /* Bright 1px liquid-glass rim: white at the top-left, fading out across the card, catching light again bottom-right. */
   .glassCard::before,
   .glassSurface::before {
     content: "";
@@ -1025,13 +1036,16 @@ export const ADMIN_UI_THEME = `
     padding: 1px;
     border-radius: inherit;
     pointer-events: none;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.35) 28%, rgba(255, 255, 255, 0) 55%, rgba(255, 255, 255, 0.5));
+    background: var(--glass-rim);
     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
   }
 
-  .glassBlur {
+  /* Real blur only on the sidebar and the five health cards of the visible view (6 surfaces on Home);
+     content cards rely on translucency over the already-blurred background instead. */
+  .sidebar.glassBlur,
+  .appView.is-active .glassBlur {
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
   }
@@ -1064,7 +1078,7 @@ export const ADMIN_UI_THEME = `
     flex-direction: column;
     padding: 18px 12px 12px;
     border-radius: var(--r-sidebar);
-    background: var(--glass-sheen), linear-gradient(180deg, rgba(255, 255, 255, 0.70), rgba(255, 255, 255, 0.62));
+    background: var(--glass-sheen), linear-gradient(180deg, rgba(255, 255, 255, 0.50), rgba(255, 255, 255, 0.36));
   }
 
   .brand {
@@ -1299,9 +1313,9 @@ export const ADMIN_UI_THEME = `
     min-height: 40px;
     padding: 0 16px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px solid rgba(255, 255, 255, 0.85);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 20px -10px rgba(30, 60, 110, 0.24);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.70), rgba(255, 255, 255, 0.52));
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 1), inset 0 10px 14px -10px rgba(255, 255, 255, 0.9), 0 1px 2px rgba(20, 40, 80, 0.05), 0 12px 28px -12px rgba(30, 64, 120, 0.28);
     color: var(--text);
     font-size: 14px;
     font-weight: 600;
