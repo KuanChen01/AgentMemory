@@ -3,6 +3,9 @@ import {
   ADMIN_UI_LOCALE_STORAGE_KEY,
   ADMIN_UI_TRANSLATIONS,
 } from './admin-ui-copy';
+import { ADMIN_UI_ICONS } from './admin-ui-markup';
+
+export const ADMIN_UI_DEV_TOOLS_STORAGE_KEY = 'agentmemory.admin.devTools';
 
 export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string {
   return `
@@ -10,8 +13,38 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const UI_LOCALE_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_LOCALE_STORAGE_KEY)};
   const UI_DEFAULT_LOCALE = ${JSON.stringify(ADMIN_UI_DEFAULT_LOCALE)};
   const UI_DICTIONARY = ${JSON.stringify(ADMIN_UI_TRANSLATIONS)};
+  const UI_ICONS = ${JSON.stringify(ADMIN_UI_ICONS)};
+  const DEV_TOOLS_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_DEV_TOOLS_STORAGE_KEY)};
+  // Home aggregates are cheap SQL but still heavier than the 5 s overview, so they refresh on a slower cadence
+  // (and immediately when the overview shows a new memory or task).
+  const HOME_SUMMARY_REFRESH_MS = 30000;
+  const DIGEST_SCHEDULER_REFRESH_MS = 60000;
+  const HOME_CHART_DAYS = 30;
+  const V21_SWITCH_DAY = "2026-10-15";
+  const VAULT_STALE_MS = 26 * 60 * 60 * 1000;
+  const VIEW_TITLE_KEYS = {
+    homeView: "nav.home",
+    activityView: "nav.activity",
+    memoryView: "nav.memory",
+    pipelineView: "nav.pipeline",
+    digestsView: "nav.digests",
+    projectsView: "nav.projects",
+    skillsView: "nav.skills",
+    settingsView: "nav.settings",
+    devToolsView: "devtools.title",
+  };
   const state = {
     activePanel: "runtimePanel",
+    activeView: "homeView",
+    devToolsEnabled: false,
+    devToolsLoaded: false,
+    overviewError: false,
+    homeSummary: null,
+    homeSummaryAt: 0,
+    homeSummaryInFlight: null,
+    digestSchedulerAt: 0,
+    digestSchedulerAppliedStamp: "",
+    homeSignatures: {},
     locale: UI_DEFAULT_LOCALE,
     filters: {
       page: 1,
@@ -51,6 +84,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     isSubmittingProceduralFeedback: false,
     isRunningProceduralQuery: false,
     pollHandle: null,
+    isPolling: false,
     statusLineState: {},
   };
 
@@ -191,6 +225,30 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     searchMetaText: document.getElementById("searchMetaText"),
     searchResults: document.getElementById("searchResults"),
     searchDiagnosticsStatus: document.getElementById("searchDiagnosticsStatus"),
+    appViews: Array.from(document.querySelectorAll(".appView")),
+    navItems: Array.from(document.querySelectorAll("#sideNav [data-nav-target]")),
+    pageTitle: document.getElementById("pageTitle"),
+    devToolsToggle: document.getElementById("devToolsToggle"),
+    devToolsNavGroup: document.getElementById("devToolsNavGroup"),
+    policyBanner: document.getElementById("policyBanner"),
+    policyBannerText: document.getElementById("policyBannerText"),
+    homeWorkerCard: document.getElementById("homeWorkerCard"),
+    homeQueueCard: document.getElementById("homeQueueCard"),
+    homeLlmCard: document.getElementById("homeLlmCard"),
+    homeDigestCard: document.getElementById("homeDigestCard"),
+    homeVaultCard: document.getElementById("homeVaultCard"),
+    homeTodayDate: document.getElementById("homeTodayDate"),
+    homeTodayCount: document.getElementById("homeTodayCount"),
+    homeKindOutcome: document.getElementById("homeKindOutcome"),
+    homeKindContext: document.getElementById("homeKindContext"),
+    homeKindLegacy: document.getElementById("homeKindLegacy"),
+    homeTodayChart: document.getElementById("homeTodayChart"),
+    homeTodayChips: document.getElementById("homeTodayChips"),
+    homeAttentionCount: document.getElementById("homeAttentionCount"),
+    homeAttentionLoading: document.getElementById("homeAttentionLoading"),
+    homeAttentionEmpty: document.getElementById("homeAttentionEmpty"),
+    homeAttentionList: document.getElementById("homeAttentionList"),
+    homeRecentRows: document.getElementById("homeRecentRows"),
   };
 
   function normalizeLocale(value) {
@@ -299,6 +357,50 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (!key) return;
       node.setAttribute("placeholder", t(key));
     });
+    document.querySelectorAll("[data-i18n-title]").forEach((node) => {
+      const key = node.getAttribute("data-i18n-title");
+      if (!key) return;
+      node.setAttribute("title", t(key));
+    });
+    document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
+      const key = node.getAttribute("data-i18n-aria-label");
+      if (!key) return;
+      node.setAttribute("aria-label", t(key));
+    });
+  }
+
+  // Incremental DOM writes: the 5 s poll only touches nodes whose value actually changed.
+  function setText(element, value) {
+    if (!element) return;
+    const next = String(value);
+    if (element.textContent !== next) element.textContent = next;
+  }
+
+  function setClass(element, className) {
+    if (element && element.className !== className) element.className = className;
+  }
+
+  function setAttr(element, name, value) {
+    if (!element) return;
+    if (value === null || value === undefined || value === "") {
+      if (element.hasAttribute(name)) element.removeAttribute(name);
+      return;
+    }
+    if (element.getAttribute(name) !== String(value)) element.setAttribute(name, String(value));
+  }
+
+  function setHidden(element, hidden) {
+    if (element && element.hidden !== !!hidden) element.hidden = !!hidden;
+  }
+
+  function setHtmlIfChanged(name, element, signature, render) {
+    if (!element || state.homeSignatures[name] === signature) return;
+    state.homeSignatures[name] = signature;
+    element.innerHTML = render();
+  }
+
+  function svgIcon(name, className) {
+    return '<svg class="' + className + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + (UI_ICONS[name] || "") + '</svg>';
   }
 
   function syncLocaleButtons() {
@@ -316,8 +418,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     document.title = t("meta.documentTitle");
     applyStaticTranslations();
     syncLocaleButtons();
+    syncPageTitle();
     rerenderStatusLines();
     renderOverview();
+    renderHome();
     renderProceduralWorkspace();
     renderLlmConfig();
     renderLlmTestResult();
@@ -383,17 +487,32 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const badge = isRead ? els.readPolicyState : els.writePolicyState;
     const meta = isRead ? els.readPolicyMeta : els.writePolicyMeta;
     const variant = isRead ? "readPolicy" : "writePolicy";
-    card.className = "policyCard " + variant + " " +
+    // The Read/Write controls are compact pills in the top bar; the long explanation lives in Settings.
+    setClass(card, "policyPill glassPill " + variant + " " +
       (enabled ? "is-enabled" : "is-disabled") +
-      (state.isSavingPolicy ? " is-saving" : "");
-    toggle.checked = !!enabled;
-    toggle.disabled = state.isSavingPolicy;
-    badge.textContent = state.isSavingPolicy ? t("common.saving") : enabled ? t("common.enabled") : t("common.disabled");
-    badge.className = "policyBadge " + (state.isSavingPolicy ? "saving" : enabled ? "enabled" : "disabled");
-    meta.textContent = getPolicyMeta(kind, enabled);
+      (state.isSavingPolicy ? " is-saving" : ""));
+    if (toggle.checked !== !!enabled) toggle.checked = !!enabled;
+    if (toggle.disabled !== state.isSavingPolicy) toggle.disabled = state.isSavingPolicy;
+    setText(badge, state.isSavingPolicy ? t("common.saving") : enabled ? t("shell.on") : t("shell.off"));
+    setClass(badge, "policyBadge " + (state.isSavingPolicy ? "saving" : enabled ? "enabled" : "disabled"));
+    const metaText = getPolicyMeta(kind, enabled);
+    setText(meta, metaText);
+    setAttr(card, "title", metaText);
+  }
+
+  function renderPolicyBanner(policy) {
+    const readOff = !policy.readEnabled;
+    const writeOff = !policy.writeEnabled;
+    const key = readOff && writeOff ? "shell.bothPaused" : writeOff ? "shell.writesPaused" : readOff ? "shell.readsPaused" : "";
+    setHidden(els.policyBanner, !key || state.isSavingPolicy);
+    if (key) setText(els.policyBannerText, t(key));
   }
 
   function syncSelect(select, values, emptyLabel, selectedValue, allowEmpty = true) {
+    // Rebuilding an unchanged <select> every poll would close an open dropdown; skip it.
+    const optionsKey = JSON.stringify([values || [], emptyLabel, allowEmpty]);
+    if (select.dataset.optionsKey === optionsKey) return;
+    select.dataset.optionsKey = optionsKey;
     const options = [];
     if (allowEmpty) {
       options.push('<option value="">' + escapeHtml(emptyLabel) + '</option>');
@@ -472,6 +591,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     ensureProjectDefaults(projects);
     renderReleaseCheck();
     renderDailyDigest();
+    renderPolicyBanner(policy);
+    renderHome();
   }
 
   function getReleaseStatusPresentation(result) {
@@ -758,10 +879,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
 
-    els.dailyDigestSchedulerEnabledInput.checked = !!config.enabled;
-    els.dailyDigestScheduleTimeInput.value = String(config.schedule_time || "23:50");
-    els.dailyDigestTimeZoneInput.value = String(config.time_zone || "Asia/Shanghai");
-    els.dailyDigestLookbackInput.value = String(config.lookback_days || 2);
+    // Only push saved values into the form when they changed, so polling never wipes an edit in progress.
+    const configStamp = JSON.stringify(config);
+    if (state.digestSchedulerAppliedStamp !== configStamp) {
+      state.digestSchedulerAppliedStamp = configStamp;
+      els.dailyDigestSchedulerEnabledInput.checked = !!config.enabled;
+      els.dailyDigestScheduleTimeInput.value = String(config.schedule_time || "23:50");
+      els.dailyDigestTimeZoneInput.value = String(config.time_zone || "Asia/Shanghai");
+      els.dailyDigestLookbackInput.value = String(config.lookback_days || 2);
+    }
 
     els.dailyDigestSchedulerRuntimeBadge.textContent = isActive
       ? t("runtime.dailyDigestSchedulerActive")
@@ -1626,6 +1752,369 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     ].join("");
   }
 
+  function parseTimestamp(value) {
+    if (!value) return null;
+    const text = String(value);
+    const parsed = new Date(text.includes("T") ? text : text.replace(" ", "T") + "Z");
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function parseLocalDay(value) {
+    const parts = String(value || "").split("-").map(Number);
+    if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return null;
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  function formatClock(date) {
+    return date.toLocaleTimeString(state.locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+
+  function formatShortDate(date) {
+    return date ? date.toLocaleDateString(state.locale, { month: "short", day: "numeric" }) : "";
+  }
+
+  function calendarDaysAgo(date) {
+    const now = new Date();
+    const then = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return Math.round((today.getTime() - then.getTime()) / 86400000);
+  }
+
+  function formatDayLabel(date) {
+    const days = calendarDaysAgo(date);
+    return days === 0 ? t("home.today") : days === 1 ? t("home.yesterday") : formatShortDate(date);
+  }
+
+  function formatDuration(ms) {
+    const minutes = Math.max(0, Math.floor(ms / 60000));
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    if (days > 0) return t("home.durationDays", { d: days, h: hours });
+    if (hours > 0) return t("home.durationHours", { h: hours, m: minutes % 60 });
+    return t("home.durationMinutes", { m: minutes });
+  }
+
+  function projectBasename(projectPath) {
+    const parts = String(projectPath || "").split(String.fromCharCode(92)).join("/").split("/").filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : String(projectPath || "");
+  }
+
+  function renderHealthCard(card, status, value, meta, title) {
+    if (!card) return;
+    setClass(card, "healthCard glassCard glassBlur is-" + status);
+    setText(document.getElementById(card.id + "Value"), value);
+    setText(document.getElementById(card.id + "Meta"), meta || "\\u00a0");
+    setAttr(card, "title", title || "");
+  }
+
+  function renderHomeHealth() {
+    const overview = state.overview;
+    const summary = state.homeSummary;
+    const now = Date.now();
+
+    if (state.overviewError) {
+      renderHealthCard(els.homeWorkerCard, "error", t("home.workerUnreachable"), t("home.workerUnreachableMeta"));
+    } else if (!overview) {
+      renderHealthCard(els.homeWorkerCard, "idle", "—", t("home.loading"));
+    } else {
+      const version = overview.release && overview.release.version ? "v" + overview.release.version : "";
+      const startedAt = parseTimestamp(overview.startedAt);
+      const uptime = startedAt ? t("home.uptime", { duration: formatDuration(now - startedAt.getTime()) }) : "";
+      renderHealthCard(els.homeWorkerCard, "ok", t("home.workerRunning"), [version, uptime].filter(Boolean).join(" · "));
+    }
+
+    if (overview && overview.queue) {
+      const stuck = Number(overview.queue.stuck_tasks || 0);
+      const duplicates = Number(overview.queue.duplicate_flags || 0);
+      renderHealthCard(
+        els.homeQueueCard,
+        stuck > 0 || duplicates > 0 ? "warn" : "ok",
+        t("home.queuePending", { n: Number(overview.queue.pending || 0) }),
+        t("home.queueMeta", { stuck, dup: duplicates })
+      );
+    } else if (!overview) {
+      renderHealthCard(els.homeQueueCard, "idle", "—", t("home.loading"));
+    }
+
+    // TODO(api): llm usage. Calls, latency and tokens per day need an endpoint over logs/llm-usage-*.jsonl;
+    // until then this card reports today's task-summary success rate (saved vs raw fallback) from task_results.
+    if (!summary) {
+      renderHealthCard(els.homeLlmCard, "idle", "—", t("home.loading"), t("home.llmHint"));
+    } else {
+      const tasks = summary.tasks_today || {};
+      const total = Number(tasks.total || 0);
+      if (total === 0) {
+        renderHealthCard(els.homeLlmCard, "idle", "—", t("home.llmNoTasks"), t("home.llmHint"));
+      } else {
+        const fallback = Number(tasks.fallback || 0);
+        const rate = Math.round(((total - fallback) / total) * 100);
+        renderHealthCard(
+          els.homeLlmCard,
+          rate < 80 ? "error" : rate < 95 ? "warn" : "ok",
+          rate + "%",
+          t("home.llmMeta", { calls: Number(tasks.llm_calls || 0), fallback }),
+          t("home.llmHint")
+        );
+      }
+    }
+
+    const scheduler = state.digestSchedulerPayload;
+    const nextRun = scheduler && scheduler.runtime ? parseTimestamp(scheduler.runtime.next_run_at) : null;
+    const schedulerEnabled = !!(scheduler && scheduler.config && scheduler.config.enabled);
+    if (!summary) {
+      renderHealthCard(els.homeDigestCard, "idle", "—", t("home.loading"));
+    } else {
+      const latest = summary.digests && summary.digests.latest;
+      const generatedAt = latest ? parseTimestamp(latest.generated_at) : null;
+      if (!latest || !generatedAt) {
+        renderHealthCard(els.homeDigestCard, "idle", "—", t("home.digestNone"));
+      } else {
+        const status = String(latest.status || "");
+        const projects = Number(summary.digests.latest_day_projects || 0);
+        const meta = !scheduler
+          ? t("home.digestMeta", { n: projects, time: "—" })
+          : schedulerEnabled && nextRun
+            ? t("home.digestMeta", { n: projects, time: formatClock(nextRun) })
+            : t("home.digestMetaNoNext", { n: projects });
+        renderHealthCard(
+          els.homeDigestCard,
+          status === "failed" ? "error" : status === "skipped_missing_llm" ? "warn" : "ok",
+          calendarDaysAgo(generatedAt) === 0 ? formatClock(generatedAt) : formatShortDate(generatedAt),
+          meta,
+          [projectBasename(latest.project_path), latest.local_date, status.replace(/_/g, " "), generatedAt.toLocaleString(state.locale)].filter(Boolean).join(" · ")
+        );
+      }
+    }
+
+    if (!summary) {
+      renderHealthCard(els.homeVaultCard, "idle", "—", t("home.loading"));
+    } else {
+      const checkpoint = parseTimestamp(summary.vault_review && summary.vault_review.last_successful_review_at);
+      if (!checkpoint) {
+        renderHealthCard(els.homeVaultCard, "idle", "—", t("home.vaultNone"));
+      } else {
+        const age = now - checkpoint.getTime();
+        const daysAgo = calendarDaysAgo(checkpoint);
+        const ageText = formatDuration(age);
+        renderHealthCard(
+          els.homeVaultCard,
+          age > VAULT_STALE_MS ? "warn" : "ok",
+          daysAgo <= 1 ? formatClock(checkpoint) : formatShortDate(checkpoint),
+          daysAgo <= 1 ? t("home.vaultMeta", { day: formatDayLabel(checkpoint), age: ageText }) : t("home.vaultAge", { age: ageText }),
+          checkpoint.toLocaleString(state.locale)
+        );
+      }
+    }
+  }
+
+  function niceStep(raw) {
+    const power = Math.pow(10, Math.floor(Math.log10(raw)));
+    const fraction = raw / power;
+    return (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10) * power;
+  }
+
+  // Stacked 30-day bars as inline SVG; rebuilt only when the daily counts or the locale change.
+  function renderDailyChart(daily) {
+    if (!daily.length) return "";
+    const width = 720;
+    const height = 210;
+    const left = 40;
+    const right = 12;
+    const top = 30;
+    const bottom = 26;
+    const plotWidth = width - left - right;
+    const plotHeight = height - top - bottom;
+    const baseY = top + plotHeight;
+    const totals = daily.map((day) => Number(day.outcome || 0) + Number(day.context || 0) + Number(day.legacy || 0));
+    const maxTotal = Math.max(0, ...totals);
+    const step = maxTotal > 0 ? Math.max(1, niceStep(maxTotal / 2)) : 1;
+    const ceiling = Math.max(step, Math.ceil(maxTotal / step) * step);
+    const yFor = (value) => baseY - (value / ceiling) * plotHeight;
+    const slot = plotWidth / daily.length;
+    const barWidth = Math.max(3, Math.min(16, slot * 0.58));
+    const parts = [];
+
+    for (let value = 0; value <= ceiling; value += step) {
+      const y = yFor(value);
+      parts.push('<line class="' + (value === 0 ? "chartAxis" : "chartGrid") + '" x1="' + left + '" x2="' + (width - right) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) + '"/>');
+      parts.push('<text x="' + (left - 8) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="end">' + escapeHtml(value.toLocaleString(state.locale)) + '</text>');
+    }
+
+    daily.forEach((day, index) => {
+      const x = left + index * slot + (slot - barWidth) / 2;
+      const segments = [
+        ["barOutcome", Number(day.outcome || 0)],
+        ["barContext", Number(day.context || 0)],
+        ["barLegacy", Number(day.legacy || 0)],
+      ];
+      let cursor = baseY;
+      const rects = segments.filter((segment) => segment[1] > 0).map((segment) => {
+        const segmentHeight = Math.max(2, (segment[1] / ceiling) * plotHeight);
+        cursor -= segmentHeight;
+        return '<rect class="' + segment[0] + '" x="' + x.toFixed(1) + '" y="' + cursor.toFixed(1) + '" width="' + barWidth.toFixed(1) + '" height="' + segmentHeight.toFixed(1) + '" rx="2"/>';
+      });
+      const tooltip = t("home.barTooltip", {
+        date: formatShortDate(parseLocalDay(day.day)),
+        outcome: Number(day.outcome || 0),
+        context: Number(day.context || 0),
+        legacy: Number(day.legacy || 0),
+      });
+      parts.push('<g class="barGroup"><title>' + escapeHtml(tooltip) + '</title>' +
+        '<rect x="' + (left + index * slot).toFixed(1) + '" y="' + top + '" width="' + slot.toFixed(1) + '" height="' + plotHeight + '" fill="transparent"/>' +
+        rects.join("") + '</g>');
+    });
+
+    daily.forEach((day, index) => {
+      if ((daily.length - 1 - index) % 7 !== 0) return;
+      const center = left + index * slot + slot / 2;
+      parts.push('<text x="' + center.toFixed(1) + '" y="' + (height - 6) + '" text-anchor="middle">' + escapeHtml(formatShortDate(parseLocalDay(day.day))) + '</text>');
+    });
+
+    // The v2.1 switch to one memory per task explains the volume drop; mark it so it is not read as an outage.
+    const markerIndex = daily.findIndex((day) => day.day === V21_SWITCH_DAY);
+    if (markerIndex > 0) {
+      const markerX = left + markerIndex * slot;
+      const labelOnLeft = markerX > width * 0.6;
+      parts.push('<line class="chartMarker" x1="' + markerX.toFixed(1) + '" x2="' + markerX.toFixed(1) + '" y1="' + (top - 12) + '" y2="' + baseY + '"/>');
+      parts.push('<circle class="chartMarkerDot" cx="' + markerX.toFixed(1) + '" cy="' + (top - 14) + '" r="3.2"/>');
+      parts.push('<text class="chartMarkerLabel" x="' + (markerX + (labelOnLeft ? -8 : 8)).toFixed(1) + '" y="' + (top - 10) + '" text-anchor="' + (labelOnLeft ? "end" : "start") + '">' + escapeHtml(t("home.v21Marker")) + '</text>');
+    }
+
+    return '<svg class="chartSvg" viewBox="0 0 ' + width + ' ' + height + '" aria-hidden="true" focusable="false">' + parts.join("") + '</svg>';
+  }
+
+  function renderHomeToday() {
+    const summary = state.homeSummary;
+    if (!summary || !summary.today) {
+      setText(els.homeTodayCount, "—");
+      return;
+    }
+    const today = summary.today;
+    setText(els.homeTodayCount, String(today.total || 0));
+    setText(els.homeKindOutcome, String(today.outcome || 0));
+    setText(els.homeKindContext, String(today.context || 0));
+    setText(els.homeKindLegacy, String(today.legacy || 0));
+    const todayDate = parseLocalDay(today.date);
+    setText(els.homeTodayDate, todayDate ? todayDate.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric" }) : "");
+
+    const daily = Array.isArray(summary.daily) ? summary.daily : [];
+    setHtmlIfChanged("chart", els.homeTodayChart, state.locale + JSON.stringify(daily), () => renderDailyChart(daily));
+
+    const agents = Array.isArray(today.agents) ? today.agents : [];
+    const projects = Array.isArray(today.projects) ? today.projects : [];
+    setHtmlIfChanged("chips", els.homeTodayChips, state.locale + JSON.stringify([agents, projects]), () => {
+      if (!agents.length && !projects.length) {
+        return '<span class="metaChip is-muted">' + escapeHtml(t("home.noActivityToday")) + '</span>';
+      }
+      return agents.map((agent) => (
+        '<span class="metaChip is-agent">' + svgIcon("tag", "chipIcon") +
+          '<span>' + escapeHtml(agent.agent_id) + '</span>' +
+          '<span class="metaChipCount">' + escapeHtml(String(agent.n)) + '</span>' +
+        '</span>'
+      )).join("") + projects.map((project) => (
+        '<span class="metaChip" title="' + escapeHtml(project.project_path) + '">' + svgIcon("projects", "chipIcon") +
+          '<span>' + escapeHtml(projectBasename(project.project_path)) + '</span>' +
+          '<span class="metaChipCount">' + escapeHtml(String(project.n)) + '</span>' +
+        '</span>'
+      )).join("");
+    });
+  }
+
+  function collectAttentionItems() {
+    const items = [];
+    const overview = state.overview;
+    const summary = state.homeSummary;
+    if (state.overviewError) {
+      items.push({ severity: "error", text: t("home.attnUnreachable"), target: "settingsView" });
+    }
+    if (overview && !state.isSavingPolicy) {
+      const policy = getDisplayedPolicy();
+      if (!policy.writeEnabled) items.push({ severity: "error", text: t("shell.writesPaused"), target: "settingsView" });
+      if (!policy.readEnabled) items.push({ severity: "error", text: t("shell.readsPaused"), target: "settingsView" });
+    }
+    const queue = overview && overview.queue || {};
+    if (Number(queue.stuck_tasks || 0) > 0) {
+      items.push({ severity: "warn", text: t("home.attnStuck", { n: queue.stuck_tasks }), target: "pipelineView" });
+    }
+    if (Number(queue.duplicate_flags || 0) > 0) {
+      items.push({ severity: "warn", text: t("home.attnDuplicates", { n: queue.duplicate_flags }), target: "pipelineView" });
+    }
+    if (summary) {
+      const fallback = Number(summary.tasks_today && summary.tasks_today.fallback || 0);
+      if (fallback > 0) {
+        items.push({ severity: "warn", text: t("home.attnFallbacks", { n: fallback }), target: "pipelineView" });
+      }
+      const failed = summary.digests && Array.isArray(summary.digests.failed_recent) ? summary.digests.failed_recent : [];
+      failed.forEach((digest) => {
+        items.push({
+          severity: "error",
+          text: t("home.attnDigestFailed", { project: projectBasename(digest.project_path), date: digest.local_date }),
+          title: String(digest.last_error || ""),
+          target: "digestsView",
+        });
+      });
+      const checkpoint = parseTimestamp(summary.vault_review && summary.vault_review.last_successful_review_at);
+      if (checkpoint && Date.now() - checkpoint.getTime() > VAULT_STALE_MS) {
+        items.push({ severity: "warn", text: t("home.attnVaultStale", { age: formatDuration(Date.now() - checkpoint.getTime()) }), target: "digestsView" });
+      }
+    }
+    return items;
+  }
+
+  function renderHomeAttention() {
+    const loaded = !!state.overview || state.overviewError;
+    const items = collectAttentionItems();
+    const errors = items.filter((item) => item.severity === "error").length;
+    setHidden(els.homeAttentionLoading, loaded);
+    setHidden(els.homeAttentionEmpty, !loaded || items.length > 0);
+    setHidden(els.homeAttentionList, !loaded || items.length === 0);
+    setHidden(els.homeAttentionCount, items.length === 0);
+    setText(els.homeAttentionCount, String(items.length));
+    setClass(els.homeAttentionCount, "countBadge" + (errors > 0 ? " is-error" : ""));
+    setHtmlIfChanged("attention", els.homeAttentionList, JSON.stringify(items), () => items.map((item) => (
+      '<li><button class="attentionItem is-' + item.severity + '" type="button" data-nav-target="' + item.target + '"' +
+        (item.title ? ' title="' + escapeHtml(item.title) + '"' : '') + '>' +
+        '<span class="attentionDot" aria-hidden="true"></span><span>' + escapeHtml(item.text) + '</span>' +
+      '</button></li>'
+    )).join(""));
+  }
+
+  function renderHomeRecent() {
+    const summary = state.homeSummary;
+    if (!summary) return;
+    const rows = Array.isArray(summary.recent) ? summary.recent : [];
+    const signature = state.locale + "|" + new Date().toDateString() + "|" +
+      rows.map((row) => row.id + ":" + (row.record_kind || "") + ":" + (row.source_kind || "")).join(",");
+    setHtmlIfChanged("recent", els.homeRecentRows, signature, () => {
+      if (!rows.length) {
+        return '<tr><td colspan="5" class="tableEmpty">' + escapeHtml(t("home.recentEmpty")) + '</td></tr>';
+      }
+      return rows.map((row) => {
+        const createdAt = parseTimestamp(row.created_at);
+        const time = createdAt
+          ? (calendarDaysAgo(createdAt) === 0 ? formatClock(createdAt) : formatShortDate(createdAt) + " " + formatClock(createdAt))
+          : "—";
+        const kind = row.record_kind === "outcome" || row.record_kind === "context" ? row.record_kind : "legacy";
+        const kindLabel = t(kind === "outcome" ? "home.kindOutcome" : kind === "context" ? "home.kindContext" : "home.kindLegacy");
+        const explicit = row.source_kind === "explicit";
+        return '<tr>' +
+          '<td title="' + escapeHtml(createdAt ? createdAt.toLocaleString(state.locale) : "") + '">' + escapeHtml(time) + '</td>' +
+          '<td><span class="kindPill kind-' + kind + (explicit ? ' is-explicit" title="' + escapeHtml(t("home.kindExplicit")) : '') + '">' + escapeHtml(kindLabel) + '</span></td>' +
+          '<td class="cellMuted">' + escapeHtml(row.agent_id || "") + '</td>' +
+          '<td title="' + escapeHtml(row.project_path || "") + '">' + escapeHtml(projectBasename(row.project_path)) + '</td>' +
+          '<td title="' + escapeHtml(row.title || "") + '">' + escapeHtml(row.title || "") + '</td>' +
+        '</tr>';
+      }).join("");
+    });
+  }
+
+  function renderHome() {
+    renderHomeHealth();
+    renderHomeToday();
+    renderHomeAttention();
+    renderHomeRecent();
+  }
+
   async function fetchJson(url, options) {
     const response = await fetch(url, options);
     const text = await response.text();
@@ -1637,12 +2126,60 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   async function loadOverview() {
-    const nextOverview = await fetchJson("/admin/api/overview");
+    let nextOverview;
+    try {
+      nextOverview = await fetchJson("/admin/api/overview");
+    } catch (error) {
+      state.overviewError = true;
+      renderHome();
+      throw error;
+    }
     if (state.overview && comparePolicyFreshness(nextOverview.policy, state.overview.policy) < 0) {
       nextOverview.policy = state.overview.policy;
     }
+    // A new memory or task result makes the Home aggregates stale: refresh them on this poll, not in 30 s.
+    if (state.overview && (getOverviewActivityStamp(state.overview) !== getOverviewActivityStamp(nextOverview))) {
+      state.homeSummaryAt = 0;
+    }
+    state.overviewError = false;
     state.overview = nextOverview;
     renderOverview();
+  }
+
+  function getOverviewActivityStamp(overview) {
+    const stats = overview && overview.stats || {};
+    const tasks = overview && overview.tasks || {};
+    return [stats.observations, stats.dailyDigests, stats.currentStateFacts, tasks.tasks, tasks.llm_calls].join("|");
+  }
+
+  async function loadHomeSummary() {
+    if (state.homeSummaryInFlight) return state.homeSummaryInFlight;
+    state.homeSummaryAt = Date.now();
+    const params = new URLSearchParams({
+      days: String(HOME_CHART_DAYS),
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+    });
+    state.homeSummaryInFlight = fetchJson("/admin/api/home-summary?" + params.toString())
+      .then((payload) => {
+        state.homeSummary = payload;
+        renderHome();
+      })
+      .finally(() => {
+        state.homeSummaryInFlight = null;
+      });
+    return state.homeSummaryInFlight;
+  }
+
+  async function refreshHomeData(force) {
+    const now = Date.now();
+    const jobs = [];
+    if (force || now - state.homeSummaryAt >= HOME_SUMMARY_REFRESH_MS) {
+      jobs.push(loadHomeSummary());
+    }
+    if (!state.isSavingDigestScheduler && (force || now - state.digestSchedulerAt >= DIGEST_SCHEDULER_REFRESH_MS)) {
+      jobs.push(loadDailyDigestSchedulerConfig());
+    }
+    await Promise.allSettled(jobs);
   }
 
   async function loadReleaseCheck() {
@@ -1809,8 +2346,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   async function loadDailyDigestSchedulerConfig() {
+    state.digestSchedulerAt = Date.now();
     state.digestSchedulerPayload = await fetchJson("/admin/api/digest-scheduler");
     renderDailyDigestScheduler();
+    renderHome();
   }
 
   async function loadProceduralWorkspaceData() {
@@ -2274,11 +2813,133 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     Array.from(els.viewTabs.querySelectorAll("[data-panel-target]")).forEach((button) => {
       button.classList.toggle("is-active", button.getAttribute("data-panel-target") === panelId);
     });
+    syncNavItems();
+  }
+
+  function syncNavItems() {
+    els.navItems.forEach((button) => {
+      const devPanel = button.getAttribute("data-dev-panel");
+      const isActive = devPanel
+        ? state.activeView === "devToolsView" && devPanel === state.activePanel
+        : button.getAttribute("data-nav-target") === state.activeView;
+      button.classList.toggle("is-active", isActive);
+      if (isActive) {
+        button.setAttribute("aria-current", "page");
+      } else {
+        button.removeAttribute("aria-current");
+      }
+    });
+  }
+
+  function syncPageTitle() {
+    const key = VIEW_TITLE_KEYS[state.activeView] || "nav.home";
+    els.pageTitle.setAttribute("data-i18n", key);
+    setText(els.pageTitle, t(key));
+  }
+
+  function activateView(viewId) {
+    let nextView = VIEW_TITLE_KEYS[viewId] ? viewId : "homeView";
+    if (nextView === "devToolsView" && !state.devToolsEnabled) nextView = "homeView";
+    state.activeView = nextView;
+    els.appViews.forEach((view) => {
+      view.classList.toggle("is-active", view.id === nextView);
+    });
+    syncNavItems();
+    syncPageTitle();
+    if (nextView === "homeView") {
+      void refreshHomeData(false);
+    }
+    if (nextView === "devToolsView") {
+      void ensureDevToolsLoaded();
+    }
+  }
+
+  function readDevToolsPreference() {
+    try {
+      return window.localStorage.getItem(DEV_TOOLS_STORAGE_KEY) === "1";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function setDevToolsEnabled(enabled, persist) {
+    state.devToolsEnabled = !!enabled;
+    if (els.devToolsToggle.checked !== state.devToolsEnabled) els.devToolsToggle.checked = state.devToolsEnabled;
+    setHidden(els.devToolsNavGroup, !state.devToolsEnabled);
+    if (persist) {
+      try {
+        window.localStorage.setItem(DEV_TOOLS_STORAGE_KEY, state.devToolsEnabled ? "1" : "0");
+      } catch (_error) {
+        // Ignore storage write errors.
+      }
+    }
+    if (!state.devToolsEnabled && state.activeView === "devToolsView") {
+      activateView("homeView");
+    }
+  }
+
+  // The legacy panels load their data the first time Developer tools is opened, not on every page load.
+  async function ensureDevToolsLoaded() {
+    if (state.devToolsLoaded) return;
+    state.devToolsLoaded = true;
+    try {
+      await loadLlmConfig();
+      await loadRecords("ledger.loading");
+      if (!state.digestSchedulerPayload) {
+        await loadDailyDigestSchedulerConfig();
+      }
+      if (els.dailyDigestProjectSelect.value) {
+        await loadDailyDigestStatus();
+      } else {
+        renderDailyDigest();
+      }
+      if (els.proceduralProjectSelect.value) {
+        await loadProceduralWorkspaceData();
+      } else {
+        renderProceduralWorkspace();
+      }
+      if (els.contextProjectSelect.value) {
+        await loadProjectContext();
+      } else {
+        renderProjectContext();
+      }
+      if (els.stateProjectSelect.value) {
+        await loadStateFacts();
+      } else {
+        renderStateFacts();
+      }
+      renderSearchResults();
+      setStoredStatusLine("runtime", els.runtimeStatusLine, "status.workbenchReady", {}, "");
+    } catch (error) {
+      state.devToolsLoaded = false;
+      setRawStatusLine("runtime", els.runtimeStatusLine, error.message || t("status.initializationFailed"), "error");
+    }
   }
 
   async function pollActiveData() {
+    // Skip hidden tabs and never stack polls when the worker answers slower than the interval.
+    if (document.hidden || state.isPolling) return;
+    state.isPolling = true;
+    try {
+      await pollVisibleView();
+    } finally {
+      state.isPolling = false;
+    }
+  }
+
+  async function pollVisibleView() {
     try {
       await loadOverview();
+    } catch (error) {
+      // The Worker card and the attention list already show the failed poll.
+      return;
+    }
+    if (state.activeView === "homeView") {
+      await refreshHomeData(false);
+      return;
+    }
+    if (state.activeView !== "devToolsView" || !state.devToolsLoaded) return;
+    try {
       if (state.activePanel === "observationLedgerPanel") {
         await loadRecords("ledger.polling");
       }
@@ -2313,6 +2974,41 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       button.addEventListener("click", () => {
         activatePanel(button.getAttribute("data-panel-target"));
       });
+    });
+
+    // One delegated handler for the sidebar, health cards, attention items and "View all".
+    document.addEventListener("click", (event) => {
+      const trigger = event.target.closest("[data-nav-target]");
+      if (!trigger) return;
+      if (trigger.hasAttribute("data-requires-dev-tools") && !state.devToolsEnabled) {
+        setDevToolsEnabled(true, true);
+      }
+      const devPanel = trigger.getAttribute("data-dev-panel");
+      if (devPanel) {
+        activatePanel(devPanel);
+      }
+      activateView(trigger.getAttribute("data-nav-target"));
+    });
+
+    els.devToolsToggle.addEventListener("change", () => {
+      setDevToolsEnabled(els.devToolsToggle.checked, true);
+    });
+
+    // Turning a memory switch off affects every agent, so it needs an explicit confirmation.
+    [els.readToggle, els.writeToggle].forEach((toggle) => {
+      toggle.addEventListener("click", (event) => {
+        if (toggle.checked) return;
+        const key = toggle === els.readToggle ? "shell.confirmReadOff" : "shell.confirmWriteOff";
+        if (!window.confirm(t(key))) {
+          event.preventDefault();
+        }
+      });
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        void pollActiveData();
+      }
     });
 
     els.llmReloadButton.addEventListener("click", async () => {
@@ -2578,39 +3274,17 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   async function initialize() {
     state.locale = detectInitialLocale();
     applyLocale(true);
+    setDevToolsEnabled(readDevToolsPreference(), false);
     bindEvents();
+    activateView("homeView");
     try {
       await loadOverview();
       renderReleaseCheck();
       void loadReleaseCheck();
-      await loadLlmConfig();
-      await loadRecords("ledger.loading");
-      await loadDailyDigestSchedulerConfig();
-      if (els.dailyDigestProjectSelect.value) {
-        await loadDailyDigestStatus();
-      } else {
-        renderDailyDigest();
-      }
-      if (els.proceduralProjectSelect.value) {
-        await loadProceduralWorkspaceData();
-      } else {
-        renderProceduralWorkspace();
-      }
-      if (els.contextProjectSelect.value) {
-        await loadProjectContext();
-      } else {
-        renderProjectContext();
-      }
-      if (els.stateProjectSelect.value) {
-        await loadStateFacts();
-      } else {
-        renderStateFacts();
-      }
-      renderSearchResults();
-      setStoredStatusLine("runtime", els.runtimeStatusLine, "status.workbenchReady", {}, "");
     } catch (error) {
       setRawStatusLine("runtime", els.runtimeStatusLine, error.message || t("status.initializationFailed"), "error");
     }
+    await refreshHomeData(false);
 
     state.pollHandle = window.setInterval(() => {
       pollActiveData();
