@@ -2016,7 +2016,7 @@ export class DatabaseManager {
     // Quick-skip only when the stored schema revision is current AND every table and index exists. Any change to the
     // block below must bump TASK_SCHEMA_REVISION, so a database from an older revision always runs the (idempotent) upgrade.
     const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open', 'idx_task_results_task',
-      'idx_observation_content_hash', 'idx_review_runs_interval'];
+      'idx_observation_content_hash', 'idx_review_runs_interval', 'idx_observations_created_dt'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type IN ('table','index') AND name IN (${[...wanted, ...indexes].map(() => '?').join(',')})`,
       [...wanted, ...indexes]);
     const revision = this.columnsOf('task_schema_meta').size
@@ -2077,6 +2077,9 @@ export class DatabaseManager {
         cursor TEXT, status TEXT NOT NULL, metrics_json TEXT,
         started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_review_runs_interval ON review_runs(reader, since, until, status)`);
+      // Admin Home aggregates filter and sort by datetime(created_at) (mixed stored formats), so index that expression.
+      // Additive only: a missing index alone triggers this idempotent block, and older releases simply ignore it.
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_observations_created_dt ON observations(datetime(created_at))`);
       this.db.run(`CREATE TABLE IF NOT EXISTS legacy_compaction_links (
         legacy_observation_id TEXT PRIMARY KEY, task_result_id TEXT NOT NULL)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS task_schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);

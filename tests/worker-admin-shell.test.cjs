@@ -484,3 +484,39 @@ test('worker serves the shell, the home summary route and the worker start time'
     assert.ok(Array.isArray(summary.recent));
   });
 });
+
+test('home summary queries use the datetime(created_at) index, and existing databases gain it on startup', withDb(async (db) => {
+  const plan = (sql, values = []) => db.sqlAll(`EXPLAIN QUERY PLAN ${sql}`, values).map(row => row.detail).join(' | ');
+  assert.match(plan(`SELECT COUNT(*) FROM observations WHERE datetime(created_at) >= datetime(?)`, ['2026-10-01 00:00:00']),
+    /idx_observations_created_dt/);
+  assert.match(plan(`SELECT id FROM observations ORDER BY datetime(created_at) DESC, rowid DESC LIMIT 10`), /idx_observations_created_dt/);
+  // A database from the previous release has no such index: the next initialize adds it without a schema bump.
+  await db.sqlWrite((tx) => tx.run(`DROP INDEX idx_observations_created_dt`));
+  const dbPath = process.env.AGENTMEM_DB_PATH;
+  db.close();
+  const reopened = new DatabaseManager();
+  try {
+    await reopened.initialize();
+    assert.equal(reopened.sqlAll(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_observations_created_dt'`).length, 1);
+    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+  } finally {
+    reopened.close();
+  }
+  assert.equal(process.env.AGENTMEM_DB_PATH, dbPath);
+}));
+
+test('home summary route rejects non-loopback requests with 403', async (t) => {
+  const external = Object.values(os.networkInterfaces()).flat()
+    .find(addr => addr && addr.family === 'IPv4' && !addr.internal);
+  if (!external) {
+    t.skip('no non-loopback IPv4 interface to reach the worker from');
+    return;
+  }
+  await withWorker(async ({ port, get }) => {
+    const local = await get('/admin/api/home-summary');
+    assert.ok(Array.isArray(local.daily));
+    const response = await fetch(`http://${external.address}:${port}/admin/api/home-summary`, { signal: AbortSignal.timeout(15000) });
+    assert.equal(response.status, 403);
+    assert.match((await response.json()).error, /loopback/);
+  });
+});
