@@ -520,3 +520,22 @@ test('home summary route rejects non-loopback requests with 403', async (t) => {
     assert.match((await response.json()).error, /loopback/);
   });
 });
+
+test('activity and memory-detail queries use the task_results observation index, and existing databases gain it on startup', withDb(async (db) => {
+  const plan = (sql, values = []) => db.sqlAll(`EXPLAIN QUERY PLAN ${sql}`, values).map(row => row.detail).join(' | ');
+  assert.match(plan(`SELECT COUNT(*) FROM task_results WHERE observation_id=?`, ['obs']), /idx_task_results_observation/);
+  assert.match(plan(`SELECT id FROM task_results WHERE observation_id=? ORDER BY rowid`, ['obs']), /idx_task_results_observation/);
+  // A database from the previous release has no such index: the next initialize adds it without a schema bump.
+  await db.sqlWrite((tx) => tx.run(`DROP INDEX idx_task_results_observation`));
+  const dbPath = process.env.AGENTMEM_DB_PATH;
+  db.close();
+  const reopened = new DatabaseManager();
+  try {
+    await reopened.initialize();
+    assert.equal(reopened.sqlAll(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_task_results_observation'`).length, 1);
+    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+  } finally {
+    reopened.close();
+  }
+  assert.equal(process.env.AGENTMEM_DB_PATH, dbPath);
+}));
