@@ -183,7 +183,28 @@ async function waitForWorker(port: string | number, timeoutMs: number): Promise<
   return false;
 }
 
+/** True when worker.pid names a live process that worker-status.json still reports as the running worker. */
+export function recordedWorkerAlive(runtimeDir: string = resolveRuntimeDir(), probe: (pid: number) => void = pid => { process.kill(pid, 0); }): number | null {
+  try {
+    const pid = Number(fs.readFileSync(path.join(runtimeDir, 'worker.pid'), 'utf8').trim());
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return null;
+    try {
+      const status = JSON.parse(fs.readFileSync(path.join(runtimeDir, 'worker-status.json'), 'utf8'));
+      if (status?.state !== 'running' || Number(status?.pid) !== pid) return null;
+    } catch { return null; }
+    try { probe(pid); } catch (error: any) { if (error?.code !== 'EPERM') return null; }
+    return pid;
+  } catch { return null; }
+}
+
 async function ensureWorkerAvailable(port: string | number): Promise<boolean> {
+  const livePid = recordedWorkerAlive();
+  if (livePid) {
+    appendLifecycleDiagnostic(`worker autostart skipped: worker.pid ${livePid} is alive; waiting for it`);
+    const ready = await waitForWorker(port, resolveStartupTimeoutMs());
+    appendLifecycleDiagnostic(ready ? `worker ready port=${port} (existing pid ${livePid})` : `existing worker pid ${livePid} not answering on port=${port}`);
+    return ready;
+  }
   const lockPath = path.join(resolveRuntimeDir(), 'worker-start.lock');
   const ownsLock = acquireStartLock(lockPath);
 

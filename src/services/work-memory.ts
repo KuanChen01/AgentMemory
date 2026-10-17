@@ -7,11 +7,17 @@ export function interpretWorkMemory(raw: any, success: boolean) {
   // field from an older provider is uncertainty, not permission to discard.
   const skip = requested === 'skip' && success;
   const kind: WorkMemoryKind = requested === 'outcome' || !success ? 'outcome' : 'context';
-  const array = (key: string): string[] => Array.isArray(raw?.[key])
-    ? raw[key].filter((v: unknown): v is string => typeof v === 'string' && !!v.trim()) : [];
-  return { skip, kind, title: String(raw?.title || '').trim(),
+  const missing: string[] = [];
+  const array = (key: string): string[] => {
+    if (Array.isArray(raw?.[key])) return raw[key].filter((v: unknown): v is string => typeof v === 'string' && !!v.trim());
+    missing.push(key);
+    return [];
+  };
+  const result = { skip, kind, title: String(raw?.title || '').trim(),
     narrative: String(raw?.narrative || '').trim(), facts: array('facts'),
     concepts: array('concepts'), files_read: array('files_read'), files_modified: array('files_modified') };
+  if (missing.length && !skip) console.warn(`[Memory] LLM response missing list field(s) ${missing.join(', ')}; using []`);
+  return result;
 }
 
 export const WORK_MEMORY_PROMPT = `Decide whether this tool event adds useful working memory.

@@ -24,7 +24,7 @@ async function fixture(run) {
     }) } }] }));
   });
   await new Promise(resolve => llm.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(envPath, `AGENTMEM_LLM_API_URL=http://127.0.0.1:${llm.address().port}/v1\nAGENTMEM_LLM_API_KEY=fixture-only\nAGENTMEM_LLM_MODEL=mock\n`);
+  fs.writeFileSync(envPath, `AGENTMEM_LLM_API_URL=http://127.0.0.1:${llm.address().port}/v1\nAGENTMEM_LLM_API_KEY=fixture-only\nAGENTMEM_LLM_MODEL=mock\nAGENTMEM_LLM_RETRY_BASE_MS=1\n`);
   let worker;
   let port;
   const start = async (overrides = {}) => {
@@ -182,13 +182,13 @@ test('truncated synthesis input cannot be skipped as proven routine work', async
   });
 });
 
-test('successful source remains recoverable when synthesis fails without a second model call', async () => {
+test('successful source remains recoverable when synthesis fails after bounded 5xx retries', async () => {
   await fixture(async ({post,get,settled,setSummaryFailure,requests}) => {
     setSummaryFailure(true);
     await post('/tools',{session_id:'capture-error',project_path:'E:/Verified',agent_id:'codex',tool_name:'exec_command',success:true,
       input:'verify build',output:'Build passed; durable deployment issue resolved'});
     const status=await settled(1);
-    assert.equal(status.stats.observations,1); assert.equal(requests.length,1);
+    assert.equal(status.stats.observations,1); assert.equal(requests.length,3, 'one call + 2 transient retries, no extra synthesis');
     const qs=new URLSearchParams({since:'2026-01-01T00:00:00Z',until:'2099-01-01T00:00:00Z'});
     const view=await (await get('/admin/api/work-overview?'+qs)).json();
     const ref=view.memories[0]; assert.equal(ref.kind,'context');

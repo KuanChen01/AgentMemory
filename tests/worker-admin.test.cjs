@@ -400,7 +400,7 @@ for (const mode of ['missing credentials', 'LLM HTTP failure']) {
       child = await startWorkerWithEnv(dbPath, port, {
         AGENTMEM_LLM_API_KEY: '', DEEPSEEK_API_KEY: '', EMBEDDING_API_URL: '',
         AGENTMEM_LLM_API_URL: mock ? mock.baseUrl : 'https://example.invalid/v1',
-        AGENTMEM_LLM_HEADERS: '',
+        AGENTMEM_LLM_HEADERS: '', AGENTMEM_LLM_RETRY_BASE_MS: '1',
       });
       const sessionId = randomUUID();
       for (const success of [true, false]) {
@@ -432,7 +432,7 @@ for (const mode of ['missing credentials', 'LLM HTTP failure']) {
       assert.match(failed.narrative, /ENOENT: README.md not found/);
       assert.match(failed.narrative, mock ? /Summarization failed/ : /Missing LLM API credentials/);
       assert.match(uncertain.narrative, /Documentation contents/);
-      if (mock) assert.equal(mock.requests.length, 2);
+      if (mock) assert.equal(mock.requests.length, 6, '2 logs x (1 call + 2 transient 5xx retries)');
     } finally {
       if (child) await stopWorker(child, port);
       if (mock) await mock.close();
