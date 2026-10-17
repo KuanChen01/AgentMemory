@@ -240,6 +240,84 @@ test('sidebar Background row opens a labelled popover with presets, upload, tone
   assert.match(script, /URL\.createObjectURL\(/);
 });
 
+function extractClientFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `missing function ${name}`);
+  let depth = 0;
+  let seen = false;
+  let quote = '';
+  let escape = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (escape) escape = false;
+      else if (char === '\\') escape = true;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+    // A slash escaped by a backslash is a regex such as /^image\//, not a line comment.
+    if (char === '/' && source[index + 1] === '/' && source[index - 1] !== '\\') {
+      const newline = source.indexOf('\n', index);
+      if (newline < 0) break;
+      index = newline;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+      seen = true;
+    } else if (char === '}') {
+      depth -= 1;
+      if (seen && depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  assert.fail(`unclosed function ${name}`);
+}
+
+test('custom wallpaper rejects files over 10 MB before decode and keeps transparent pixels', () => {
+  assert.match(script, /BG_MAX_UPLOAD_BYTES = 10 \* 1024 \* 1024/);
+  const upload = extractClientFunction(script, 'handleWallpaperUpload');
+  const sizeAt = upload.search(/file\.size\s*>\s*BG_MAX_UPLOAD_BYTES/);
+  const prepareAt = upload.indexOf('prepareWallpaper(');
+  const busyAt = upload.indexOf('bg.busy = true');
+  assert.ok(sizeAt >= 0, 'size check inside handleWallpaperUpload');
+  assert.ok(prepareAt >= 0, 'prepareWallpaper call inside handleWallpaperUpload');
+  assert.ok(sizeAt < prepareAt, 'size check runs before decode');
+  assert.ok(busyAt > sizeAt, 'oversized files return before bg.busy is set');
+  assert.match(upload, /setBackgroundStatus\("bg\.uploadTooLarge", true\)/);
+  assert.equal(ADMIN_UI_TRANSLATIONS.en['bg.uploadTooLarge'], 'That image is larger than 10 MB. Pick a smaller one.');
+  assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['bg.uploadTooLarge'], '图片超过 10 MB，请换一张小一点的。');
+
+  const width = 8;
+  const height = 8;
+  const result = vm.runInNewContext(`
+    ${extractClientFunction(script, 'canvasHasAlpha')}
+    ${extractClientFunction(script, 'wallpaperEncodeTypes')}
+    const opaque = new Uint8ClampedArray(${width * height * 4});
+    opaque.fill(255);
+    const sampled = new Uint8ClampedArray(opaque);
+    sampled[((4 * ${width}) + 4) * 4 + 3] = 254;
+    const offRow = new Uint8ClampedArray(opaque);
+    offRow[((1 * ${width}) + 4) * 4 + 3] = 0;
+    ({
+      opaque: canvasHasAlpha(opaque, ${width}, ${height}, 4),
+      sampled: canvasHasAlpha(sampled, ${width}, ${height}, 4),
+      offRow: canvasHasAlpha(offRow, ${width}, ${height}, 4),
+      alphaTypes: wallpaperEncodeTypes(true),
+      opaqueTypes: wallpaperEncodeTypes(false),
+    });
+  `);
+  assert.equal(result.opaque, false);
+  assert.equal(result.sampled, true);
+  assert.equal(result.offRow, false);
+  // Arrays created inside the vm have that realm's Array prototype, so copy them before deepEqual.
+  assert.deepEqual([...result.alphaTypes], ['image/webp', 'image/png']);
+  assert.deepEqual([...result.opaqueTypes], ['image/jpeg']);
+});
+
 test('background settings persist under am.bg and apply in <head> before first paint', () => {
   assert.equal(ADMIN_UI_BACKGROUND_STORAGE_KEY, 'am.bg');
   assert.deepEqual(ADMIN_UI_BACKGROUND_DEFAULTS, { preset: 'aurora', tone: 'auto', blur: 12, dim: 0, opacity: 30 });

@@ -83,6 +83,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const BG_DB_STORE = "wallpapers";
   const BG_DB_KEY = "custom";
   const BG_MAX_EDGE = 2560;
+  const BG_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
   const HEALTH_CHECKS = ${JSON.stringify(ADMIN_UI_HEALTH_CHECKS.map(({ key, id, card, labelKey }) => ({ key, id, card, labelKey })))};
   // Home aggregates are cheap SQL but still heavier than the 5 s overview, so they refresh on a slower cadence
   // (and immediately when the overview shows a new memory or task).
@@ -3093,6 +3094,28 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderBackgroundControls();
   }
 
+  // Sampled alpha scan. stride 4 checks every 4th pixel of every 4th row so a 2560px canvas stays cheap.
+  function canvasHasAlpha(data, width, height, stride) {
+    const step = Math.max(1, stride | 0);
+    const rowBytes = width * 4;
+    for (let y = 0; y < height; y += step) {
+      const row = y * rowBytes;
+      for (let x = 0; x < width; x += step) {
+        if (data[row + x * 4 + 3] < 255) return true;
+      }
+    }
+    return false;
+  }
+
+  function wallpaperEncodeTypes(hasAlpha) {
+    return hasAlpha ? ["image/webp", "image/png"] : ["image/jpeg"];
+  }
+
+  function wallpaperSourceMayHaveAlpha(type) {
+    const normalized = String(type || "").split(";")[0].trim().toLowerCase();
+    return normalized === "image/png" || normalized === "image/webp" || normalized === "image/gif" || normalized === "image/avif" || normalized === "image/svg+xml";
+  }
+
   function decodeImage(file) {
     const viaElement = () => new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file);
@@ -3111,7 +3134,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   // Downscales to at most BG_MAX_EDGE on the long side and samples a 24x24 copy for the average colour and
-  // luma that drive the Auto glass tone.
+  // luma that drive the Auto glass tone. Sources that can carry alpha are re-encoded as WebP (PNG when the
+  // browser cannot encode WebP) so transparent pixels stay transparent; opaque images stay JPEG.
   async function prepareWallpaper(file) {
     const source = await decodeImage(file);
     const width = source.naturalWidth || source.width;
@@ -3149,9 +3173,19 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const luma = (0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]) / 255;
     const color = "#" + channels.map((value) => value.toString(16).padStart(2, "0")).join("");
 
-    const blob = await new Promise((resolve, reject) => {
-      canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("Image encode failed"))), "image/jpeg", 0.9);
+    let hasAlpha = false;
+    if (wallpaperSourceMayHaveAlpha(file.type)) {
+      const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+      const frameHasAlpha = canvasHasAlpha(frame.data, canvas.width, canvas.height, 4);
+      const sampleHasAlpha = canvasHasAlpha(pixels, 24, 24, 1);
+      hasAlpha = frameHasAlpha || sampleHasAlpha;
+    }
+    const types = wallpaperEncodeTypes(hasAlpha);
+    const encode = (type) => new Promise((resolve, reject) => {
+      canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("Image encode failed"))), type, 0.9);
     });
+    let blob = await encode(types[0]);
+    if (types.length > 1 && blob.type !== "image/webp") blob = await encode(types[1]);
     return { blob, width: canvas.width, height: canvas.height, luma: Math.round(luma * 1000) / 1000, color };
   }
 
@@ -3159,6 +3193,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!file || bg.busy) return;
     if (!/^image\\//.test(String(file.type || ""))) {
       setBackgroundStatus("bg.uploadNotImage", true);
+      return;
+    }
+    if (file.size > BG_MAX_UPLOAD_BYTES) {
+      setBackgroundStatus("bg.uploadTooLarge", true);
       return;
     }
     bg.busy = true;
