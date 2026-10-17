@@ -9,7 +9,13 @@ const { randomUUID } = require('node:crypto');
 
 const { renderAdminPageHtml } = require('../dist/services/admin-ui.js');
 const { ADMIN_UI_TRANSLATIONS } = require('../dist/services/admin-ui-copy.js');
-const { ADMIN_UI_NAV_ITEMS, ADMIN_UI_DEV_PANELS } = require('../dist/services/admin-ui-markup.js');
+const { ADMIN_UI_NAV_ITEMS, ADMIN_UI_DEV_PANELS, ADMIN_UI_HEALTH_CHECKS } = require('../dist/services/admin-ui-markup.js');
+const { ADMIN_UI_THEME, ADMIN_UI_WALLPAPERS } = require('../dist/services/admin-ui-theme.js');
+const {
+  ADMIN_UI_BACKGROUND_STORAGE_KEY,
+  ADMIN_UI_BACKGROUND_DEFAULTS,
+  renderAdminBackgroundBootScript,
+} = require('../dist/services/admin-ui-client.js');
 const { DatabaseManager } = require('../dist/services/db.js');
 const { withWorker } = require('./helpers/task-worker.cjs');
 
@@ -116,9 +122,10 @@ test('every i18n key used by the markup and the shell exists in en and zh-CN', (
   const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
   const used = new Set();
   for (const match of html.matchAll(/data-i18n(?:-placeholder|-title|-aria-label)?="([^"]+)"/g)) used.add(match[1]);
-  for (const match of script.matchAll(/\bt\("((?:nav|home|shell|devtools)\.[\w.]+)"/g)) used.add(match[1]);
-  for (const match of script.matchAll(/"((?:nav|home|shell|devtools)\.[A-Za-z0-9.]+)"/g)) used.add(match[1]);
-  for (const item of [...ADMIN_UI_NAV_ITEMS, ...ADMIN_UI_DEV_PANELS]) used.add(item.key);
+  for (const match of script.matchAll(/\bt\("((?:nav|home|shell|devtools|bg)\.[\w.]+)"/g)) used.add(match[1]);
+  for (const match of script.matchAll(/"((?:nav|home|shell|devtools|bg)\.[A-Za-z0-9.]+)"/g)) used.add(match[1]);
+  for (const item of [...ADMIN_UI_NAV_ITEMS, ...ADMIN_UI_DEV_PANELS, ...ADMIN_UI_WALLPAPERS]) used.add(item.key);
+  for (const check of ADMIN_UI_HEALTH_CHECKS) used.add(check.labelKey);
   assert.ok(used.size > 50);
   for (const key of used) {
     if (!/^[a-zA-Z]+\.[\w.]+$/.test(key)) continue;
@@ -126,12 +133,244 @@ test('every i18n key used by the markup and the shell exists in en and zh-CN', (
     assert.ok(Object.prototype.hasOwnProperty.call(zh, key), `zh-CN is missing ${key}`);
   }
   // New shell namespaces must stay in parity between the two locales.
-  const shellKeys = (dict) => Object.keys(dict).filter((key) => /^(nav|home|shell|devtools)\./.test(key)).sort();
+  const shellKeys = (dict) => Object.keys(dict).filter((key) => /^(nav|home|shell|devtools|bg)\./.test(key)).sort();
   assert.deepEqual(shellKeys(zh), shellKeys(en));
   assert.equal(zh['home.allClear'], '一切正常');
   assert.equal(zh['nav.devTools'], '开发者工具');
+  assert.equal(zh['bg.title'], '背景');
   for (const key of shellKeys(en)) {
     assert.ok(String(en[key]).trim() && String(zh[key]).trim(), `${key} must not be empty`);
+  }
+});
+
+test('Needs attention shows the health ring with one segment per health card and a passing chip', () => {
+  const attention = html.slice(html.indexOf('id="homeAttentionCard"'), html.indexOf('id="homeRecentCard"'));
+  const ring = elementTag('homeHealthRing');
+  assert.match(ring, /class="healthRing"/);
+  assert.match(ring, /role="img"/);
+  assert.ok(attention.includes('id="homeHealthRing"'), 'ring lives in the Needs attention card');
+  assert.ok(attention.includes('id="homeHealthRingChip"'));
+  assert.ok(attention.includes('id="homeStatusHero"'));
+  assert.doesNotMatch(html, /allClearOrb/);
+
+  assert.deepEqual(ADMIN_UI_HEALTH_CHECKS.map((check) => check.key), ['worker', 'queue', 'llm', 'digest', 'vault']);
+  assert.deepEqual(ADMIN_UI_HEALTH_CHECKS.map((check) => check.card),
+    ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard', 'homeVaultCard']);
+  const segments = [...attention.matchAll(/<circle class="ringSeg" id="([^"]+)" data-check="([^"]+)"/g)].map((match) => [match[1], match[2]]);
+  assert.deepEqual(segments, ADMIN_UI_HEALTH_CHECKS.map((check) => [check.id, check.key]));
+  for (const check of ADMIN_UI_HEALTH_CHECKS) {
+    elementTag(check.card);
+    assert.match(elementTag(check.id), /data-state="unknown"/);
+  }
+  // Each check has its own glyph state, and the client updates the ring in place rather than rebuilding it.
+  for (const glyph of ['glyphOk', 'glyphWarn', 'glyphError']) assert.match(attention, new RegExp(`class="${glyph}"`));
+  assert.match(script, /function getHealthCheckStates\(/);
+  assert.match(script, /setAttr\(ring, "data-tone", tone\)/);
+  assert.doesNotMatch(script, /homeHealthRing\.innerHTML|homeStatusHero\.innerHTML/);
+});
+
+test('health ring copy reads naturally in both locales', () => {
+  const format = (template, vars) => template.replace(/\{(\w+)\}/g, (_match, key) => String(vars[key]));
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  assert.equal(format(en['home.checksPassingAll'], { n: 5, total: 5 }), '5 / 5 checks passing');
+  assert.equal(format(en['home.checksPassing'], { n: 4, total: 5 }), '4 / 5 passing');
+  assert.equal(format(zh['home.checksPassingAll'], { n: 5, total: 5 }), '5 / 5 项检查通过');
+  assert.equal(format(zh['home.checksPassing'], { n: 4, total: 5 }), '4 / 5 项通过');
+});
+
+test('sidebar Background row opens a labelled popover with presets, upload, tone, sliders and reset', () => {
+  const sidebar = html.slice(html.indexOf('id="appSidebar"'), html.indexOf('</aside>'));
+  const button = elementTag('bgPickerButton');
+  assert.ok(sidebar.includes('id="bgPickerButton"'), 'Background row sits in the sidebar');
+  assert.ok(sidebar.includes('id="bgSwatch"'));
+  assert.match(button, /aria-controls="bgPopover"/);
+  assert.match(button, /aria-expanded="false"/);
+  assert.match(button, /aria-haspopup="dialog"/);
+  assert.match(sidebar, /data-i18n="bg\.title"/);
+
+  // The popover is a sibling of the sidebar: inside it, the sidebar's backdrop-filter would clip its blur.
+  assert.ok(!sidebar.includes('id="bgPopover"'));
+  const popoverTag = elementTag('bgPopover');
+  assert.match(popoverTag, /role="dialog"/);
+  assert.match(popoverTag, /aria-labelledby="bgPopoverTitle"/);
+  assert.match(popoverTag, /\bhidden\b/);
+  elementTag('bgPopoverTitle');
+  assert.match(elementTag('bgPopoverClose'), /data-i18n-aria-label="bg\.close"/);
+
+  const popover = html.slice(html.indexOf('id="bgPopover"'), html.indexOf('</section>', html.indexOf('id="bgPopover"')));
+  assert.deepEqual(ADMIN_UI_WALLPAPERS.map((wallpaper) => [wallpaper.id, wallpaper.tone]), [
+    ['aurora', 'light'], ['sunset', 'light'], ['lagoon', 'light'], ['mist', 'light'], ['night', 'dark'], ['graphite', 'dark'],
+  ]);
+  const presets = [...popover.matchAll(/data-bg-preset="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(presets, [...ADMIN_UI_WALLPAPERS.map((wallpaper) => wallpaper.id), 'custom']);
+  for (const wallpaper of ADMIN_UI_WALLPAPERS) {
+    assert.match(elementTag(`bgPreset${wallpaper.label}`), new RegExp(`data-bg-preset="${wallpaper.id}"`));
+    assert.match(ADMIN_UI_THEME, new RegExp(`html\\[data-bg="${wallpaper.id}"\\]`));
+    assert.match(ADMIN_UI_THEME, new RegExp(`\\.bgThumb\\[data-wall="${wallpaper.id}"\\]`));
+  }
+  assert.match(elementTag('bgPresetCustom'), /\bhidden\b/);
+  elementTag('bgUploadButton');
+  const upload = elementTag('bgUploadInput');
+  assert.match(upload, /type="file"/);
+  assert.match(upload, /accept="image\/\*"/);
+
+  const tone = elementTag('bgToneControl');
+  assert.match(tone, /role="group"/);
+  assert.match(tone, /aria-labelledby="bgToneLabel"/);
+  assert.deepEqual([...popover.matchAll(/data-bg-tone="([^"]+)"/g)].map((match) => match[1]), ['auto', 'light', 'dark']);
+
+  for (const [id, min, max] of [['bgBlurInput', 0, 40], ['bgDimInput', 0, 60], ['bgOpacityInput', 10, 80]]) {
+    const range = elementTag(id);
+    assert.match(range, /type="range"/);
+    assert.match(range, new RegExp(`min="${min}" max="${max}"`));
+    assert.ok(popover.includes(`<label class="bgFieldLabel" for="${id}"`), `${id} has a label`);
+    elementTag(id.replace('Input', 'Value'));
+  }
+  elementTag('bgResetButton');
+  elementTag('bgDoneButton');
+  assert.match(elementTag('bgStatus'), /role="status"/);
+
+  // Escape and outside clicks close it; the custom image goes to IndexedDB, downscaled on a canvas.
+  assert.match(script, /event\.key === "Escape"/);
+  assert.match(script, /addEventListener\("pointerdown"/);
+  assert.match(script, /indexedDB\.open\(/);
+  assert.match(script, /BG_MAX_EDGE = 2560/);
+  assert.match(script, /canvas\.toBlob\(/);
+  assert.match(script, /URL\.createObjectURL\(/);
+});
+
+test('background settings persist under am.bg and apply in <head> before first paint', () => {
+  assert.equal(ADMIN_UI_BACKGROUND_STORAGE_KEY, 'am.bg');
+  assert.deepEqual(ADMIN_UI_BACKGROUND_DEFAULTS, { preset: 'aurora', tone: 'auto', blur: 12, dim: 0, opacity: 30 });
+  const head = html.slice(0, html.indexOf('<body>'));
+  const boot = head.match(/<script id="amBackgroundBoot">([\s\S]*?)<\/script>/);
+  assert.ok(boot, 'boot script is inlined in <head>');
+  assert.match(boot[1], /"am\.bg"/);
+  assert.match(script, /BG_STORAGE_KEY = "am\.bg"/);
+  assert.doesNotThrow(() => new vm.Script(boot[1]));
+  assert.equal(boot[1], renderAdminBackgroundBootScript());
+
+  const run = (stored) => {
+    const attributes = {};
+    const styles = {};
+    const documentElement = {
+      setAttribute: (name, value) => { attributes[name] = String(value); },
+      style: {
+        setProperty: (name, value) => { styles[name] = String(value); },
+        removeProperty: (name) => { delete styles[name]; },
+      },
+    };
+    const window = { localStorage: { getItem: (key) => (key === 'am.bg' && stored !== undefined ? JSON.stringify(stored) : null) } };
+    vm.runInNewContext(boot[1], { window, document: { documentElement } });
+    return { attributes, styles, api: window.__amBackground };
+  };
+
+  const fresh = run(undefined);
+  assert.deepEqual(fresh.attributes, { 'data-bg': 'aurora', 'data-glass': 'light' });
+  assert.deepEqual(fresh.styles, { '--bg-blur': '12px', '--bg-brightness': '1', '--glass-scale': '1' });
+  assert.equal(run({ preset: 'night' }).attributes['data-glass'], 'dark');
+  assert.equal(run({ preset: 'graphite', tone: 'light' }).attributes['data-glass'], 'light');
+  assert.equal(run({ preset: 'mist', dim: 60 }).attributes['data-glass'], 'dark');
+  const custom = run({ preset: 'custom', customLuma: 0.21, customColor: '#334455', blur: 99, dim: -5, opacity: 60 });
+  assert.deepEqual(custom.attributes, { 'data-bg': 'custom', 'data-glass': 'dark' });
+  assert.deepEqual(custom.styles, { '--bg-blur': '40px', '--bg-brightness': '1', '--glass-scale': '2', '--bg-custom-color': '#334455' });
+  assert.equal(run({ preset: 'custom', customLuma: 0.8 }).attributes['data-glass'], 'light');
+  assert.equal(run({ preset: 'nope', tone: 'neon' }).attributes['data-bg'], 'aurora');
+  assert.equal(typeof fresh.api.normalize, 'function');
+});
+
+test('glass surfaces are driven by :root variables and the wallpaper is one static layer', () => {
+  const css = ADMIN_UI_THEME.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const name of ['--glass-a-top', '--glass-a-bottom', '--glass-scale', '--glass-border', '--glass-blur', '--glass-text', '--bg-blur', '--bg-brightness']) {
+    assert.match(css, new RegExp(`${name}:`), `${name} is defined`);
+  }
+  assert.match(css, /--glass-fill: linear-gradient\(180deg, rgba\(var\(--glass-rgb-top\), calc\(var\(--glass-a-top\) \* var\(--glass-scale\)\)\)/);
+  assert.match(css, /--glass-blur: blur\(32px\) saturate\(175%\)/);
+  assert.match(css, /html\[data-glass="dark"\] \{/);
+  // Exactly one wallpaper layer, filtered by the blur and dim sliders.
+  const wallpaperRules = [...css.matchAll(/([^{}]+)\{[^{}]*background: var\(--wallpaper\)/g)].map((match) => match[1].trim());
+  assert.deepEqual(wallpaperRules, ['body::before']);
+  assert.match(css, /body::before \{[^}]*position: fixed;[^}]*filter: blur\(var\(--bg-blur\)\) brightness\(var\(--bg-brightness\)\)/);
+  // No external images or fonts.
+  assert.doesNotMatch(css, /url\((?!["']?data:|#|var\()/);
+  assert.doesNotMatch(css, /@import|@font-face/);
+});
+
+test('Home blurs nine static surfaces: the sidebar, five health cards and three content cards', () => {
+  const homeView = html.slice(html.indexOf('id="homeView"'), html.indexOf('id="activityView"'));
+  const blurredOnHome = [...homeView.matchAll(/class="[^"]*\bglassBlur\b[^"]*"[^>]*\bid="([^"]+)"|\bid="([^"]+)"[^>]*class="[^"]*\bglassBlur\b/g)];
+  const ids = [...homeView.matchAll(/<[a-z]+ class="([^"]*)" id="([^"]+)"/g)]
+    .filter((match) => /\bglassBlur\b/.test(match[1]))
+    .map((match) => match[2]);
+  assert.ok(blurredOnHome.length >= ids.length);
+  assert.deepEqual(ids, ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard', 'homeVaultCard',
+    'homeTodayCard', 'homeAttentionCard', 'homeRecentCard']);
+  assert.match(elementTag('appSidebar'), /\bglassBlur\b/);
+  // Table rows, chips and the ring never carry glassBlur.
+  assert.doesNotMatch(homeView, /<(?:tr|td|li|span)[^>]*\bglassBlur\b/);
+});
+
+// Rough worst-case estimate: each base stop and each blob (at full alpha over each stop), boosted by the
+// card's saturate(175%), under the thinnest part of the glass (its bottom alpha). AA body text needs 4.5:1.
+test('glass text keeps AA contrast on every wallpaper preset', () => {
+  const css = ADMIN_UI_THEME;
+  const block = (selector) => {
+    const start = css.indexOf(`${selector} {`);
+    assert.ok(start >= 0, `missing ${selector}`);
+    return css.slice(start, css.indexOf('\n  }', start));
+  };
+  const cssVar = (text, name) => {
+    const match = text.match(new RegExp(`${name}: ([^;]+);`));
+    assert.ok(match, `missing ${name}`);
+    return match[1].trim();
+  };
+  const parseColor = (value) => {
+    if (value.startsWith('#')) return { rgb: [1, 3, 5].map((index) => parseInt(value.slice(index, index + 2), 16)), alpha: 1 };
+    const parts = value.replace(/rgba?\(|\)/g, '').split(',').map(Number);
+    return { rgb: parts.slice(0, 3), alpha: parts.length > 3 ? parts[3] : 1 };
+  };
+  const linear = (channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+  };
+  const luminance = (rgb) => 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
+  const contrast = (a, b) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (high + 0.05) / (low + 0.05);
+  };
+  const over = (top, alpha, bottom) => top.map((value, index) => value * alpha + bottom[index] * (1 - alpha));
+  const saturate = (rgb, amount) => {
+    const [r, g, b] = rgb;
+    const rows = [
+      [0.213 + 0.787 * amount, 0.715 - 0.715 * amount, 0.072 - 0.072 * amount],
+      [0.213 - 0.213 * amount, 0.715 + 0.285 * amount, 0.072 - 0.072 * amount],
+      [0.213 - 0.213 * amount, 0.715 - 0.715 * amount, 0.072 + 0.928 * amount],
+    ];
+    return rows.map((row) => Math.min(255, Math.max(0, row[0] * r + row[1] * g + row[2] * b)));
+  };
+  const tones = {};
+  for (const [tone, selector] of [['light', ':root'], ['dark', 'html[data-glass="dark"]']]) {
+    const source = block(selector);
+    tones[tone] = {
+      glass: cssVar(source, '--glass-rgb-bottom').split(',').map(Number),
+      alpha: Number(cssVar(source, '--glass-a-bottom')),
+      text: parseColor(cssVar(source, '--glass-text')),
+      text2: parseColor(cssVar(source, '--glass-text-2')),
+      text3: parseColor(cssVar(source, '--glass-text-3')),
+    };
+  }
+  for (const wallpaper of ADMIN_UI_WALLPAPERS) {
+    const tone = tones[wallpaper.tone];
+    const stops = wallpaper.stops.map(([color]) => parseColor(color).rgb);
+    const samples = [...stops, ...wallpaper.blobs.flatMap((blob) => stops.map((stop) => over(blob.rgb, blob.alpha, stop)))];
+    for (const sample of samples) {
+      const card = over(tone.glass, tone.alpha, saturate(sample, 1.75));
+      const ink = (color) => over(color.rgb, color.alpha, card);
+      assert.ok(contrast(ink(tone.text), card) >= 4.5, `${wallpaper.id}: body text contrast`);
+      assert.ok(contrast(ink(tone.text2), card) >= 4.5, `${wallpaper.id}: secondary text contrast ${contrast(ink(tone.text2), card).toFixed(2)}`);
+      assert.ok(contrast(ink(tone.text3), card) >= 3, `${wallpaper.id}: hint text contrast ${contrast(ink(tone.text3), card).toFixed(2)}`);
+    }
   }
 });
 

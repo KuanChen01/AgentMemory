@@ -1,3 +1,5 @@
+import { ADMIN_UI_WALLPAPERS } from './admin-ui-theme';
+
 // 24px line icons (1.6 stroke), inlined so the page stays asset-free.
 export const ADMIN_UI_ICONS: Record<string, string> = {
   home: '<path d="M3.5 10.5 12 3.5l8.5 7"/><path d="M5.5 9v10.5a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1V9"/>',
@@ -13,6 +15,9 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   pause: '<circle cx="12" cy="12" r="8.5"/><path d="M10 9v6M14 9v6"/>',
+  image: '<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-9 8.5"/>',
+  close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
 };
 
 export function renderAdminIcon(name: string, className: string = 'icon'): string {
@@ -40,6 +45,16 @@ export const ADMIN_UI_DEV_PANELS: Array<{ id: string; panel: string; key: string
   { id: 'navDevStateLab', panel: 'stateLabPanel', key: 'tabs.stateLab', label: 'State Lab' },
   { id: 'navDevSearchDiagnostics', panel: 'searchDiagnosticsPanel', key: 'tabs.searchDiagnostics', label: 'Search Diagnostics' },
   { id: 'navDevObservationLedger', panel: 'observationLedgerPanel', key: 'tabs.observationLedger', label: 'Observation Ledger' },
+];
+
+// The five Home health cards, in ring order (clockwise from 12 o'clock). The ring derives each segment's state
+// from the matching card, so the two never disagree.
+export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: string; labelKey: string; label: string }> = [
+  { key: 'worker', id: 'homeHealthRingWorker', card: 'homeWorkerCard', labelKey: 'home.workerLabel', label: 'Worker' },
+  { key: 'queue', id: 'homeHealthRingQueue', card: 'homeQueueCard', labelKey: 'home.queueLabel', label: 'Queue' },
+  { key: 'llm', id: 'homeHealthRingLlm', card: 'homeLlmCard', labelKey: 'home.llmLabel', label: 'LLM today' },
+  { key: 'digest', id: 'homeHealthRingDigest', card: 'homeDigestCard', labelKey: 'home.digestLabel', label: 'Last digest' },
+  { key: 'vault', id: 'homeHealthRingVault', card: 'homeVaultCard', labelKey: 'home.vaultLabel', label: 'Vault review' },
 ];
 
 const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [
@@ -83,6 +98,11 @@ function renderSidebar(): string {
         </div>
       </nav>
       <div class="sidebarFooter">
+        <button class="sidebarRow bgPickerButton" id="bgPickerButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="bgPopover" data-i18n-title="bg.open" title="Change the background">
+          ${renderAdminIcon('image', 'navIcon')}
+          <span class="devToggleLabel" data-i18n="bg.title">Background</span>
+          <span class="bgSwatch" id="bgSwatch" aria-hidden="true"></span>
+        </button>
         <label class="devToggle" for="devToolsToggle" data-i18n-title="shell.devToolsToggleHint" title="Show the legacy workbench panels">
           ${renderAdminIcon('terminal', 'navIcon')}
           <span class="devToggleLabel" data-i18n="shell.devToolsToggle">Developer tools</span>
@@ -90,6 +110,88 @@ function renderSidebar(): string {
         </label>
       </div>
     </aside>`;
+}
+
+function renderRange(id: string, labelKey: string, label: string, min: number, max: number): string {
+  return `
+          <div class="bgField">
+            <label class="bgFieldLabel" for="${id}Input" data-i18n="${labelKey}">${label}</label>
+            <input class="bgRange" id="${id}Input" type="range" min="${min}" max="${max}" step="1" />
+            <output class="bgFieldValue" id="${id}Value" for="${id}Input"></output>
+          </div>`;
+}
+
+// Background picker. A sibling of the sidebar rather than a child: the sidebar's backdrop-filter makes it a
+// backdrop root, so a popover inside it could only frost the sidebar itself, not the page behind.
+function renderBackgroundPopover(): string {
+  const thumbPanes = '<i class="bgPane bgPaneSide"></i><i class="bgPane bgPaneTop"></i><i class="bgPane bgPaneMain"></i>';
+  const presets = ADMIN_UI_WALLPAPERS.map((preset) => `
+          <button class="bgTile" id="bgPreset${preset.label}" type="button" data-bg-preset="${preset.id}" aria-pressed="false">
+            <span class="bgThumb" data-wall="${preset.id}">${thumbPanes}</span>
+            <span class="bgTileLabel" data-i18n="${preset.key}">${preset.label}</span>
+          </button>`).join('');
+  return `
+    <section class="bgPopover" id="bgPopover" role="dialog" aria-labelledby="bgPopoverTitle" hidden>
+      <header class="bgHead">
+        <div>
+          <h2 class="bgTitle" id="bgPopoverTitle" data-i18n="bg.title">Background</h2>
+          <p class="bgLead" data-i18n="bg.lead">Presets, or your own image</p>
+        </div>
+        <button class="bgClose" id="bgPopoverClose" type="button" data-i18n-aria-label="bg.close" aria-label="Close">${renderAdminIcon('close', 'bgCloseIcon')}</button>
+      </header>
+      <div class="bgTiles" id="bgPresetList" role="group" data-i18n-aria-label="bg.presetsLabel" aria-label="Wallpaper">${presets}
+        <button class="bgTile" id="bgPresetCustom" type="button" data-bg-preset="custom" aria-pressed="false" hidden>
+          <span class="bgThumb bgThumbCustom">${thumbPanes}</span>
+          <span class="bgTileLabel" data-i18n="bg.customImage">My image</span>
+        </button>
+        <button class="bgTile bgUploadTile" id="bgUploadButton" type="button">
+          <span class="bgThumb bgThumbUpload">${renderAdminIcon('plus', 'bgPlusIcon')}<span data-i18n="bg.upload">Upload</span></span>
+          <span class="bgTileLabel" data-i18n="bg.uploadLabel">Custom image</span>
+        </button>
+        <input class="visuallyHidden" id="bgUploadInput" type="file" accept="image/*" tabindex="-1" aria-hidden="true" />
+      </div>
+      <div class="bgFields">
+        <div class="bgField">
+          <span class="bgFieldLabel" id="bgToneLabel" data-i18n="bg.tone">Glass tone</span>
+          <div class="bgSegmented" id="bgToneControl" role="group" aria-labelledby="bgToneLabel">
+            <button class="bgSegment" type="button" data-bg-tone="auto" aria-pressed="true" data-i18n="bg.toneAuto">Auto</button>
+            <button class="bgSegment" type="button" data-bg-tone="light" aria-pressed="false" data-i18n="bg.toneLight">Light</button>
+            <button class="bgSegment" type="button" data-bg-tone="dark" aria-pressed="false" data-i18n="bg.toneDark">Dark</button>
+          </div>
+        </div>${renderRange('bgBlur', 'bg.blur', 'Wallpaper blur', 0, 40)}${renderRange('bgDim', 'bg.dim', 'Dim', 0, 60)}${renderRange('bgOpacity', 'bg.opacity', 'Glass opacity', 10, 80)}
+      </div>
+      <footer class="bgFoot">
+        <span class="bgStatus" id="bgStatus" role="status" aria-live="polite">Saved on this browser · text adapts to the wallpaper</span>
+        <span class="bgActions">
+          <button class="bgButton" id="bgResetButton" type="button" data-i18n="bg.reset">Reset</button>
+          <button class="bgButton is-primary" id="bgDoneButton" type="button" data-i18n="bg.done">Done</button>
+        </span>
+      </footer>
+    </section>`;
+}
+
+// Health ring: a frosted disc with a status glyph and five arc segments, one per health check.
+function renderHealthRing(): string {
+  const radius = 46;
+  const circumference = 2 * Math.PI * radius;
+  const slot = circumference / ADMIN_UI_HEALTH_CHECKS.length;
+  const gap = 7;
+  const dash = slot - gap;
+  const segments = ADMIN_UI_HEALTH_CHECKS.map((check, index) => `
+                <circle class="ringSeg" id="${check.id}" data-check="${check.key}" data-state="unknown" cx="50" cy="50" r="${radius}" stroke-dasharray="${dash.toFixed(2)} ${(circumference - dash).toFixed(2)}" stroke-dashoffset="${(-(index * slot) - gap / 2).toFixed(2)}"><title>${check.label}</title></circle>`).join('');
+  return `
+            <div class="healthRing" id="homeHealthRing" data-tone="unknown" role="img" aria-label="Health checks">
+              <span class="ringGlow" aria-hidden="true"></span>
+              <span class="ringDisc" aria-hidden="true"></span>
+              <svg class="ringArcs" viewBox="0 0 100 100" focusable="false">
+                <defs><linearGradient id="amRingGradient" x1="0" y1="0" x2="1" y2="1"><stop class="ringStopA" offset="0"/><stop class="ringStopB" offset="1"/></linearGradient></defs>${segments}
+              </svg>
+              <svg class="ringGlyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path class="glyphOk" d="M5 12.5l4.2 4.2L19 7"/>
+                <g class="glyphWarn"><path d="M12 6v8"/><circle cx="12" cy="18.2" r="1.3"/></g>
+                <path class="glyphError" d="M7 7l10 10M17 7L7 17"/>
+              </svg>
+            </div>`;
 }
 
 function renderTopBar(): string {
@@ -138,7 +240,7 @@ function renderHomeView(): string {
         </div>
 
         <div class="homeRow">
-          <section class="glassCard homeCard" id="homeTodayCard">
+          <section class="glassCard glassBlur homeCard" id="homeTodayCard">
             <header class="cardHead">
               <h2 class="cardTitle" data-i18n="home.todayTitle">Today's memories</h2>
               <span class="cardHint" id="homeTodayDate"></span>
@@ -155,22 +257,33 @@ function renderHomeView(): string {
             <div class="chipRow" id="homeTodayChips"></div>
           </section>
 
-          <section class="glassCard homeCard" id="homeAttentionCard">
+          <section class="glassCard glassBlur homeCard" id="homeAttentionCard">
             <header class="cardHead">
               <h2 class="cardTitle" data-i18n="home.attentionTitle">Needs attention</h2>
               <span class="countBadge" id="homeAttentionCount" hidden></span>
             </header>
             <div class="attentionLoading" id="homeAttentionLoading" data-i18n="home.loading">Loading…</div>
-            <div class="allClear" id="homeAttentionEmpty" hidden>
-              <div class="allClearOrb">${renderAdminIcon('check', 'allClearIcon')}</div>
-              <div class="allClearTitle" data-i18n="home.allClear">All clear</div>
-              <p class="allClearLead" data-i18n="home.allClearLead">No fallbacks, stuck tasks or failed digests today</p>
+            <div class="statusHero" id="homeStatusHero" hidden>${renderHealthRing()}
+              <div class="statusText">
+                <div class="allClear" id="homeAttentionEmpty">
+                  <div class="allClearTitle" data-i18n="home.allClear">All clear</div>
+                  <p class="allClearLead" data-i18n="home.allClearLead">No fallbacks, stuck tasks or failed digests today</p>
+                </div>
+                <div class="allClear" id="homeStatusIssue" hidden>
+                  <div class="allClearTitle" id="homeStatusTitle"></div>
+                  <p class="allClearLead" id="homeStatusLead"></p>
+                </div>
+                <div class="statusMeta">
+                  <span class="statusMetaChip" id="homeHealthRingChip" data-tone="unknown"></span>
+                  <span class="statusMetaChip" id="homeStatusUpdated" hidden></span>
+                </div>
+              </div>
             </div>
             <ul class="attentionList" id="homeAttentionList" hidden></ul>
           </section>
         </div>
 
-        <section class="glassCard homeCard homeRecent" id="homeRecentCard">
+        <section class="glassCard glassBlur homeCard homeRecent" id="homeRecentCard">
           <header class="cardHead">
             <h2 class="cardTitle" data-i18n="home.recentTitle">Recent memories</h2>
             <!-- TODO(ui): point "View all" at the Memory view once it lands in phase 2. -->
@@ -202,7 +315,7 @@ function renderHomeView(): string {
 function renderPlaceholderViews(): string {
   return PLACEHOLDER_VIEWS.map((view) => `
       <section id="${view.id}" class="appView" aria-labelledby="pageTitle">
-        <div class="glassCard placeholderCard">
+        <div class="glassCard glassBlur placeholderCard">
           <div class="placeholderIcon">${renderAdminIcon(view.icon, 'placeholderGlyph')}</div>
           <h2 class="placeholderTitle" data-i18n="${view.titleKey}">${view.title}</h2>
           <p class="placeholderLead" data-i18n="${view.leadKey}">${view.lead}</p>
@@ -215,13 +328,13 @@ function renderSettingsView(): string {
   return `
       <section id="settingsView" class="appView" aria-labelledby="pageTitle">
         <div class="settingsGrid">
-          <div class="glassCard placeholderCard">
+          <div class="glassCard glassBlur placeholderCard">
             <div class="placeholderIcon">${renderAdminIcon('settings', 'placeholderGlyph')}</div>
             <h2 class="placeholderTitle" data-i18n="nav.settings">Settings</h2>
             <p class="placeholderLead" data-i18n="shell.settingsLead">Memory switches, LLM connection, digest scheduler and version information.</p>
             <span class="soonChip" data-i18n="shell.comingSoon">Coming in the next phase</span>
           </div>
-          <div class="glassCard homeCard switchesCard">
+          <div class="glassCard glassBlur homeCard switchesCard">
             <h2 class="cardTitle" data-i18n="shell.switchesTitle">Memory switches</h2>
             <p class="switchesLead" data-i18n="shell.switchesLead">Read and Write apply to every connected agent. Change them with the pills in the top bar.</p>
             <div class="switchRow">
@@ -241,7 +354,7 @@ function renderSettingsView(): string {
 
 export function renderAdminWorkbenchMarkup(): string {
   return `
-  <div class="appShell">${renderSidebar()}
+  <div class="appShell">${renderSidebar()}${renderBackgroundPopover()}
     <main class="mainArea" id="mainArea">
       <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderPlaceholderViews()}${renderSettingsView()}
 

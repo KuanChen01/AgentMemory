@@ -3,9 +3,72 @@ import {
   ADMIN_UI_LOCALE_STORAGE_KEY,
   ADMIN_UI_TRANSLATIONS,
 } from './admin-ui-copy';
-import { ADMIN_UI_ICONS } from './admin-ui-markup';
+import { ADMIN_UI_HEALTH_CHECKS, ADMIN_UI_ICONS } from './admin-ui-markup';
+import { ADMIN_UI_WALLPAPERS } from './admin-ui-theme';
 
 export const ADMIN_UI_DEV_TOOLS_STORAGE_KEY = 'agentmemory.admin.devTools';
+// Background picker settings (preset or custom, tone, sliders). The custom image itself lives in IndexedDB.
+export const ADMIN_UI_BACKGROUND_STORAGE_KEY = 'am.bg';
+export const ADMIN_UI_BACKGROUND_DEFAULTS = { preset: 'aurora', tone: 'auto', blur: 12, dim: 0, opacity: 30 };
+
+// Runs in <head> before the body is parsed, so the saved wallpaper and glass tone apply before first paint.
+// It also exposes the normalise/apply helpers the main client script reuses (window.__amBackground).
+export function renderAdminBackgroundBootScript(): string {
+  const lumas = Object.fromEntries(ADMIN_UI_WALLPAPERS.map((wallpaper) => [wallpaper.id, wallpaper.luma]));
+  return `
+  (function () {
+    var KEY = ${JSON.stringify(ADMIN_UI_BACKGROUND_STORAGE_KEY)};
+    var DEFAULTS = ${JSON.stringify(ADMIN_UI_BACKGROUND_DEFAULTS)};
+    var LUMAS = ${JSON.stringify(lumas)};
+    function clampInt(value, min, max, fallback) {
+      var number = Number(value);
+      if (value === null || value === undefined || value === "" || !isFinite(number)) return fallback;
+      return Math.min(max, Math.max(min, Math.round(number)));
+    }
+    function normalize(raw) {
+      var source = raw && typeof raw === "object" ? raw : {};
+      var luma = Number(source.customLuma);
+      return {
+        preset: source.preset === "custom" || Object.prototype.hasOwnProperty.call(LUMAS, source.preset) ? source.preset : DEFAULTS.preset,
+        tone: source.tone === "light" || source.tone === "dark" ? source.tone : "auto",
+        blur: clampInt(source.blur, 0, 40, DEFAULTS.blur),
+        dim: clampInt(source.dim, 0, 60, DEFAULTS.dim),
+        opacity: clampInt(source.opacity, 10, 80, DEFAULTS.opacity),
+        customLuma: source.customLuma !== null && source.customLuma !== undefined && isFinite(luma) ? Math.min(1, Math.max(0, luma)) : null,
+        customColor: /^#[0-9a-f]{6}$/i.test(String(source.customColor || "")) ? String(source.customColor) : null
+      };
+    }
+    // Auto picks dark glass when the wallpaper, after the Dim slider, is closer to black than to white.
+    function resolveTone(settings) {
+      if (settings.tone !== "auto") return settings.tone;
+      var luma = settings.preset === "custom" ? (settings.customLuma === null ? 0.75 : settings.customLuma) : LUMAS[settings.preset];
+      return luma * (1 - settings.dim / 100) < 0.5 ? "dark" : "light";
+    }
+    function apply(settings) {
+      var root = document.documentElement;
+      root.setAttribute("data-bg", settings.preset);
+      root.setAttribute("data-glass", resolveTone(settings));
+      root.style.setProperty("--bg-blur", settings.blur + "px");
+      root.style.setProperty("--bg-brightness", String(1 - settings.dim / 100));
+      root.style.setProperty("--glass-scale", String(Math.round((settings.opacity / DEFAULTS.opacity) * 1000) / 1000));
+      if (settings.customColor) {
+        root.style.setProperty("--bg-custom-color", settings.customColor);
+      } else {
+        root.style.removeProperty("--bg-custom-color");
+      }
+    }
+    function read() {
+      try {
+        return normalize(JSON.parse(window.localStorage.getItem(KEY) || "null"));
+      } catch (_error) {
+        return normalize(null);
+      }
+    }
+    window.__amBackground = { key: KEY, defaults: DEFAULTS, normalize: normalize, resolveTone: resolveTone, apply: apply, read: read };
+    apply(read());
+  })();
+  `;
+}
 
 export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string {
   return `
@@ -15,6 +78,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const UI_DICTIONARY = ${JSON.stringify(ADMIN_UI_TRANSLATIONS)};
   const UI_ICONS = ${JSON.stringify(ADMIN_UI_ICONS)};
   const DEV_TOOLS_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_DEV_TOOLS_STORAGE_KEY)};
+  const BG_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_BACKGROUND_STORAGE_KEY)};
+  const BG_DB_NAME = "agentmemory-admin-ui";
+  const BG_DB_STORE = "wallpapers";
+  const BG_DB_KEY = "custom";
+  const BG_MAX_EDGE = 2560;
+  const HEALTH_CHECKS = ${JSON.stringify(ADMIN_UI_HEALTH_CHECKS.map(({ key, id, card, labelKey }) => ({ key, id, card, labelKey })))};
   // Home aggregates are cheap SQL but still heavier than the 5 s overview, so they refresh on a slower cadence
   // (and immediately when the overview shows a new memory or task).
   const HOME_SUMMARY_REFRESH_MS = 30000;
@@ -45,6 +114,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     digestSchedulerAt: 0,
     digestSchedulerAppliedStamp: "",
     homeSignatures: {},
+    healthStatus: {},
+    overviewAt: 0,
+    ringTone: "",
     locale: UI_DEFAULT_LOCALE,
     filters: {
       page: 1,
@@ -248,7 +320,43 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     homeAttentionLoading: document.getElementById("homeAttentionLoading"),
     homeAttentionEmpty: document.getElementById("homeAttentionEmpty"),
     homeAttentionList: document.getElementById("homeAttentionList"),
+    homeStatusHero: document.getElementById("homeStatusHero"),
+    homeStatusIssue: document.getElementById("homeStatusIssue"),
+    homeStatusTitle: document.getElementById("homeStatusTitle"),
+    homeStatusLead: document.getElementById("homeStatusLead"),
+    homeStatusUpdated: document.getElementById("homeStatusUpdated"),
+    homeHealthRing: document.getElementById("homeHealthRing"),
+    homeHealthRingChip: document.getElementById("homeHealthRingChip"),
     homeRecentRows: document.getElementById("homeRecentRows"),
+    bgPickerButton: document.getElementById("bgPickerButton"),
+    bgPopover: document.getElementById("bgPopover"),
+    bgPopoverClose: document.getElementById("bgPopoverClose"),
+    bgPresetButtons: Array.from(document.querySelectorAll("[data-bg-preset]")),
+    bgCustomTile: document.getElementById("bgPresetCustom"),
+    bgUploadButton: document.getElementById("bgUploadButton"),
+    bgUploadInput: document.getElementById("bgUploadInput"),
+    bgToneButtons: Array.from(document.querySelectorAll("[data-bg-tone]")),
+    bgBlurInput: document.getElementById("bgBlurInput"),
+    bgBlurValue: document.getElementById("bgBlurValue"),
+    bgDimInput: document.getElementById("bgDimInput"),
+    bgDimValue: document.getElementById("bgDimValue"),
+    bgOpacityInput: document.getElementById("bgOpacityInput"),
+    bgOpacityValue: document.getElementById("bgOpacityValue"),
+    bgResetButton: document.getElementById("bgResetButton"),
+    bgDoneButton: document.getElementById("bgDoneButton"),
+    bgStatus: document.getElementById("bgStatus"),
+  };
+
+  // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
+  const bg = {
+    api: window.__amBackground || null,
+    settings: null,
+    open: false,
+    objectUrl: "",
+    customAvailable: false,
+    statusKey: "bg.savedHint",
+    statusError: false,
+    busy: false,
   };
 
   function normalizeLocale(value) {
@@ -420,6 +528,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncLocaleButtons();
     syncPageTitle();
     rerenderStatusLines();
+    renderBackgroundControls();
     renderOverview();
     renderHome();
     renderProceduralWorkspace();
@@ -1801,6 +1910,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderHealthCard(card, status, value, meta, title) {
     if (!card) return;
+    state.healthStatus[card.id] = status;
     setClass(card, "healthCard glassCard glassBlur is-" + status);
     setText(document.getElementById(card.id + "Value"), value);
     setText(document.getElementById(card.id + "Meta"), meta || "\\u00a0");
@@ -2061,12 +2171,76 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return items;
   }
 
+  // Ring segments mirror the five health cards: a card that is ok, warn or error passes that state through;
+  // an idle card (no tasks, no digest or checkpoint yet) counts as passing once its data has loaded.
+  function getHealthCheckStates() {
+    const loaded = {
+      homeWorkerCard: !!state.overview || state.overviewError,
+      homeQueueCard: !!state.overview,
+      homeLlmCard: !!state.homeSummary,
+      homeDigestCard: !!state.homeSummary,
+      homeVaultCard: !!state.homeSummary,
+    };
+    return HEALTH_CHECKS.map((check) => {
+      const status = state.healthStatus[check.card];
+      if (status === "ok" || status === "warn" || status === "error") return status;
+      return loaded[check.card] ? "ok" : "unknown";
+    });
+  }
+
+  const CHECK_STATE_KEYS = { ok: "home.checkOk", warn: "home.checkWarn", error: "home.checkError", unknown: "home.checkUnknown" };
+
+  // Incremental: only attributes and text change on a poll; the ring markup itself is never rebuilt.
+  function renderHealthRing(checks, tone) {
+    const ring = els.homeHealthRing;
+    if (!ring) return;
+    const total = checks.length;
+    const passing = checks.filter((check) => check === "ok").length;
+    if (state.ringTone && state.ringTone !== tone) {
+      ring.classList.remove("is-pulsing");
+      void ring.offsetWidth;
+      ring.classList.add("is-pulsing");
+    }
+    state.ringTone = tone;
+    setAttr(ring, "data-tone", tone);
+    setAttr(ring, "aria-label", t("home.ringLabel", { n: passing, total }));
+    HEALTH_CHECKS.forEach((check, index) => {
+      const segment = document.getElementById(check.id);
+      if (!segment) return;
+      setAttr(segment, "data-state", checks[index]);
+      setText(segment.querySelector("title"), t("home.checkSegment", { check: t(check.labelKey), state: t(CHECK_STATE_KEYS[checks[index]]) }));
+    });
+    setText(els.homeHealthRingChip, t(passing === total ? "home.checksPassingAll" : "home.checksPassing", { n: passing, total }));
+    setAttr(els.homeHealthRingChip, "data-tone", tone);
+  }
+
   function renderHomeAttention() {
     const loaded = !!state.overview || state.overviewError;
     const items = collectAttentionItems();
     const errors = items.filter((item) => item.severity === "error").length;
+    const checks = getHealthCheckStates();
+    const tone = errors > 0 || checks.includes("error")
+      ? "error"
+      : items.length > 0 || checks.includes("warn") ? "warn" : "ok";
     setHidden(els.homeAttentionLoading, loaded);
-    setHidden(els.homeAttentionEmpty, !loaded || items.length > 0);
+    setHidden(els.homeStatusHero, !loaded);
+    setClass(els.homeStatusHero, "statusHero" + (items.length > 0 ? " is-compact" : ""));
+    setHidden(els.homeAttentionEmpty, tone !== "ok");
+    setHidden(els.homeStatusIssue, tone === "ok");
+    if (tone !== "ok") {
+      const failing = HEALTH_CHECKS.filter((_check, index) => checks[index] === "warn" || checks[index] === "error");
+      setText(els.homeStatusTitle, t(tone === "error" ? "home.statusErrorTitle" : "home.statusWarnTitle"));
+      setText(els.homeStatusLead, items.length === 1
+        ? t("home.statusItemsOne")
+        : items.length > 1
+          ? t("home.statusItemsMany", { n: items.length })
+          : t("home.statusChecksLead", { names: failing.map((check) => t(check.labelKey)).join(" · ") }));
+    }
+    renderHealthRing(checks, tone);
+    setHidden(els.homeStatusUpdated, !state.overviewAt);
+    if (state.overviewAt) {
+      setText(els.homeStatusUpdated, t("home.updatedAt", { time: formatClock(new Date(state.overviewAt)) }));
+    }
     setHidden(els.homeAttentionList, !loaded || items.length === 0);
     setHidden(els.homeAttentionCount, items.length === 0);
     setText(els.homeAttentionCount, String(items.length));
@@ -2143,6 +2317,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     state.overviewError = false;
     state.overview = nextOverview;
+    state.overviewAt = Date.now();
     renderOverview();
   }
 
@@ -2798,6 +2973,293 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
+  function setBackgroundStatus(key, isError) {
+    bg.statusKey = key;
+    bg.statusError = !!isError;
+    renderBackgroundControls();
+  }
+
+  function syncRange(input, output, value, label) {
+    if (!input) return;
+    if (String(input.value) !== String(value)) input.value = String(value);
+    const min = Number(input.min);
+    const max = Number(input.max);
+    input.style.setProperty("--fill", (((value - min) / (max - min)) * 100).toFixed(1) + "%");
+    setText(output, label);
+  }
+
+  function renderBackgroundControls() {
+    if (!bg.settings) return;
+    const settings = bg.settings;
+    els.bgPresetButtons.forEach((button) => {
+      const selected = button.getAttribute("data-bg-preset") === settings.preset;
+      button.classList.toggle("is-selected", selected);
+      setAttr(button, "aria-pressed", selected ? "true" : "false");
+    });
+    setHidden(els.bgCustomTile, !bg.customAvailable);
+    els.bgToneButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", button.getAttribute("data-bg-tone") === settings.tone ? "true" : "false");
+    });
+    syncRange(els.bgBlurInput, els.bgBlurValue, settings.blur, settings.blur + "px");
+    syncRange(els.bgDimInput, els.bgDimValue, settings.dim, settings.dim + "%");
+    syncRange(els.bgOpacityInput, els.bgOpacityValue, settings.opacity, settings.opacity + "%");
+    setText(els.bgStatus, t(bg.statusKey));
+    if (els.bgStatus) els.bgStatus.classList.toggle("is-error", bg.statusError);
+    setAttr(els.bgPickerButton, "aria-expanded", bg.open ? "true" : "false");
+  }
+
+  function persistBackground() {
+    try {
+      window.localStorage.setItem(BG_STORAGE_KEY, JSON.stringify(bg.settings));
+    } catch (_error) {
+      setBackgroundStatus("bg.storageFailed", true);
+    }
+  }
+
+  // Applies live through the data attributes and :root variables the boot script also uses.
+  function updateBackground(patch, persist) {
+    if (!bg.api) return;
+    bg.settings = bg.api.normalize(Object.assign({}, bg.settings, patch));
+    bg.api.apply(bg.settings);
+    renderBackgroundControls();
+    if (persist) persistBackground();
+  }
+
+  function openWallpaperDb() {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error("IndexedDB is unavailable"));
+        return;
+      }
+      const request = window.indexedDB.open(BG_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore(BG_DB_STORE);
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("IndexedDB open failed"));
+      request.onblocked = () => reject(new Error("IndexedDB open blocked"));
+    });
+  }
+
+  function withWallpaperStore(mode, run) {
+    return openWallpaperDb().then((db) => new Promise((resolve, reject) => {
+      let result;
+      let tx;
+      try {
+        tx = db.transaction(BG_DB_STORE, mode);
+        const request = run(tx.objectStore(BG_DB_STORE));
+        request.onsuccess = () => {
+          result = request.result;
+        };
+      } catch (error) {
+        db.close();
+        reject(error);
+        return;
+      }
+      tx.oncomplete = () => {
+        db.close();
+        resolve(result);
+      };
+      tx.onerror = tx.onabort = () => {
+        db.close();
+        reject(tx.error || new Error("IndexedDB transaction failed"));
+      };
+    }));
+  }
+
+  function useWallpaperBlob(blob) {
+    const previous = bg.objectUrl;
+    bg.objectUrl = URL.createObjectURL(blob);
+    document.documentElement.style.setProperty("--bg-image", 'url("' + bg.objectUrl + '")');
+    bg.customAvailable = true;
+    if (previous) URL.revokeObjectURL(previous);
+  }
+
+  async function loadStoredWallpaper() {
+    let record = null;
+    try {
+      record = await withWallpaperStore("readonly", (store) => store.get(BG_DB_KEY));
+    } catch (_error) {
+      record = null;
+    }
+    if (record && record.blob instanceof Blob) {
+      useWallpaperBlob(record.blob);
+    } else if (bg.settings && bg.settings.preset === "custom") {
+      // The image was cleared with the site data (or never stored): fall back to the default preset.
+      updateBackground({ preset: bg.api.defaults.preset }, true);
+      bg.statusKey = "bg.customMissing";
+      bg.statusError = true;
+    }
+    renderBackgroundControls();
+  }
+
+  function decodeImage(file) {
+    const viaElement = () => new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(image);
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Image decode failed"));
+      };
+      image.src = url;
+    });
+    return typeof window.createImageBitmap === "function" ? window.createImageBitmap(file).catch(viaElement) : viaElement();
+  }
+
+  // Downscales to at most BG_MAX_EDGE on the long side and samples a 24x24 copy for the average colour and
+  // luma that drive the Auto glass tone.
+  async function prepareWallpaper(file) {
+    const source = await decodeImage(file);
+    const width = source.naturalWidth || source.width;
+    const height = source.naturalHeight || source.height;
+    if (!width || !height) throw new Error("Image has no size");
+    const scale = Math.min(1, BG_MAX_EDGE / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas unavailable");
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    if (typeof source.close === "function") source.close();
+
+    const sample = document.createElement("canvas");
+    sample.width = 24;
+    sample.height = 24;
+    const sampleContext = sample.getContext("2d");
+    if (!sampleContext) throw new Error("Canvas unavailable");
+    sampleContext.drawImage(canvas, 0, 0, 24, 24);
+    const pixels = sampleContext.getImageData(0, 0, 24, 24).data;
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    let weight = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      const alpha = pixels[index + 3] / 255;
+      red += pixels[index] * alpha;
+      green += pixels[index + 1] * alpha;
+      blue += pixels[index + 2] * alpha;
+      weight += alpha;
+    }
+    weight = weight || 1;
+    const channels = [red / weight, green / weight, blue / weight].map((value) => Math.round(Math.min(255, Math.max(0, value))));
+    const luma = (0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]) / 255;
+    const color = "#" + channels.map((value) => value.toString(16).padStart(2, "0")).join("");
+
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("Image encode failed"))), "image/jpeg", 0.9);
+    });
+    return { blob, width: canvas.width, height: canvas.height, luma: Math.round(luma * 1000) / 1000, color };
+  }
+
+  async function handleWallpaperUpload(file) {
+    if (!file || bg.busy) return;
+    if (!/^image\\//.test(String(file.type || ""))) {
+      setBackgroundStatus("bg.uploadNotImage", true);
+      return;
+    }
+    bg.busy = true;
+    setBackgroundStatus("bg.uploadWorking", false);
+    let prepared;
+    try {
+      prepared = await prepareWallpaper(file);
+    } catch (_error) {
+      bg.busy = false;
+      setBackgroundStatus("bg.uploadFailed", true);
+      return;
+    }
+    useWallpaperBlob(prepared.blob);
+    let stored = true;
+    try {
+      await withWallpaperStore("readwrite", (store) => store.put({
+        blob: prepared.blob,
+        width: prepared.width,
+        height: prepared.height,
+        luma: prepared.luma,
+        color: prepared.color,
+        savedAt: new Date().toISOString(),
+      }, BG_DB_KEY));
+    } catch (_error) {
+      stored = false;
+    }
+    bg.busy = false;
+    updateBackground({ preset: "custom", customLuma: prepared.luma, customColor: prepared.color }, true);
+    setBackgroundStatus(stored ? "bg.uploadSaved" : "bg.uploadSessionOnly", !stored);
+  }
+
+  function setBackgroundPickerOpen(open, restoreFocus) {
+    if (!els.bgPopover) return;
+    bg.open = !!open;
+    setHidden(els.bgPopover, !bg.open);
+    els.bgPopover.classList.toggle("is-active", bg.open);
+    renderBackgroundControls();
+    if (bg.open) {
+      const selected = els.bgPresetButtons.find((button) => button.classList.contains("is-selected") && !button.hidden);
+      (selected || els.bgPresetButtons[0]).focus();
+    } else if (restoreFocus) {
+      els.bgPickerButton.focus();
+    }
+  }
+
+  function initBackground() {
+    if (!bg.api) {
+      setHidden(els.bgPickerButton, true);
+      return;
+    }
+    bg.settings = bg.api.read();
+    bg.api.apply(bg.settings);
+    renderBackgroundControls();
+    void loadStoredWallpaper();
+  }
+
+  function bindBackgroundEvents() {
+    if (!bg.api || !els.bgPopover) return;
+    els.bgPickerButton.addEventListener("click", () => setBackgroundPickerOpen(!bg.open, false));
+    els.bgPopoverClose.addEventListener("click", () => setBackgroundPickerOpen(false, true));
+    els.bgDoneButton.addEventListener("click", () => setBackgroundPickerOpen(false, true));
+    els.bgPresetButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const preset = button.getAttribute("data-bg-preset");
+        if (preset === "custom" && !bg.customAvailable) return;
+        updateBackground({ preset }, true);
+      });
+    });
+    els.bgToneButtons.forEach((button) => {
+      button.addEventListener("click", () => updateBackground({ tone: button.getAttribute("data-bg-tone") }, true));
+    });
+    [[els.bgBlurInput, "blur"], [els.bgDimInput, "dim"], [els.bgOpacityInput, "opacity"]].forEach(([input, field]) => {
+      if (!input) return;
+      // Live while dragging; written to storage once the value settles.
+      input.addEventListener("input", () => updateBackground({ [field]: Number(input.value) }, false));
+      input.addEventListener("change", () => persistBackground());
+    });
+    els.bgUploadButton.addEventListener("click", () => els.bgUploadInput.click());
+    els.bgUploadInput.addEventListener("change", () => {
+      const file = els.bgUploadInput.files && els.bgUploadInput.files[0];
+      els.bgUploadInput.value = "";
+      void handleWallpaperUpload(file);
+    });
+    els.bgResetButton.addEventListener("click", () => {
+      const defaults = bg.api.defaults;
+      updateBackground({ preset: defaults.preset, tone: defaults.tone, blur: defaults.blur, dim: defaults.dim, opacity: defaults.opacity }, true);
+      setBackgroundStatus("bg.resetDone", false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && bg.open) {
+        event.preventDefault();
+        setBackgroundPickerOpen(false, true);
+      }
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!bg.open) return;
+      if (els.bgPopover.contains(event.target) || els.bgPickerButton.contains(event.target)) return;
+      setBackgroundPickerOpen(false, false);
+    });
+  }
+
   function syncFiltersFromInputs() {
     state.filters.project = els.projectSelect.value;
     state.filters.agent = els.agentSelect.value;
@@ -3001,6 +3463,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.devToolsToggle.addEventListener("change", () => {
       setDevToolsEnabled(els.devToolsToggle.checked, true);
     });
+
+    if (els.homeHealthRing) {
+      els.homeHealthRing.addEventListener("animationend", () => els.homeHealthRing.classList.remove("is-pulsing"));
+    }
 
     // Turning a memory switch off affects every agent, so it needs an explicit confirmation.
     [els.readToggle, els.writeToggle].forEach((toggle) => {
@@ -3281,9 +3747,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   async function initialize() {
     state.locale = detectInitialLocale();
+    initBackground();
     applyLocale(true);
     setDevToolsEnabled(readDevToolsPreference(), false);
     bindEvents();
+    bindBackgroundEvents();
     activateView("homeView");
     try {
       await loadOverview();
