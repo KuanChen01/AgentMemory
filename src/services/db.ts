@@ -2016,7 +2016,7 @@ export class DatabaseManager {
     // Quick-skip only when the stored schema revision is current AND every table and index exists. Any change to the
     // block below must bump TASK_SCHEMA_REVISION, so a database from an older revision always runs the (idempotent) upgrade.
     const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open', 'idx_task_results_task',
-      'idx_observation_content_hash', 'idx_review_runs_interval'];
+      'idx_observation_content_hash', 'idx_review_runs_interval', 'idx_observations_created_dt'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type IN ('table','index') AND name IN (${[...wanted, ...indexes].map(() => '?').join(',')})`,
       [...wanted, ...indexes]);
     const revision = this.columnsOf('task_schema_meta').size
@@ -2077,6 +2077,9 @@ export class DatabaseManager {
         cursor TEXT, status TEXT NOT NULL, metrics_json TEXT,
         started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_review_runs_interval ON review_runs(reader, since, until, status)`);
+      // Admin Home aggregates filter and sort by datetime(created_at) (mixed stored formats), so index that expression.
+      // Additive only: a missing index alone triggers this idempotent block, and older releases simply ignore it.
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_observations_created_dt ON observations(datetime(created_at))`);
       this.db.run(`CREATE TABLE IF NOT EXISTS legacy_compaction_links (
         legacy_observation_id TEXT PRIMARY KEY, task_result_id TEXT NOT NULL)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS task_schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
@@ -2152,6 +2155,101 @@ export class DatabaseManager {
       if (!dupes?.n) this.db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_task_results_segment ON task_results(task_id, segment_index)`);
       else console.error('[Memory] task_results has duplicate (task_id, segment_index) rows; unique index not created, rows kept.');
     }
+  }
+
+  /**
+   * Read-only aggregates for the admin Home screen. Local days use the caller's UTC offset
+   * (minutes east of UTC); every number is derived from existing tables, nothing is written.
+   */
+  public async getAdminHomeSummary(options: { tzOffsetMinutes?: number; days?: number; now?: Date } = {}) {
+    if (!this.db) throw new Error('Database not initialized');
+    const offset = Math.max(-840, Math.min(840, Math.trunc(Number(options.tzOffsetMinutes) || 0)));
+    const days = Math.max(1, Math.min(90, Math.trunc(Number(options.days) || 30)));
+    const nowMs = (options.now || new Date()).getTime();
+    const shift = `${offset >= 0 ? '+' : ''}${offset} minutes`;
+    const localDay = (ms: number) => new Date(ms + offset * 60000).toISOString().slice(0, 10);
+    const utcStartOf = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) - offset * 60000)
+      .toISOString().slice(0, 19).replace('T', ' ');
+    const dayList = Array.from({ length: days }, (_, i) => localDay(nowMs - (days - 1 - i) * 86400000));
+    const today = dayList[dayList.length - 1];
+    const windowStart = utcStartOf(dayList[0]);
+    const todayStart = utcStartOf(today);
+
+    const byDay = new Map(dayList.map(day => [day, { day, outcome: 0, context: 0, legacy: 0 }]));
+    for (const row of this.db.all(`SELECT date(datetime(o.created_at), ?) AS day, m.record_kind AS kind, COUNT(*) AS n
+      FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id = o.id
+      WHERE datetime(o.created_at) >= datetime(?) GROUP BY day, kind`, [shift, windowStart])) {
+      const bucket = byDay.get(row.day);
+      if (!bucket) continue;
+      const kind = row.kind === 'outcome' || row.kind === 'context' ? row.kind : 'legacy';
+      bucket[kind as 'outcome' | 'context' | 'legacy'] += Number(row.n) || 0;
+    }
+    const daily = dayList.map(day => byDay.get(day)!);
+    const todayCounts = daily[daily.length - 1];
+
+    const agents = this.db.all(`SELECT agent_id, COUNT(*) AS n FROM observations
+      WHERE datetime(created_at) >= datetime(?) GROUP BY agent_id ORDER BY n DESC, agent_id LIMIT 6`, [todayStart]);
+    const projects = this.db.all(`SELECT project_path, COUNT(*) AS n FROM observations
+      WHERE datetime(created_at) >= datetime(?) GROUP BY project_path ORDER BY n DESC, project_path LIMIT 4`, [todayStart]);
+    const recent = this.db.all(`SELECT o.id, o.created_at, o.agent_id, o.project_path, substr(o.title, 1, 200) AS title,
+        m.record_kind, m.source_kind
+      FROM observations o LEFT JOIN observation_work_metadata m ON m.observation_id = o.id
+      ORDER BY datetime(o.created_at) DESC, o.rowid DESC LIMIT 10`).map((row: any) => ({
+      ...row, record_kind: row.record_kind || null, source_kind: row.source_kind || null,
+    }));
+
+    const tasksToday = { total: 0, saved: 0, skipped: 0, fallback: 0, duplicate: 0, other: 0, llm_calls: 0 };
+    for (const row of this.db.all(`SELECT status, COUNT(*) AS n, COALESCE(SUM(llm_calls), 0) AS calls FROM task_results
+      WHERE datetime(created_at) >= datetime(?) GROUP BY status`, [todayStart])) {
+      const n = Number(row.n) || 0;
+      const key = ['saved', 'skipped', 'fallback', 'duplicate'].includes(row.status) ? row.status : 'other';
+      (tasksToday as any)[key] += n;
+      tasksToday.total += n;
+      tasksToday.llm_calls += Number(row.calls) || 0;
+    }
+
+    const latestDigest = this.db.get(`SELECT project_path, local_date, status, generated_at FROM daily_memory_digests
+      ORDER BY generated_at DESC, local_date DESC LIMIT 1`) || null;
+    const latestDayProjects = latestDigest
+      ? Number(this.db.get(`SELECT COUNT(*) AS n FROM daily_memory_digests WHERE local_date = ?`, [latestDigest.local_date]).n) || 0
+      : 0;
+    // Failed rows are rewritten in place by a successful re-run (unique per project and day), so these are still open.
+    const failedDigests = this.db.all(`SELECT project_path, local_date, substr(COALESCE(last_error, ''), 1, 300) AS last_error
+      FROM daily_memory_digests WHERE status = 'failed' AND local_date >= ? ORDER BY local_date DESC, project_path LIMIT 5`,
+    [localDay(nowMs - 86400000)]);
+
+    const vaultRow = this.db.get(`SELECT value_json, effective_at FROM state_facts
+      WHERE LOWER(entity_key) IN ('obsidian-vault-daily-review', 'automation/obsidian-vault-daily-review')
+        AND fact_key = 'last_successful_review_at' AND superseded_at IS NULL
+      ORDER BY effective_at DESC LIMIT 1`);
+    let vaultValue: string | null = null;
+    if (vaultRow) {
+      try {
+        const parsed = JSON.parse(vaultRow.value_json);
+        vaultValue = typeof parsed === 'string' && parsed.trim() ? parsed : null;
+      } catch { /* fall back to the fact's effective time */ }
+      vaultValue = vaultValue || vaultRow.effective_at || null;
+    }
+
+    return {
+      generated_at: new Date(nowMs).toISOString(),
+      tz_offset_minutes: offset,
+      days,
+      today: {
+        date: today,
+        total: todayCounts.outcome + todayCounts.context + todayCounts.legacy,
+        outcome: todayCounts.outcome,
+        context: todayCounts.context,
+        legacy: todayCounts.legacy,
+        agents,
+        projects,
+      },
+      daily,
+      recent,
+      tasks_today: tasksToday,
+      digests: { latest: latestDigest, latest_day_projects: latestDayProjects, failed_recent: failedDigests },
+      vault_review: { last_successful_review_at: vaultValue },
+    };
   }
 
   /** Read-only SQL access for additive task/review stores. */

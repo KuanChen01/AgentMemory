@@ -441,10 +441,23 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
       release: buildReleaseManifest(),
       projects,
       agents,
+      startedAt: workerStartedAt || null,
       refreshedAt: new Date().toISOString(),
     });
   } catch (err: any) {
     console.error('Error fetching admin overview:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/home-summary', adminOnlyGuard, async (req, res) => {
+  try {
+    res.json(await dbManager.getAdminHomeSummary({
+      tzOffsetMinutes: Number(req.query.tz_offset_minutes || 0),
+      days: Number(req.query.days || 30),
+    }));
+  } catch (err: any) {
+    console.error('Error fetching admin home summary:', err);
     res.status(500).json({ error: err.message });
   }
 });
