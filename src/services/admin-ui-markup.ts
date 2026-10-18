@@ -18,6 +18,14 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-9 8.5"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  file: '<path d="M6.5 3.5h7l4.5 4.5v11.5a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z"/><path d="M13.5 3.5V8H18"/>',
+  facts: '<path d="M5 7h14M5 12h14M5 17h9"/>',
+  review: '<path d="M5.5 4.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3.5v-3.5h-1a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z"/><path d="m9 10.5 2 2 4-4"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>',
+  chevronUpDown: '<path d="m8 9.5 4-4 4 4M8 14.5l4 4 4-4"/>',
+  chevronDown: '<path d="m7 10 5 5 5-5"/>',
+  chevronRight: '<path d="m10 7 5 5-5 5"/>',
+  copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5v-2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/>',
 };
 
 export function renderAdminIcon(name: string, className: string = 'icon'): string {
@@ -58,7 +66,6 @@ export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: stri
 ];
 
 const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [
-  { id: 'activityView', icon: 'activity', titleKey: 'nav.activity', title: 'Activity', leadKey: 'shell.activityLead', lead: 'What your agents did in a time window: sessions, outcomes and context per project and agent.' },
   { id: 'memoryView', icon: 'memory', titleKey: 'nav.memory', title: 'Memory', leadKey: 'shell.memoryLead', lead: 'Browse and search every memory by kind, source, project, agent and date.' },
   { id: 'pipelineView', icon: 'pipeline', titleKey: 'nav.pipeline', title: 'Pipeline', leadKey: 'shell.pipelineLead', lead: 'Task capture, consolidation results, fallbacks, duplicate flags and LLM usage.' },
   { id: 'digestsView', icon: 'digests', titleKey: 'nav.digests', title: 'Digests & Reviews', leadKey: 'shell.digestsLead', lead: 'Daily digests per project, the digest scheduler and Vault review checkpoints.' },
@@ -78,8 +85,15 @@ const BRAND_MARK = `<svg class="brandMark" viewBox="0 0 32 32" aria-hidden="true
   <path d="M16 3.6 27 9.6 16 15.6 5 9.6z" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="0.7" stroke-linejoin="round"/>
 </svg>`;
 
+// Group labels shown above the first item of each sidebar group.
+const NAV_GROUP_LABELS: Record<string, { key: string; label: string }> = {
+  navHome: { key: 'nav.groupOverview', label: 'Overview' },
+  navProjects: { key: 'nav.groupLibrary', label: 'Library' },
+};
+
 function renderSidebar(): string {
-  const navItems = ADMIN_UI_NAV_ITEMS.map((item, index) => `
+  const navItems = ADMIN_UI_NAV_ITEMS.map((item, index) => `${NAV_GROUP_LABELS[item.id] ? `
+        <p class="navGroupLabel" data-i18n="${NAV_GROUP_LABELS[item.id].key}">${NAV_GROUP_LABELS[item.id].label}</p>` : ''}
         <button class="navItem${index === 0 ? ' is-active' : ''}" id="${item.id}" type="button" data-nav-target="${item.target}" data-i18n-title="${item.key}" title="${item.label}"${index === 0 ? ' aria-current="page"' : ''}>
           ${renderAdminIcon(item.icon, 'navIcon')}<span class="navLabel" data-i18n="${item.key}">${item.label}</span>
         </button>`).join('');
@@ -199,23 +213,31 @@ function renderTopBar(): string {
       <header class="topBar">
         <h1 id="pageTitle" class="pageTitle" data-i18n="nav.home">Home</h1>
         <div class="topActions">
-          <label id="readPolicyCard" class="policyPill glassPill readPolicy" for="readToggle">
-            <span class="pillLabel" data-i18n="shell.read">Read</span>
-            <span class="pillDot" aria-hidden="true"></span>
-            <span id="readPolicyState" class="policyBadge" data-i18n="policy.loading">Loading</span>
-            <input id="readToggle" class="visuallyHidden" type="checkbox" role="switch" />
-          </label>
-          <label id="writePolicyCard" class="policyPill glassPill writePolicy" for="writeToggle">
-            <span class="pillLabel" data-i18n="shell.write">Write</span>
-            <span class="pillDot" aria-hidden="true"></span>
-            <span id="writePolicyState" class="policyBadge" data-i18n="policy.loading">Loading</span>
-            <input id="writeToggle" class="visuallyHidden" type="checkbox" role="switch" />
-          </label>
-          <div id="localeToggle" class="localeToggle glassPill" role="group">
-            <span class="visuallyHidden" data-i18n="locale.label">UI Language</span>
-            <button class="localeButton is-active" type="button" data-locale-choice="en">EN</button>
-            <span class="localeSep" aria-hidden="true">/</span>
-            <button class="localeButton" type="button" data-locale-choice="zh-CN">中文</button>
+          <!-- One compact pill holds both switches; the state word only shows when a switch is off or saving. -->
+          <div class="policyGroup glassPill" id="policyGroup" role="group" data-i18n-aria-label="shell.policyGroup" aria-label="Memory access">
+            <label id="readPolicyCard" class="policyPill readPolicy" for="readToggle">
+              <span class="pillDot" aria-hidden="true"></span>
+              <span class="pillLabel" data-i18n="shell.read">Read</span>
+              <span id="readPolicyState" class="policyBadge" data-i18n="policy.loading">Loading</span>
+              <input id="readToggle" class="visuallyHidden" type="checkbox" role="switch" />
+            </label>
+            <label id="writePolicyCard" class="policyPill writePolicy" for="writeToggle">
+              <span class="pillDot" aria-hidden="true"></span>
+              <span class="pillLabel" data-i18n="shell.write">Write</span>
+              <span id="writePolicyState" class="policyBadge" data-i18n="policy.loading">Loading</span>
+              <input id="writeToggle" class="visuallyHidden" type="checkbox" role="switch" />
+            </label>
+          </div>
+          <!-- Language listbox: the trigger's name is the label plus the current language, not a menu. -->
+          <div id="localeToggle" class="localeMenu">
+            <button class="localeTrigger glassPill" id="localeMenuButton" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="localeMenuList">
+              <span class="visuallyHidden" data-i18n="locale.label">UI Language</span>
+              <span class="localeTriggerValue" id="localeMenuValue">EN</span>${renderAdminIcon('chevronDown', 'localeTriggerIcon')}
+            </button>
+            <div class="localeList" id="localeMenuList" role="listbox" data-i18n-aria-label="locale.label" aria-label="UI Language" hidden>
+              <button class="localeButton is-active" type="button" role="option" aria-selected="true" data-locale-choice="en"><span class="localeCode">EN</span><span class="localeName">English</span></button>
+              <button class="localeButton" type="button" role="option" aria-selected="false" data-locale-choice="zh-CN"><span class="localeCode">中文</span><span class="localeName">简体中文</span></button>
+            </div>
           </div>
         </div>
       </header>
@@ -312,6 +334,122 @@ function renderHomeView(): string {
       </section>`;
 }
 
+// Time-window presets of the Activity toolbar; 7 days is the default.
+export const ADMIN_UI_ACTIVITY_RANGES: Array<{ id: string; range: string; key: string; label: string }> = [
+  { id: 'activityRangeToday', range: 'today', key: 'activity.rangeToday', label: 'Today' },
+  { id: 'activityRangeYesterday', range: 'yesterday', key: 'activity.rangeYesterday', label: 'Yesterday' },
+  { id: 'activityRange7d', range: '7d', key: 'activity.range7d', label: '7 days' },
+  { id: 'activityRangeCustom', range: 'custom', key: 'activity.rangeCustom', label: 'Custom' },
+];
+
+function renderActivityPopup(id: string, labelKey: string, label: string): string {
+  return `
+          <button class="actPopup" id="${id}Button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}Popover">
+            <span class="actPopupLabel" data-i18n="${labelKey}">${label}</span>
+            <span class="actPopupValue" id="${id}Value">All</span>
+            ${renderAdminIcon('chevronUpDown', 'actPopupIcon')}
+          </button>`;
+}
+
+// One day column. The header, the card list and the trailing controls are static; the client only reconciles the
+// cards inside #activityColumnNCards, keyed by memory id.
+function renderActivityColumn(index: number): string {
+  const id = `activityColumn${index}`;
+  const pill = (kind: string, suffix: string) =>
+    `<span class="actDayPill kind-${kind}" id="${id}${suffix}" hidden><span class="kindDot" aria-hidden="true"></span><span class="actDayCount">0</span></span>`;
+  return `
+            <section class="actColumn" id="${id}" aria-labelledby="${id}Heading">
+              <header class="actColumnHead">
+                <h2 class="actColumnTitle" id="${id}Heading"><span class="actColumnName" id="${id}Title"></span><span class="actColumnDate" id="${id}Date"></span></h2>
+                <span class="actDayPills">${pill('outcome', 'Outcome')}${pill('context', 'Context')}${pill('legacy', 'Legacy')}</span>
+              </header>
+              <div class="actColumnBody" id="${id}Body">
+                <div class="actCards" id="${id}Cards"></div>
+                <p class="actColumnEmpty" id="${id}Empty" data-i18n="activity.dayEmpty" hidden>No memories on this day</p>
+                <button class="actMore" id="${id}More" type="button" data-activity-more="true" hidden>Load more</button>
+              </div>
+            </section>`;
+}
+
+function renderActivityView(): string {
+  const segments = ADMIN_UI_ACTIVITY_RANGES.map((item) => `
+            <button class="actSegment" id="${item.id}" type="button" data-activity-range="${item.range}" aria-pressed="${item.range === '7d'}"${item.range === 'custom' ? ' aria-haspopup="dialog" aria-expanded="false" aria-controls="activityCustomPopover"' : ''} data-i18n="${item.key}">${item.label}</button>`).join('');
+  return `
+      <section id="activityView" class="appView activityView" aria-labelledby="pageTitle">
+        <div class="actSummary" id="activitySummary">
+          <span class="actSum" id="activitySumMemories">—</span><span class="actSumSep" aria-hidden="true">·</span>
+          <span class="actSum" id="activitySumOutcome"></span><span class="actSumSep" aria-hidden="true">·</span>
+          <span class="actSum" id="activitySumContext"></span><span class="actSumSep" aria-hidden="true">·</span>
+          <button class="actSum actSumToggle" id="activitySumLegacy" type="button" aria-pressed="false"></button>
+          <span class="actSpark" id="activitySparkline" role="img" data-i18n-aria-label="activity.sparkLabel" aria-label="Memories per day in this window"></span>
+        </div>
+
+        <div class="actToolbar glassSurface glassBlur" id="activityToolbar">
+          <div class="actSegmented" id="activityRangeControl" role="group" data-i18n-aria-label="activity.rangeLabel" aria-label="Time range">${segments}
+          </div>
+          <span class="actToolbarSep" aria-hidden="true"></span>${renderActivityPopup('activityProject', 'activity.project', 'Project')}${renderActivityPopup('activityAgent', 'activity.agent', 'Agent')}
+          <div class="actToolbarEnd">
+            <span class="actRangeText"><span class="actRange" id="activityRangeLabel"></span><span class="actUpdated" id="activityUpdated"></span></span>
+            <button class="actIconButton" id="activitySearchButton" type="button" aria-disabled="true" data-i18n-title="activity.searchSoon" title="Search arrives with the Memory view" data-i18n-aria-label="activity.search" aria-label="Search">${renderAdminIcon('search', 'actIcon')}</button>
+          </div>
+        </div>
+
+        <div class="actChips" id="activityChips" role="group" data-i18n-aria-label="activity.chipsLabel" aria-label="Projects"></div>
+
+        <div class="actBoard" id="activityBoard">
+          <div class="actMain">
+            <div class="actColumns" id="activityColumns" role="region" data-i18n-aria-label="activity.columnsLabel" aria-label="Memories by day" aria-busy="true">${renderActivityColumn(0)}${renderActivityColumn(1)}
+            </div>
+            <div class="actNotice glassCard glassBlur" id="activityNotice" role="status" hidden>
+              <div class="placeholderIcon">${renderAdminIcon('activity', 'placeholderGlyph')}</div>
+              <h2 class="actNoticeTitle" id="activityNoticeTitle"></h2>
+              <p class="actNoticeLead" id="activityNoticeLead"></p>
+              <div class="actNoticeActions">
+                <button class="bgButton is-primary" id="activityNoticeAction" type="button" hidden></button>
+                <button class="bgButton" id="activityNoticeSecondary" type="button" hidden></button>
+              </div>
+            </div>
+          </div>
+          <!-- Older days from one stats-only request (120 days, limit=0); the client renders the two day groups. -->
+          <aside class="actRail glassCard glassBlur" id="activityEarlierPanel" aria-labelledby="activityEarlierTitle">
+            <h2 class="actRailTitle" id="activityEarlierTitle" data-i18n="activity.earlierTitle">Earlier</h2>
+            <p class="actRailLead" id="activityEarlierLead" data-i18n="activity.earlierLead">Older days, up to 120 days back. Select a day to open its memories.</p>
+            <div class="actRailBody" id="activityEarlierBody" aria-live="polite"></div>
+            <p class="actRailNote" id="activityEarlierNote" data-i18n="activity.earlierNote">Bar length is √-scaled. Legacy days counted every tool call, so they read larger than v2.1 days without meaning more work.</p>
+          </aside>
+        </div>
+
+        <!-- Memory detail drawer. It lives inside the view so its blur only runs while Activity is visible. -->
+        <div class="actScrim" id="activityDrawerScrim" hidden></div>
+        <aside class="actDrawer" id="activityDrawer" role="dialog" aria-modal="true" aria-labelledby="activityDrawerTitle" tabindex="-1" hidden>
+          <header class="actDrawerHead">
+            <div class="actDrawerMeta" id="activityDrawerMeta"></div>
+            <button class="actDrawerClose" id="activityDrawerClose" type="button" data-i18n-aria-label="activity.drawerClose" aria-label="Close">${renderAdminIcon('close', 'actIcon')}</button>
+          </header>
+          <h2 class="actDrawerTitle" id="activityDrawerTitle"></h2>
+          <div class="actDrawerSub" id="activityDrawerSub"></div>
+          <div class="actDrawerBody" id="activityDrawerBody" aria-live="polite"></div>
+        </aside>
+
+        <!-- Popovers sit outside the blurred toolbar: inside it they could only frost the toolbar itself. -->
+        <div class="actPopover actMenu" id="activityProjectPopover" role="listbox" data-i18n-aria-label="activity.projectMenu" aria-label="Filter by project" hidden></div>
+        <div class="actPopover actMenu" id="activityAgentPopover" role="listbox" data-i18n-aria-label="activity.agentMenu" aria-label="Filter by agent" hidden></div>
+        <section class="actPopover actCustom" id="activityCustomPopover" role="dialog" aria-labelledby="activityCustomTitle" hidden>
+          <h3 class="actCustomTitle" id="activityCustomTitle" data-i18n="activity.customTitle">Custom range</h3>
+          <div class="actCustomFields">
+            <label class="actField"><span class="actFieldLabel" data-i18n="activity.customFrom">From</span><input class="actDateInput" id="activityCustomFrom" type="date" /></label>
+            <label class="actField"><span class="actFieldLabel" data-i18n="activity.customTo">To</span><input class="actDateInput" id="activityCustomTo" type="date" /></label>
+          </div>
+          <p class="actCustomHint" id="activityCustomHint" data-i18n="activity.customHint">Up to 120 days</p>
+          <p class="actCustomError" id="activityCustomError" role="alert" hidden></p>
+          <div class="actCustomActions">
+            <button class="bgButton" id="activityCustomCancel" type="button" data-i18n="activity.customCancel">Cancel</button>
+            <button class="bgButton is-primary" id="activityCustomApply" type="button" data-i18n="activity.customApply">Apply</button>
+          </div>
+        </section>
+      </section>`;
+}
+
 function renderPlaceholderViews(): string {
   return PLACEHOLDER_VIEWS.map((view) => `
       <section id="${view.id}" class="appView" aria-labelledby="pageTitle">
@@ -356,7 +494,7 @@ export function renderAdminWorkbenchMarkup(): string {
   return `
   <div class="appShell">${renderSidebar()}${renderBackgroundPopover()}
     <main class="mainArea" id="mainArea">
-      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderPlaceholderViews()}${renderSettingsView()}
+      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderPlaceholderViews()}${renderSettingsView()}
 
       <section id="devToolsView" class="appView devToolsView" aria-labelledby="pageTitle">
     <p class="devToolsLead" data-i18n="devtools.lead">Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.</p>

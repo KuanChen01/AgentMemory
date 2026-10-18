@@ -1,3 +1,5 @@
+import { ACTIVITY_BG_DARK_WEBP, ACTIVITY_BG_LIGHT_WEBP } from './admin-ui-bg-assets';
+
 export interface AdminUiWallpaper {
   id: string;
   key: string;
@@ -152,11 +154,24 @@ export const ADMIN_UI_THEME = `
     --glass-specular:
       linear-gradient(180deg, rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0) 38%),
       radial-gradient(120% 60% at 0% 0%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 60%);
-    --glass-border: rgba(255, 255, 255, 0.45);
+    /* Glass edge, shared by every glass surface (see "Glass edge" below). Light falls from the top left:
+       --glass-border is the 1px rim (bright where it faces the light, lavender-grey where the edge turns
+       away, a softer catch-light where light exits at the bottom), --glass-edge the slab's thickness
+       (a crisp inner highlight, a faint shade under the top bevel, light pooling along the lower edge and a
+       hairline contact shadow). --glass-border-well is the same rim lit from inside, for recessed tracks. */
+    --glass-border:
+      radial-gradient(130% 90% at 0% 0%, rgba(255, 255, 255, 0.70), rgba(255, 255, 255, 0) 55%),
+      radial-gradient(90% 80% at 100% 100%, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 60%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.40) 24%, rgba(150, 140, 214, 0.26) 56%, rgba(255, 255, 255, 0.70));
+    --glass-border-well: linear-gradient(180deg, rgba(120, 110, 196, 0.24), rgba(150, 140, 214, 0.08) 45%, rgba(255, 255, 255, 0.92));
+    --glass-edge:
+      inset 0 1px 0.5px rgba(255, 255, 255, 0.85),
+      inset 0 0 3px 1px rgba(255, 255, 255, 0.22),
+      inset 0 8px 10px -10px rgba(96, 84, 186, 0.20),
+      inset 0 -12px 16px -14px rgba(255, 255, 255, 0.85),
+      0 0.5px 1px rgba(64, 54, 150, 0.14);
     --glass-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.65),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.12),
-      inset 0 0 24px rgba(255, 255, 255, 0.06),
+      var(--glass-edge),
       0 12px 32px -8px rgba(20, 24, 70, 0.22),
       0 2px 6px rgba(20, 24, 70, 0.06);
     --glass-blur: blur(32px) saturate(175%);
@@ -167,13 +182,12 @@ export const ADMIN_UI_THEME = `
     --shell-line: rgba(15, 23, 42, 0.08);
     --shell-hover: rgba(255, 255, 255, 0.42);
     --nav-active-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.64), rgba(255, 255, 255, 0.36));
-    --nav-active-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 4px 12px -4px rgba(30, 60, 160, 0.25);
+    --nav-active-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.92);
     --chip-fill: rgba(255, 255, 255, 0.40);
     --chip-border: rgba(255, 255, 255, 0.55);
     --chip-highlight: rgba(255, 255, 255, 0.85);
     --pill-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.38));
-    --pill-border: rgba(255, 255, 255, 0.72);
-    --pill-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 1px 2px rgba(20, 40, 80, 0.05), 0 10px 24px -12px rgba(30, 64, 120, 0.28);
+    --pill-shadow: var(--glass-edge), 0 10px 24px -12px rgba(30, 64, 120, 0.28);
     --popover-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.48));
     --popover-border: rgba(255, 255, 255, 0.7);
     --chart-axis: rgba(15, 23, 42, 0.16);
@@ -223,6 +237,20 @@ ${WALLPAPER_CSS}
     --wallpaper: var(--bg-image, none) center / cover no-repeat, var(--bg-custom-color, #8a93a6);
     --wallpaper-base: var(--bg-custom-color, #8a93a6);
     --wallpaper-swatch: var(--bg-image, none) center / cover no-repeat, var(--bg-custom-color, #8a93a6);
+  }
+
+  /* Activity's default backdrop (only while no background has been picked; see applyBackdrop in the client).
+     The artwork is inline. The solid colour is the field of each image, so it shows until the WebP paints. */
+  html[data-act-bg="light"] {
+    --wallpaper: url("${ACTIVITY_BG_LIGHT_WEBP}") center / cover no-repeat, #e7eefb;
+    --wallpaper-base: #e7eefb;
+    --wallpaper-swatch: #e7eefb;
+  }
+
+  html[data-act-bg="dark"] {
+    --wallpaper: url("${ACTIVITY_BG_DARK_WEBP}") center / cover no-repeat, #0b1226;
+    --wallpaper-base: #0b1226;
+    --wallpaper-swatch: #0b1226;
   }
 
   /* The only background layer: one fixed, static element that the poll never repaints. The Wallpaper blur and
@@ -1166,7 +1194,7 @@ ${WALLPAPER_CSS}
     position: relative;
     isolation: isolate;
     background: var(--glass-fill);
-    border: 1px solid var(--glass-border);
+    border: 1px solid transparent;
     box-shadow: var(--glass-shadow);
   }
 
@@ -1204,6 +1232,54 @@ ${WALLPAPER_CSS}
       --glass-a-top: 0.86;
       --glass-a-bottom: 0.80;
     }
+  }
+
+  /* Glass edge. Every glass surface keeps a transparent 1px border (so nothing moves) and paints its rim on
+     top of it: a gradient ring cut out with a mask, so the edge catches light unevenly like a real slab
+     instead of a flat white stroke. The thickness half lives in --glass-edge, inside each surface's shadow. */
+  .glassPill,
+  .actChip,
+  .actPopup,
+  .actIconButton,
+  .actSegment,
+  .actSegmented,
+  .actDrawerClose,
+  .actSection {
+    position: relative;
+  }
+
+  .glassCard::after,
+  .glassSurface::after,
+  .glassPill::after,
+  .actCard::after,
+  .actChip::after,
+  .actPopup::after,
+  .actIconButton::after,
+  .actSegment[aria-pressed="true"]::after,
+  .actSegmented::after,
+  .actDrawer::after,
+  .actDrawerClose::after,
+  .actSection::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    padding: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--glass-border);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  .actSegmented::after {
+    background: var(--glass-border-well);
+  }
+
+  /* Drawer sections are panes inside the drawer's own glass: same rim, half the light. */
+  .actSection::after {
+    opacity: 0.5;
   }
 
   .appShell {
@@ -1312,6 +1388,18 @@ ${WALLPAPER_CSS}
     white-space: nowrap;
   }
 
+  .navGroupLabel {
+    margin: 10px 0 2px;
+    padding: 0 12px;
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .navGroupLabel:first-child {
+    margin-top: 0;
+  }
+
   .navGroup {
     display: flex;
     flex-direction: column;
@@ -1378,14 +1466,27 @@ ${WALLPAPER_CSS}
     background: var(--shell-hover);
   }
 
+  /* Same pill as Developer tools, shown on: the row still opens the background picker. */
   .bgSwatch {
-    width: 24px;
-    height: 24px;
-    flex: 0 0 24px;
-    border: 1.5px solid rgba(255, 255, 255, 0.85);
-    border-radius: 8px;
-    background: var(--wallpaper-swatch);
-    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22);
+    position: relative;
+    width: 44px;
+    height: 26px;
+    flex: 0 0 44px;
+    border-radius: 999px;
+    background: #0a84ff;
+    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+  }
+
+  .bgSwatch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22), 0 0 0 0.5px rgba(15, 23, 42, 0.06);
   }
 
   .devToggleLabel {
@@ -1474,7 +1575,7 @@ ${WALLPAPER_CSS}
     max-width: none;
     margin: 0;
     color: var(--text);
-    font-size: 34px;
+    font-size: 40px;
     font-weight: 700;
     line-height: 1.1;
     letter-spacing: -0.02em;
@@ -1495,15 +1596,28 @@ ${WALLPAPER_CSS}
     padding: 0 16px;
     border-radius: 999px;
     background: var(--pill-fill);
-    border: 1px solid var(--pill-border);
+    border: 1px solid transparent;
     box-shadow: var(--pill-shadow);
     color: var(--text);
     font-size: 14px;
     font-weight: 600;
   }
 
+  /* Read and Write share one glass pill; each switch is a soft segment inside it. */
+  .policyGroup {
+    gap: 2px;
+    padding: 0 5px;
+  }
+
   .policyPill {
     position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 30px;
+    padding: 0 11px;
+    border: 1px solid transparent;
+    border-radius: 999px;
     cursor: pointer;
     user-select: none;
     transition: background 180ms var(--ease-out), border-color 180ms var(--ease-out), color 180ms var(--ease-out);
@@ -1514,19 +1628,39 @@ ${WALLPAPER_CSS}
   }
 
   .policyPill:focus-within {
-    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.24);
+  }
+
+  .pillLabel {
+    font-weight: 500;
   }
 
   .pillDot {
     width: 9px;
     height: 9px;
+    flex: 0 0 9px;
     border-radius: 50%;
     background: var(--kind-legacy);
   }
 
-  .policyPill.is-enabled .pillDot {
+  .policyPill.readPolicy.is-enabled .pillDot {
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.16);
+  }
+
+  .policyPill.writePolicy.is-enabled .pillDot {
     background: var(--ok);
     box-shadow: 0 0 0 3px rgba(48, 209, 88, 0.18);
+  }
+
+  /* "On" is the quiet default and stays for screen readers only; Off and Saving show as words. */
+  .policyPill.is-enabled:not(.is-saving) .policyBadge {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .policyPill.is-disabled {
@@ -1556,28 +1690,100 @@ ${WALLPAPER_CSS}
     font-weight: 500;
   }
 
-  .topActions .localeToggle {
-    width: auto;
+  /* Language menu: a compact "EN ⌄" pill and a small glass list under it. */
+  .localeMenu {
+    position: relative;
+  }
+
+  .localeTrigger {
+    gap: 10px;
+    min-width: 84px;
+    padding: 0 14px 0 18px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out);
+  }
+
+  .localeTrigger:hover,
+  .localeTrigger[aria-expanded="true"] {
+    background: var(--shell-hover);
+  }
+
+  .localeTrigger:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.3);
+  }
+
+  .localeTriggerValue {
+    flex: 1 1 auto;
+  }
+
+  .localeTriggerIcon {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    color: var(--text-2);
+  }
+
+  .localeList {
+    position: absolute;
+    z-index: 45;
+    top: calc(100% + 8px);
+    right: 0;
+    display: grid;
     gap: 2px;
-    padding: 0 12px;
-    color: var(--text-3);
+    min-width: 168px;
+    padding: 6px;
+    border: 1px solid var(--popover-border);
+    border-radius: 16px;
+    background: var(--glass-specular), var(--popover-fill);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 24px 60px -20px rgba(20, 24, 80, 0.45), 0 4px 14px rgba(20, 24, 80, 0.10);
+    animation: popoverEnter 160ms var(--ease-out) both;
+  }
+
+  .localeMenu.is-active .localeList {
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
   }
 
   .topActions .localeButton {
-    min-width: 0;
-    min-height: 30px;
-    padding: 0 6px;
-    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 10px;
     background: transparent;
-    color: var(--text-3);
+    color: var(--text);
+    font: inherit;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
+    text-align: left;
+  }
+
+  .topActions .localeButton:hover,
+  .topActions .localeButton:focus-visible {
+    transform: none;
+    background: var(--shell-hover);
+    outline: none;
   }
 
   .topActions .localeButton.is-active {
     background: transparent;
-    color: var(--text);
-    font-weight: 700;
+    color: var(--shell-accent);
+    font-weight: 600;
+  }
+
+  .localeCode {
+    min-width: 30px;
+    font-weight: 600;
+  }
+
+  .localeName {
+    color: var(--text-2);
   }
 
   .policyBanner {
@@ -2345,10 +2551,19 @@ ${WALLPAPER_CSS}
     --glass-specular:
       linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 35%),
       radial-gradient(120% 60% at 0% 0%, rgba(150, 180, 255, 0.12), rgba(255, 255, 255, 0) 60%);
-    --glass-border: rgba(255, 255, 255, 0.16);
+    --glass-border:
+      radial-gradient(130% 90% at 0% 0%, rgba(214, 226, 255, 0.42), rgba(214, 226, 255, 0) 55%),
+      radial-gradient(90% 80% at 100% 100%, rgba(150, 180, 255, 0.26), rgba(150, 180, 255, 0) 60%),
+      linear-gradient(180deg, rgba(206, 220, 255, 0.46), rgba(160, 185, 255, 0.16) 24%, rgba(110, 140, 240, 0.07) 56%, rgba(150, 178, 255, 0.24));
+    --glass-border-well: linear-gradient(180deg, rgba(0, 3, 16, 0.50), rgba(110, 140, 240, 0.06) 45%, rgba(160, 188, 255, 0.30));
+    --glass-edge:
+      inset 0 1px 0.5px rgba(225, 233, 255, 0.16),
+      inset 0 0 3px 1px rgba(150, 180, 255, 0.06),
+      inset 0 8px 10px -10px rgba(0, 3, 18, 0.50),
+      inset 0 -12px 16px -14px rgba(130, 160, 255, 0.30),
+      0 0.5px 1px rgba(0, 2, 14, 0.45);
     --glass-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      inset 0 0 24px rgba(255, 255, 255, 0.03),
+      var(--glass-edge),
       0 16px 40px -10px rgba(0, 0, 0, 0.5);
     --glass-text: #f2f5ff;
     --glass-text-2: rgba(235, 240, 255, 0.78);
@@ -2357,13 +2572,12 @@ ${WALLPAPER_CSS}
     --shell-line: rgba(255, 255, 255, 0.12);
     --shell-hover: rgba(255, 255, 255, 0.09);
     --nav-active-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06));
-    --nav-active-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    --nav-active-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
     --chip-fill: rgba(255, 255, 255, 0.08);
     --chip-border: rgba(255, 255, 255, 0.14);
     --chip-highlight: rgba(255, 255, 255, 0.10);
     --pill-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.07));
-    --pill-border: rgba(255, 255, 255, 0.2);
-    --pill-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 10px 24px -12px rgba(0, 0, 0, 0.5);
+    --pill-shadow: var(--glass-edge), 0 10px 24px -12px rgba(0, 0, 0, 0.5);
     --popover-fill: linear-gradient(180deg, rgba(36, 42, 82, 0.78), rgba(22, 26, 58, 0.70));
     --popover-border: rgba(255, 255, 255, 0.18);
     --chart-axis: rgba(255, 255, 255, 0.22);
@@ -2409,6 +2623,1784 @@ ${WALLPAPER_CSS}
 
   html[data-glass="dark"] .linkButton:hover {
     background: rgba(159, 194, 255, 0.12);
+  }
+
+  /* ---------- Activity ---------- */
+
+  /* Activity tokens. Light glass is milky white with a faint periwinkle shadow; dark glass is deep navy with a
+     cool rim. The shell's own tokens (--text, --shell-hover, ...) still drive ink, so a user background keeps
+     working; these only shape Activity's surfaces. */
+  .activityView {
+    position: relative;
+    --a-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.40));
+    --a-glass-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.05), 0 18px 40px -22px rgba(70, 80, 180, 0.38);
+    --a-card-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.12));
+    --a-card-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.04), 0 12px 26px -16px rgba(70, 80, 180, 0.28);
+    --a-card-hover-shadow: var(--glass-edge), 0 2px 4px rgba(60, 70, 150, 0.05), 0 18px 34px -16px rgba(70, 80, 180, 0.38);
+    --a-control-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.42));
+    --a-control-shadow: var(--glass-edge), 0 6px 16px -12px rgba(60, 70, 160, 0.40);
+    --a-track-fill: rgba(236, 238, 250, 0.46);
+    --a-seg-on-fill: linear-gradient(180deg, #ffffff, rgba(244, 248, 255, 0.94));
+    --a-seg-on-border: transparent;
+    --a-seg-on-ink: var(--glass-text);
+    --a-seg-on-shadow: var(--glass-edge), 0 1px 2px rgba(40, 70, 170, 0.08), 0 8px 18px -8px rgba(40, 90, 220, 0.38);
+    --a-on-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(246, 250, 255, 0.70));
+    --a-on-border: rgba(10, 122, 255, 0.40);
+    --a-on-ink: #0a63d1;
+    --a-on-shadow: var(--glass-edge), 0 6px 16px -10px rgba(10, 100, 240, 0.45);
+    --a-tag-fill: rgba(118, 126, 168, 0.12);
+    --a-outcome-fill: rgba(10, 132, 255, 0.11);
+    --a-outcome-ink: #0a63d1;
+    --a-outcome-dot: #0a84ff;
+    --a-context-fill: rgba(130, 100, 240, 0.12);
+    --a-context-ink: #5a3fc4;
+    --a-context-dot: #8e6cf6;
+    --a-legacy-fill: rgba(140, 148, 170, 0.16);
+    --a-legacy-ink: #525a6e;
+    --a-mcp-fill: rgba(240, 160, 70, 0.16);
+    --a-mcp-border: rgba(226, 150, 74, 0.42);
+    --a-mcp-ink: #9a5212;
+    --a-fallback-fill: rgba(255, 159, 10, 0.15);
+    --a-warn: #d46f08;
+    --a-link: #0a6fe0;
+    --a-bar: linear-gradient(90deg, #2a7fff, #64adff);
+    --a-bar-legacy: linear-gradient(90deg, rgba(140, 148, 172, 0.80), rgba(170, 176, 198, 0.70));
+    --a-bar-track: rgba(120, 128, 170, 0.13);
+    --a-spark: #3b88ff;
+    --a-spark-zero: rgba(59, 136, 255, 0.50);
+    --a-line: rgba(40, 50, 100, 0.10);
+    --a-drawer-fill: linear-gradient(180deg, rgba(252, 252, 255, 0.84), rgba(246, 247, 255, 0.74));
+    --a-drawer-shadow: var(--glass-edge), 0 40px 90px -30px rgba(40, 50, 140, 0.45), 0 6px 18px rgba(40, 50, 140, 0.10);
+    --a-scrim: rgba(40, 46, 90, 0.10);
+    --a-section-fill: rgba(255, 255, 255, 0.52);
+    --a-well-blur: blur(18px) saturate(145%);
+    /* Project dots: ten evenly spread, muted hues; the client hands each visible project its own slot. */
+    --proj-0: #5fb08a;
+    --proj-1: #7a86ea;
+    --proj-2: #e58a4e;
+    --proj-3: #a07ae6;
+    --proj-4: #cda23c;
+    --proj-5: #e46f8a;
+    --proj-6: #46a8dc;
+    --proj-7: #9bbd4a;
+    --proj-8: #d877c8;
+    --proj-9: #4fb8b0;
+    --proj-none: #a3a9b6;
+  }
+
+  html[data-glass="dark"] .activityView {
+    --a-well-blur: blur(22px) saturate(160%);
+    --a-glass: linear-gradient(180deg, rgba(30, 42, 88, 0.50), rgba(12, 18, 46, 0.46));
+    --a-glass-shadow: var(--glass-edge), 0 22px 48px -20px rgba(0, 0, 0, 0.70);
+    --a-card-fill: linear-gradient(180deg, rgba(30, 42, 88, 0.62), rgba(14, 20, 50, 0.58));
+    --a-card-shadow: var(--glass-edge), 0 16px 30px -18px rgba(0, 0, 0, 0.80);
+    --a-card-hover-shadow: var(--glass-edge), 0 0 0 1px rgba(110, 160, 255, 0.18), 0 20px 36px -18px rgba(0, 0, 0, 0.85);
+    --a-control-fill: linear-gradient(180deg, rgba(40, 52, 100, 0.55), rgba(20, 28, 64, 0.45));
+    --a-control-shadow: var(--glass-edge);
+    --a-track-fill: rgba(8, 12, 32, 0.42);
+    --a-seg-on-fill: linear-gradient(180deg, #3586ff, #1556dc);
+    --a-seg-on-border: rgba(140, 190, 255, 0.55);
+    --a-seg-on-ink: #ffffff;
+    --a-seg-on-shadow: var(--glass-edge), 0 0 0 1px rgba(60, 130, 255, 0.30), 0 0 24px -4px rgba(40, 110, 255, 0.80);
+    --a-on-fill: linear-gradient(180deg, rgba(36, 92, 220, 0.42), rgba(20, 60, 170, 0.32));
+    --a-on-border: rgba(90, 160, 255, 0.85);
+    --a-on-ink: #d6e6ff;
+    --a-on-shadow: var(--glass-edge), 0 0 18px -4px rgba(40, 120, 255, 0.75);
+    --a-tag-fill: rgba(255, 255, 255, 0.10);
+    --a-outcome-fill: rgba(30, 110, 255, 0.24);
+    --a-outcome-ink: #a9cbff;
+    --a-outcome-dot: #3d8bff;
+    --a-context-fill: rgba(140, 110, 255, 0.24);
+    --a-context-ink: #cbb8ff;
+    --a-context-dot: #9a7cff;
+    --a-legacy-fill: rgba(255, 255, 255, 0.10);
+    --a-legacy-ink: #d3d8e6;
+    --a-mcp-fill: rgba(255, 170, 90, 0.16);
+    --a-mcp-border: rgba(255, 170, 90, 0.45);
+    --a-mcp-ink: #ffc58a;
+    --a-fallback-fill: rgba(255, 159, 10, 0.18);
+    --a-warn: #ffad42;
+    --a-link: #6fb0ff;
+    --a-bar: linear-gradient(90deg, #2f7cff, #6bb2ff);
+    --a-bar-legacy: linear-gradient(90deg, rgba(150, 160, 190, 0.75), rgba(190, 198, 220, 0.70));
+    --a-bar-track: rgba(255, 255, 255, 0.09);
+    --a-spark: #4b93ff;
+    --a-spark-zero: rgba(110, 165, 255, 0.60);
+    --a-line: rgba(255, 255, 255, 0.10);
+    --a-drawer-fill: linear-gradient(180deg, rgba(24, 34, 74, 0.86), rgba(10, 15, 40, 0.82));
+    --a-drawer-shadow: var(--glass-edge), 0 40px 90px -30px rgba(0, 0, 0, 0.85);
+    --a-scrim: rgba(2, 4, 16, 0.38);
+    --a-section-fill: rgba(255, 255, 255, 0.05);
+    --proj-0: #5cc596;
+    --proj-1: #8b96ff;
+    --proj-2: #f29a5c;
+    --proj-3: #b08cff;
+    --proj-4: #e2b84a;
+    --proj-5: #f2809b;
+    --proj-6: #4fb8f0;
+    --proj-7: #acd25a;
+    --proj-8: #e888d8;
+    --proj-9: #5ccac2;
+    --proj-none: #8a91a6;
+  }
+
+  /* Summary: the subtitle of the page title in the shared top bar. */
+  .actSummary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin: -14px 0 20px 2px;
+    color: var(--text-2);
+    font-size: 15.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .policyBanner:not([hidden]) ~ .activityView .actSummary {
+    margin-top: 0;
+  }
+
+  .actSum strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .actSumSep {
+    color: var(--text-3);
+  }
+
+  .actSumToggle {
+    margin: 0 -6px;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out), color 160ms var(--ease-out);
+  }
+
+  .actSumToggle:hover {
+    background: var(--shell-hover);
+  }
+
+  .actSumToggle[aria-pressed="true"],
+  .actSumToggle[aria-pressed="true"] strong {
+    color: var(--a-link);
+  }
+
+  .actSpark {
+    display: inline-flex;
+    align-items: flex-end;
+    height: 24px;
+    margin-left: 10px;
+  }
+
+  .actSparkSvg {
+    display: block;
+    height: 24px;
+    overflow: visible;
+  }
+
+  .actSparkSvg .sparkBar { fill: var(--a-spark); }
+  .actSparkSvg .sparkZero { fill: var(--a-spark-zero); }
+
+  /* Toolbar: one long glass capsule. */
+  .activityView .actToolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+    padding: 7px 8px 7px 7px;
+    border: 1px solid transparent;
+    border-radius: 34px;
+    background: var(--a-glass);
+    box-shadow: var(--a-glass-shadow);
+  }
+
+  .actSegmented {
+    display: inline-flex;
+    gap: 2px;
+    padding: 4px;
+    border: 1px solid transparent;
+    border-radius: 28px;
+    background: var(--a-track-fill);
+    box-shadow: inset 0 1px 3px rgba(20, 30, 80, 0.06);
+  }
+
+  .actSegment {
+    min-height: 40px;
+    padding: 0 24px;
+    border: 1px solid transparent;
+    border-radius: 22px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 200ms var(--ease-out), color 200ms var(--ease-out), box-shadow 200ms var(--ease-out), border-color 200ms var(--ease-out);
+  }
+
+  .actSegment:hover {
+    background: var(--shell-hover);
+  }
+
+  .actSegment[aria-pressed="true"] {
+    border-color: var(--a-seg-on-border);
+    background: var(--a-seg-on-fill);
+    box-shadow: var(--a-seg-on-shadow);
+    color: var(--a-seg-on-ink);
+    font-weight: 600;
+  }
+
+  .actToolbarSep {
+    width: 1px;
+    height: 28px;
+    margin: 0 2px;
+    background: var(--a-line);
+  }
+
+  .actPopup {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 260px;
+    min-height: 42px;
+    padding: 0 14px 0 17px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--a-control-fill);
+    box-shadow: var(--a-control-shadow);
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out), border-color 160ms var(--ease-out);
+  }
+
+  .actPopup:hover,
+  .actPopup[aria-expanded="true"] {
+    background: var(--shell-hover);
+  }
+
+  .actPopupLabel {
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+
+  .actPopupValue {
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actPopup.is-filtered {
+    border-color: var(--a-on-border);
+  }
+
+  .actPopup.is-filtered .actPopupValue {
+    color: var(--a-on-ink);
+  }
+
+  .actPopupIcon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+    color: var(--text-2);
+  }
+
+  .actToolbarEnd {
+    display: flex;
+    flex: 1 1 240px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+    min-width: 0;
+    margin-left: auto;
+  }
+
+  .actRangeText {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actRange {
+    color: var(--text);
+  }
+
+  .actUpdated {
+    color: var(--text-2);
+  }
+
+  .actUpdated.is-warn {
+    color: var(--warn-ink);
+    font-weight: 600;
+  }
+
+  .actIconButton {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: var(--a-control-fill);
+    box-shadow: var(--a-control-shadow);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .actIconButton[aria-disabled="true"] {
+    cursor: default;
+  }
+
+  .actIcon {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* Project chips: one slim row that scrolls sideways and never wraps. */
+  .actChips {
+    display: flex;
+    gap: 10px;
+    margin: 14px -6px 0;
+    padding: 4px 6px 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .actChips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .actChips.is-overflowing {
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 56px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 56px), transparent);
+  }
+
+  .actChip {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 9px;
+    min-height: 38px;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--a-control-fill);
+    box-shadow: var(--a-control-shadow);
+    color: var(--text);
+    font: inherit;
+    font-size: 14.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out), border-color 160ms var(--ease-out), color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+  }
+
+  .actChip:hover {
+    background: var(--shell-hover);
+  }
+
+  .actChip[aria-pressed="true"] {
+    border-color: var(--a-on-border);
+    background: var(--a-on-fill);
+    box-shadow: var(--a-on-shadow);
+    color: var(--a-on-ink);
+  }
+
+  .actChipName {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .actChipCount {
+    margin-left: 4px;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actChip[aria-pressed="true"] .actChipCount {
+    color: inherit;
+  }
+
+  .actDot {
+    width: 9px;
+    height: 9px;
+    flex: 0 0 9px;
+    border-radius: 50%;
+    background: var(--proj-none);
+    box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  }
+
+  .actDot[data-hue="0"] { background: var(--proj-0); }
+  .actDot[data-hue="1"] { background: var(--proj-1); }
+  .actDot[data-hue="2"] { background: var(--proj-2); }
+  .actDot[data-hue="3"] { background: var(--proj-3); }
+  .actDot[data-hue="4"] { background: var(--proj-4); }
+  .actDot[data-hue="5"] { background: var(--proj-5); }
+  .actDot[data-hue="6"] { background: var(--proj-6); }
+  .actDot[data-hue="7"] { background: var(--proj-7); }
+  .actDot[data-hue="8"] { background: var(--proj-8); }
+  .actDot[data-hue="9"] { background: var(--proj-9); }
+
+  /* Board: two day columns and the Earlier rail. */
+  .actBoard {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+    align-items: start;
+    gap: 22px;
+    margin-top: 14px;
+  }
+
+  .actMain {
+    min-width: 0;
+  }
+
+  .actColumns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 26px;
+  }
+
+  .actColumns.is-single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .actColumns.is-single .actCards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  }
+
+  .actColumn {
+    min-width: 0;
+  }
+
+  .actColumnHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 34px;
+    padding: 0 4px;
+  }
+
+  .actColumnTitle {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+    color: var(--text);
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    white-space: nowrap;
+  }
+
+  .actColumnDate {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-overflow: ellipsis;
+  }
+
+  .actDayPills {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  .actDayPill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 13.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actDayPill .kindDot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .actDayPill.kind-outcome { background: var(--a-outcome-fill); color: var(--a-outcome-ink); box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.16); }
+  .actDayPill.kind-context { background: var(--a-context-fill); color: var(--a-context-ink); box-shadow: inset 0 0 0 1px rgba(130, 100, 240, 0.16); }
+  .actDayPill.kind-legacy { background: var(--a-legacy-fill); color: var(--a-legacy-ink); }
+  .actDayPill.kind-outcome .kindDot { background: var(--a-outcome-dot); }
+  .actDayPill.kind-context .kindDot { background: var(--a-context-dot); }
+
+  .actColumnBody {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 10px;
+  }
+
+  .actCards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .actCard {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+    padding: 13px 18px 13px;
+    border: 1px solid transparent;
+    border-radius: 18px;
+    background: var(--a-card-fill);
+    box-shadow: var(--a-card-shadow);
+    color: var(--text);
+    cursor: pointer;
+    outline: none;
+    transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), box-shadow 200ms var(--ease-out), border-color 200ms var(--ease-out);
+  }
+
+  /* Frost lives on the card, only while Activity is showing. The gaps around cards stay the bare backdrop. */
+  .appView.is-active .actCard {
+    -webkit-backdrop-filter: var(--a-well-blur);
+    backdrop-filter: var(--a-well-blur);
+  }
+
+  .actCard::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0) 46%);
+  }
+
+  html[data-glass="dark"] .actCard::before {
+    background: linear-gradient(180deg, rgba(160, 190, 255, 0.07), rgba(255, 255, 255, 0) 40%);
+  }
+
+  .actCard:not(.is-skeleton):hover {
+    transform: translateY(-1px);
+    box-shadow: var(--a-card-hover-shadow);
+  }
+
+  .actCard:focus-visible {
+    box-shadow: var(--a-card-shadow), 0 0 0 3px rgba(10, 132, 255, 0.35);
+  }
+
+  .actCard.is-open {
+    border-color: var(--a-on-border);
+    box-shadow: var(--a-card-shadow), 0 0 0 1px var(--a-on-border);
+  }
+
+  .actCard.is-skeleton {
+    cursor: default;
+  }
+
+  /* Dim the cards while a new window loads. The frost is on the card, so it dims with the content. */
+  .actColumns.is-stale .actCard {
+    opacity: 0.5;
+  }
+
+  .actCardHead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    min-width: 0;
+    color: var(--text-2);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actTime {
+    margin-right: 2px;
+    color: var(--text-2);
+  }
+
+  .activityView .kindPill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 22px;
+    padding: 0 9px 0 8px;
+    border: 0;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1;
+  }
+
+  .activityView .kindPill::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .activityView .kindPill.kind-outcome { background: var(--a-outcome-fill); color: var(--a-outcome-ink); }
+  .activityView .kindPill.kind-context { background: var(--a-context-fill); color: var(--a-context-ink); }
+  .activityView .kindPill.kind-legacy { background: var(--a-legacy-fill); color: var(--a-legacy-ink); }
+  .activityView .kindPill.kind-outcome::before { background: var(--a-outcome-dot); }
+  .activityView .kindPill.kind-context::before { background: var(--a-context-dot); }
+
+  .actBadge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .actBadge.is-mcp {
+    border-color: var(--a-mcp-border);
+    background: var(--a-mcp-fill);
+    color: var(--a-mcp-ink);
+  }
+
+  .actBadge.is-fallback {
+    background: var(--a-fallback-fill);
+    color: var(--warn-ink);
+  }
+
+  .actReview {
+    display: inline-grid;
+    place-items: center;
+    color: var(--text-2);
+  }
+
+  .actMeta {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 14px;
+    margin-left: auto;
+  }
+
+  .actMetaItem {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .actMetaIcon {
+    width: 15px;
+    height: 15px;
+  }
+
+  .actTitle {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 15.5px;
+    font-weight: 500;
+    line-height: 1.38;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .actCardFoot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .actProject {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--text-2);
+    font-size: 14px;
+  }
+
+  .actProjectName {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actAgent {
+    flex: 0 0 auto;
+    max-width: 45%;
+    overflow: hidden;
+    padding: 3px 13px;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    font-size: 13.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actCard.is-skeleton {
+    gap: 12px;
+    min-height: 112px;
+    padding-top: 17px;
+  }
+
+  .actSkel {
+    display: block;
+    height: 10px;
+    border-radius: 6px;
+    background: var(--a-tag-fill);
+  }
+
+  .actSkel.is-short { width: 34%; }
+  .actSkel.is-long { width: 88%; }
+  .actSkel.is-mid { width: 58%; }
+
+  .actColumnEmpty {
+    margin: 0;
+    padding: 22px 16px;
+    border: 1px dashed var(--a-line);
+    border-radius: 18px;
+    color: var(--text-3);
+    font-size: 13.5px;
+    text-align: center;
+  }
+
+  .actMore {
+    align-self: center;
+    min-height: 34px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--a-link);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .actMore:hover {
+    background: var(--shell-hover);
+  }
+
+  .actMore[aria-busy="true"] {
+    color: var(--text-3);
+    cursor: default;
+  }
+
+  .actNotice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 48px 32px;
+    text-align: center;
+  }
+
+  .activityView .actNotice {
+    background: var(--a-glass);
+    box-shadow: var(--a-glass-shadow);
+  }
+
+  .actNotice.is-error .placeholderIcon {
+    background: rgba(255, 69, 58, 0.12);
+    box-shadow: inset 0 1px 0 var(--chip-highlight);
+    color: var(--err-ink);
+  }
+
+  .actNoticeTitle {
+    margin: 6px 0 0;
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .actNoticeLead {
+    max-width: 460px;
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .actNoticeActions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  /* Earlier rail. The client sets an inline max-height from the rail's real top. Expanded legacy
+     days scroll in the body; the title, lead and note stay put. */
+  .activityView .actRail {
+    position: sticky;
+    top: 20px;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 40px);
+    margin-top: -6px;
+    /* overflow clips at the padding box, so the rail drops its border (padding grows by the same 1px) and
+       its glass rim sits at inset 0 instead of over the border. */
+    padding: 23px 23px 21px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 28px;
+    background: var(--a-glass);
+    box-shadow: var(--a-glass-shadow);
+  }
+
+  .activityView .actRail::after {
+    inset: 0;
+  }
+
+  .actRailTitle,
+  .actRailLead,
+  .actRailNote {
+    flex: 0 0 auto;
+  }
+
+  .actRailTitle {
+    margin: 0;
+    color: var(--text);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  .actRailLead {
+    margin: 6px 0 0;
+    color: var(--text-2);
+    font-size: 14.5px;
+    line-height: 1.45;
+  }
+
+  .actRailBody {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 4px -8px 0;
+    padding: 0 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+
+  .actRailNote {
+    margin: 16px 0 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--a-line);
+    color: var(--text-2);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .actEarlierGroup {
+    margin-top: 18px;
+  }
+
+  .actEarlierTitle {
+    margin: 0 0 6px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .actEarlierRows {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .actEarlierMonth {
+    margin: 8px 0 2px;
+    color: var(--text-3);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .actEarlierRow {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 12px;
+    width: calc(100% + 16px);
+    min-height: 38px;
+    margin: 0 -8px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    text-align: left;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out);
+  }
+
+  .actEarlierRow:hover {
+    background: var(--shell-hover);
+  }
+
+  .actEarlierRow:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.32);
+  }
+
+  .actEarlierRow[aria-current="date"] {
+    background: var(--a-on-fill);
+    box-shadow: inset 0 0 0 1px var(--a-on-border);
+  }
+
+  .actEarlierDay {
+    display: inline-flex;
+    gap: 6px;
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+
+  .actEarlierTrack {
+    position: relative;
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--a-bar-track);
+  }
+
+  .actEarlierBar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: inherit;
+    background: var(--a-bar);
+  }
+
+  .actEarlierRow.is-legacy .actEarlierBar {
+    background: var(--a-bar-legacy);
+  }
+
+  .actEarlierCount {
+    min-width: 34px;
+    color: var(--text);
+    font-weight: 600;
+    text-align: right;
+  }
+
+  .actEarlierSub {
+    grid-column: 2 / 4;
+    margin-top: 2px;
+    color: var(--text-2);
+    font-size: 12.5px;
+    text-align: right;
+  }
+
+  .actEarlierWarn {
+    color: var(--a-warn);
+  }
+
+  .actEarlierState {
+    margin: 18px 0 4px;
+    color: var(--text-2);
+    font-size: 14px;
+  }
+
+  .actEarlierState.is-error {
+    color: var(--err-ink);
+  }
+
+  .actEarlierSkeleton {
+    display: grid;
+    gap: 14px;
+    margin-top: 20px;
+  }
+
+  .actEarlierSkeleton span {
+    height: 10px;
+    border-radius: 6px;
+    background: var(--a-tag-fill);
+  }
+
+  .actEarlierSkeleton span:nth-child(odd) { width: 86%; }
+  .actEarlierSkeleton span:nth-child(even) { width: 64%; }
+
+  .actRailLink {
+    margin: 10px 0 0 -8px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--a-link);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .actRailLink:hover {
+    background: var(--shell-hover);
+  }
+
+  /* Memory detail drawer: a tall glass sheet from the right. Inside the view, so its blur only runs on Activity.
+     A transform animation that keeps filling would make the view the containing block of the fixed drawer and
+     scrim, so Activity's entry animation does not fill forwards (its end state is transform: none anyway). */
+  .activityView.is-active {
+    animation-fill-mode: none;
+  }
+
+  .actScrim {
+    position: fixed;
+    inset: 0;
+    z-index: 48;
+    background: var(--a-scrim);
+    animation: scrimEnter 200ms var(--ease-out) both;
+  }
+
+  .actDrawer {
+    position: fixed;
+    z-index: 50;
+    top: 16px;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    width: min(560px, calc(100vw - 32px));
+    padding: 20px 8px 0 24px;
+    border: 1px solid transparent;
+    border-radius: 28px;
+    background: var(--a-drawer-fill);
+    box-shadow: var(--a-drawer-shadow);
+    color: var(--text);
+    outline: none;
+    animation: drawerEnter 260ms var(--ease-out) both;
+  }
+
+  .appView.is-active .actDrawer {
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    backdrop-filter: blur(40px) saturate(180%);
+  }
+
+  .actDrawerHead,
+  .actDrawerTitle,
+  .actDrawerSub {
+    flex: 0 0 auto;
+  }
+
+  .actDrawerHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-right: 16px;
+  }
+
+  .actDrawerMeta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    min-width: 0;
+  }
+
+  .actDrawerTime {
+    color: var(--text-2);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actDrawerClose {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: var(--a-control-fill);
+    box-shadow: var(--a-control-shadow);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .actDrawerClose:hover {
+    background: var(--shell-hover);
+  }
+
+  .actDrawerClose:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.35);
+  }
+
+  /* Fallback titles can be long lists of tool names; two lines at most, the full text is in the title tooltip. */
+  .actDrawerTitle {
+    display: -webkit-box;
+    margin: 14px 16px 0 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.28;
+    letter-spacing: -0.015em;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .actDrawerSub {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px 16px 0 0;
+  }
+
+  .actDrawerSub:empty {
+    display: none;
+  }
+
+  .actDrawerBody {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-top: 16px;
+    padding: 0 16px 24px 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  .actSection {
+    margin-top: 12px;
+    padding: 14px 16px 16px;
+    border: 1px solid transparent;
+    border-radius: 18px;
+    background: var(--a-section-fill);
+  }
+
+  .actSection:first-child {
+    margin-top: 0;
+  }
+
+  .actSectionTitle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 8px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .actSectionCount {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actSectionEmpty,
+  .actSectionNote {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .actSectionNote {
+    margin-top: 10px;
+    font-size: 13px;
+  }
+
+  .actNarrative {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+  }
+
+  .actNarrative.is-raw {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+  }
+
+  .actNarrativeClamp:not(.is-open) .actNarrative {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+    line-clamp: 5;
+  }
+
+  .actNarrativeToggle {
+    margin: 8px 0 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--a-link);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .actNarrativeToggle:hover {
+    text-decoration: underline;
+  }
+
+  .actNarrativeToggle:focus-visible {
+    outline: none;
+    border-radius: 6px;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.35);
+  }
+
+  /* Facts use the same five-line clip. Gap is removed so five list rows land on the same budget as one wrapping row. */
+  .actNarrativeClamp:not(.is-open) .actFacts {
+    gap: 0;
+    max-height: calc(14.5px * 1.5 * 5);
+    overflow: hidden;
+  }
+
+  .actNarrativeClamp:not(.is-open) .actFacts li {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+    line-clamp: 5;
+  }
+
+  .actFacts,
+  .actFiles,
+  .actTasks,
+  .actFlags {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .actFacts li {
+    position: relative;
+    min-width: 0;
+    padding-left: 16px;
+    color: var(--text);
+    font-size: 14.5px;
+    line-height: 1.5;
+    overflow-wrap: break-word;
+  }
+
+  .actFacts li::before {
+    content: "";
+    position: absolute;
+    top: 0.62em;
+    left: 2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--a-outcome-dot);
+    opacity: 0.7;
+  }
+
+  .actFiles li,
+  .actMono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px;
+  }
+
+  .actFiles li {
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+  }
+
+  .actFiles.is-modified li {
+    color: var(--text);
+  }
+
+  .actTags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .actTag {
+    padding: 3px 11px;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .actTask {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--a-tag-fill);
+  }
+
+  .actTaskHead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .actTaskHead .actMono {
+    color: var(--text-2);
+  }
+
+  .actTaskTime {
+    margin-left: auto;
+    color: var(--text-2);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actTaskFacts {
+    margin: 6px 0 0;
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  .actTaskError {
+    margin: 6px 0 0;
+    color: var(--err-ink);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .actStatus {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .actStatus.tone-ok { background: rgba(48, 209, 88, 0.16); color: var(--ring-ok-ink); }
+  .actStatus.tone-warn { background: var(--a-fallback-fill); color: var(--warn-ink); }
+  .actStatus.tone-err { background: rgba(255, 69, 58, 0.14); color: var(--err-ink); }
+  .actStatus.tone-info { background: var(--a-outcome-fill); color: var(--a-outcome-ink); }
+
+  .actFlag {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    font-size: 13.5px;
+  }
+
+  .actFlagTask {
+    color: var(--text-2);
+  }
+
+  .actFlagReason {
+    flex-basis: 100%;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .actReviewHead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .actReviewTime {
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  .actReviewFields,
+  .actIds {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 8px 14px;
+    margin: 12px 0 0;
+    font-size: 14px;
+  }
+
+  .actReviewFields dt,
+  .actIds dt {
+    color: var(--text-2);
+  }
+
+  .actReviewFields dd,
+  .actIds dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--text);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .actSection.is-ids {
+    padding: 4px 4px 0;
+    background: transparent;
+  }
+
+  .actSection.is-ids::after {
+    content: none;
+  }
+
+  .actSection.is-ids .actIds {
+    margin: 0;
+    font-size: 13px;
+  }
+
+  .actLinkButton {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--a-link);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .actLinkButton:hover {
+    text-decoration: underline;
+  }
+
+  .actDrawerState {
+    display: grid;
+    justify-items: start;
+    gap: 12px;
+    color: var(--text-2);
+    font-size: 14.5px;
+  }
+
+  .actDrawerState.is-error p {
+    margin: 0;
+    color: var(--err-ink);
+  }
+
+  .actDrawerSkeleton {
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 18px;
+    background: var(--a-section-fill);
+  }
+
+  .actDrawerSkeleton span {
+    height: 11px;
+    border-radius: 6px;
+    background: var(--a-tag-fill);
+  }
+
+  .actDrawerSkeleton .is-long { width: 92%; }
+  .actDrawerSkeleton .is-mid { width: 64%; }
+  .actDrawerSkeleton .is-short { width: 38%; }
+
+  @keyframes drawerEnter {
+    from { transform: translateX(28px); }
+    to { transform: none; }
+  }
+
+  @keyframes scrimEnter {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  /* Popovers: children of the view (not of the blurred toolbar), placed under their trigger by the client. */
+  .actPopover {
+    position: absolute;
+    z-index: 30;
+    min-width: 220px;
+    max-width: min(360px, 100%);
+    padding: 6px;
+    border: 1px solid var(--popover-border);
+    border-radius: 18px;
+    background: var(--glass-specular), var(--popover-fill);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 24px 60px -20px rgba(20, 24, 80, 0.45), 0 4px 14px rgba(20, 24, 80, 0.10);
+    color: var(--text);
+    font-size: 14px;
+    animation: popoverEnter 160ms var(--ease-out) both;
+  }
+
+  .appView.is-active .actPopover {
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+  }
+
+  .actMenu {
+    max-height: min(420px, 60vh);
+    overflow-y: auto;
+  }
+
+  .actOption {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 36px;
+    padding: 0 12px 0 10px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .actOption:hover,
+  .actOption:focus-visible {
+    background: var(--shell-hover);
+    box-shadow: none;
+  }
+
+  .actOption[aria-selected="true"] {
+    color: var(--a-on-ink);
+    font-weight: 600;
+  }
+
+  .actOptionCheck {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    visibility: hidden;
+  }
+
+  .actOption[aria-selected="true"] .actOptionCheck {
+    visibility: visible;
+  }
+
+  .actOptionName {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actOptionCount {
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actMenuSep {
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--shell-line);
+  }
+
+  .actCustom {
+    width: 320px;
+    padding: 16px 16px 14px;
+  }
+
+  .actCustomTitle {
+    margin: 0 0 12px;
+    font-size: 15px;
+    font-weight: 650;
+  }
+
+  .actCustomFields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .actField {
+    display: grid;
+    gap: 6px;
+  }
+
+  .actFieldLabel {
+    color: var(--text-2);
+    font-size: 12.5px;
+  }
+
+  .actDateInput {
+    width: 100%;
+    min-height: 36px;
+    padding: 0 8px;
+    border: 1px solid var(--chip-border);
+    border-radius: 10px;
+    background: var(--chip-fill);
+    color: var(--text);
+    font-size: 13.5px;
+    color-scheme: light;
+  }
+
+  html[data-glass="dark"] .actDateInput {
+    color-scheme: dark;
+  }
+
+  .actCustomHint {
+    margin-top: 10px;
+    color: var(--text-3);
+    font-size: 12.5px;
+  }
+
+  .actCustomError {
+    margin-top: 6px;
+    color: var(--err-ink);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .actCustomActions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  /* The Activity default backdrop retunes the shell glass a touch so the sidebar and top pills sit in the same
+     material as the page (only while that backdrop shows; a user background keeps the stock shell glass). */
+  html[data-act-bg="light"] {
+    --glass-rgb-top: 255, 255, 255;
+    --glass-rgb-bottom: 250, 250, 255;
+    --glass-a-top: 0.46;
+    --glass-a-bottom: 0.30;
+    --pill-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.44));
+    --nav-active-fill: linear-gradient(180deg, rgba(232, 240, 255, 0.92), rgba(214, 228, 255, 0.64));
+    --nav-active-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.96);
+    --shell-accent: #0a63d1;
+  }
+
+  html[data-act-bg="dark"] {
+    --glass-rgb-top: 26, 36, 80;
+    --glass-rgb-bottom: 10, 15, 40;
+    --glass-a-top: 0.46;
+    --glass-a-bottom: 0.40;
+    --pill-fill: linear-gradient(180deg, rgba(36, 48, 96, 0.60), rgba(16, 22, 56, 0.50));
+    --nav-active-fill: linear-gradient(180deg, rgba(48, 120, 255, 0.55), rgba(22, 76, 210, 0.42));
+    --nav-active-shadow: inset 0 0 0 1px rgba(160, 190, 255, 0.50);
+    --shell-accent: #ffffff;
+  }
+
+  html[data-act-bg="light"] .navIcon {
+    color: #2d7cf0;
+  }
+
+  html[data-act-bg="dark"] .navIcon {
+    color: #6fa8ff;
+  }
+
+  html[data-act-bg] .navItem.is-active .navIcon {
+    color: var(--shell-accent);
+  }
+
+  @media (max-width: 1360px) {
+    .actBoard {
+      grid-template-columns: minmax(0, 1fr) minmax(250px, 290px);
+      gap: 20px;
+    }
+
+    .actColumns {
+      gap: 20px;
+    }
+
+    .actSegment {
+      padding: 0 16px;
+    }
+  }
+
+  @media (max-width: 1180px) {
+    .actBoard {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .activityView .actRail {
+      position: static;
+      margin-top: 0;
+    }
+  }
+
+  @media (max-width: 860px) {
+    .actColumns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .actToolbarSep {
+      display: none;
+    }
+
+    .actToolbarEnd {
+      flex-basis: 100%;
+      justify-content: space-between;
+      padding-left: 8px;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .actSummary {
+      margin-top: -10px;
+    }
+
+    .activityView .actToolbar {
+      border-radius: 24px;
+    }
+
+    .actSegmented {
+      width: 100%;
+    }
+
+    .actSegment {
+      flex: 1 1 0;
+      padding: 0 8px;
+    }
+
+    .actDrawer {
+      top: 8px;
+      right: 8px;
+      bottom: 8px;
+      width: calc(100vw - 16px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .actDrawer,
+    .actScrim {
+      animation: none;
+    }
+
+    .actCard:not(.is-skeleton):hover {
+      transform: none;
+    }
   }
 
   /* Background picker popover. */
@@ -2787,6 +4779,7 @@ ${WALLPAPER_CSS}
 
     .brandName,
     .navLabel,
+    .navGroupLabel,
     .devToggleLabel,
     .navSubItem {
       display: none;
@@ -2815,11 +4808,6 @@ ${WALLPAPER_CSS}
 
     .mainArea {
       margin-left: calc(var(--sidebar-w) + 32px);
-    }
-
-    .topActions .localeToggle {
-      width: auto;
-      justify-content: center;
     }
   }
 
@@ -2922,7 +4910,7 @@ ${WALLPAPER_CSS}
     }
 
     h1.pageTitle {
-      font-size: 28px;
+      font-size: 32px;
     }
 
     .homeHealth {

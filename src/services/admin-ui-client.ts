@@ -35,7 +35,10 @@ export function renderAdminBackgroundBootScript(): string {
         dim: clampInt(source.dim, 0, 60, DEFAULTS.dim),
         opacity: clampInt(source.opacity, 10, 80, DEFAULTS.opacity),
         customLuma: source.customLuma !== null && source.customLuma !== undefined && isFinite(luma) ? Math.min(1, Math.max(0, luma)) : null,
-        customColor: /^#[0-9a-f]{6}$/i.test(String(source.customColor || "")) ? String(source.customColor) : null
+        customColor: /^#[0-9a-f]{6}$/i.test(String(source.customColor || "")) ? String(source.customColor) : null,
+        // A stored choice is pinned, including settings saved before this flag existed. Only Reset
+        // (pinned: false) or a fresh profile lets Activity use its own backdrop.
+        pinned: !!(raw && typeof raw === "object") && source.pinned !== false
       };
     }
     // Auto picks dark glass when the wallpaper, after the Dim slider, is closer to black than to white.
@@ -92,6 +95,19 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const HOME_CHART_DAYS = 30;
   const V21_SWITCH_DAY = "2026-10-15";
   const VAULT_STALE_MS = 26 * 60 * 60 * 1000;
+  // Activity reads one window of at most 120 local days. The first request asks for 50 cards and later pages follow
+  // next_cursor; a refresh re-reads the loaded head (up to the API's 100) and merges it by memory id.
+  const ACTIVITY_DAY_MS = 86400000;
+  const ACTIVITY_MAX_DAYS = 120;
+  const ACTIVITY_PAGE = 50;
+  const ACTIVITY_MAX_PAGE = 100;
+  const ACTIVITY_REFRESH_HEADROOM = 20;
+  const ACTIVITY_HUES = 10;
+  // Earlier shows a few days per group until expanded.
+  const EARLIER_V21_ROWS = 5;
+  const EARLIER_LEGACY_ROWS = 4;
+  const EARLIER_REFRESH_MS = 10 * 60 * 1000;
+  const ACTIVITY_SKELETON = '<div class="actCard is-skeleton" aria-hidden="true"><span class="actSkel is-short"></span><span class="actSkel is-long"></span><span class="actSkel is-mid"></span></div>';
   const VIEW_TITLE_KEYS = {
     homeView: "nav.home",
     activityView: "nav.activity",
@@ -159,11 +175,44 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pollHandle: null,
     isPolling: false,
     statusLineState: {},
+    activity: {
+      range: "7d",
+      customFrom: "",
+      customTo: "",
+      project: "",
+      agent: "",
+      kind: "typed",
+      payload: null,
+      cards: [],
+      nextCursor: null,
+      windowKey: "",
+      localDay: "",
+      loadedAt: 0,
+      error: "",
+      refreshFailed: false,
+      stale: false,
+      seq: 0,
+      busySeq: 0,
+      moreSeq: 0,
+      openPopover: "",
+      cardNodes: new Map(),
+      signatures: {},
+      // Project path (lower case) -> palette slot, assigned once per session so visible projects never share a dot.
+      hues: new Map(),
+      // Earlier: one stats-only request for the 120 days before the window ends. anchor is the oldest column day
+      // when the window was last set from the toolbar; opening a day from the list keeps it, so the list stays put.
+      earlier: { key: "", payload: null, loading: false, error: "", seq: 0, loadedAt: 0, anchor: "", showAllV21: false, showAllLegacy: false },
+      drawer: { id: "", payload: null, error: "", missing: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false },
+    },
   };
 
   const els = {
     localeToggle: document.getElementById("localeToggle"),
     localeButtons: Array.from(document.querySelectorAll("[data-locale-choice]")),
+    localeMenu: document.getElementById("localeToggle"),
+    localeMenuButton: document.getElementById("localeMenuButton"),
+    localeMenuList: document.getElementById("localeMenuList"),
+    localeMenuValue: document.getElementById("localeMenuValue"),
     observationsCount: document.getElementById("observationsCount"),
     sessionsCount: document.getElementById("sessionsCount"),
     projectsCount: document.getElementById("projectsCount"),
@@ -346,6 +395,42 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bgResetButton: document.getElementById("bgResetButton"),
     bgDoneButton: document.getElementById("bgDoneButton"),
     bgStatus: document.getElementById("bgStatus"),
+    activityView: document.getElementById("activityView"),
+    activitySumMemories: document.getElementById("activitySumMemories"),
+    activitySumOutcome: document.getElementById("activitySumOutcome"),
+    activitySumContext: document.getElementById("activitySumContext"),
+    activitySumLegacy: document.getElementById("activitySumLegacy"),
+    activitySparkline: document.getElementById("activitySparkline"),
+    activityRangeButtons: Array.from(document.querySelectorAll("[data-activity-range]")),
+    activityRangeCustom: document.getElementById("activityRangeCustom"),
+    activityProjectButton: document.getElementById("activityProjectButton"),
+    activityProjectValue: document.getElementById("activityProjectValue"),
+    activityAgentButton: document.getElementById("activityAgentButton"),
+    activityAgentValue: document.getElementById("activityAgentValue"),
+    activityRangeLabel: document.getElementById("activityRangeLabel"),
+    activityUpdated: document.getElementById("activityUpdated"),
+    activityChips: document.getElementById("activityChips"),
+    activityColumns: document.getElementById("activityColumns"),
+    activityNotice: document.getElementById("activityNotice"),
+    activityNoticeTitle: document.getElementById("activityNoticeTitle"),
+    activityNoticeLead: document.getElementById("activityNoticeLead"),
+    activityNoticeAction: document.getElementById("activityNoticeAction"),
+    activityNoticeSecondary: document.getElementById("activityNoticeSecondary"),
+    activityProjectPopover: document.getElementById("activityProjectPopover"),
+    activityAgentPopover: document.getElementById("activityAgentPopover"),
+    activityCustomPopover: document.getElementById("activityCustomPopover"),
+    activityCustomFrom: document.getElementById("activityCustomFrom"),
+    activityCustomTo: document.getElementById("activityCustomTo"),
+    activityCustomError: document.getElementById("activityCustomError"),
+    activityEarlierBody: document.getElementById("activityEarlierBody"),
+    activityEarlierPanel: document.getElementById("activityEarlierPanel"),
+    activityDrawer: document.getElementById("activityDrawer"),
+    activityDrawerScrim: document.getElementById("activityDrawerScrim"),
+    activityDrawerMeta: document.getElementById("activityDrawerMeta"),
+    activityDrawerTitle: document.getElementById("activityDrawerTitle"),
+    activityDrawerSub: document.getElementById("activityDrawerSub"),
+    activityDrawerBody: document.getElementById("activityDrawerBody"),
+    activityDrawerClose: document.getElementById("activityDrawerClose"),
   };
 
   // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
@@ -517,7 +602,52 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const locale = button.getAttribute("data-locale-choice");
       const isActive = locale === state.locale;
       button.classList.toggle("is-active", isActive);
-      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+      button.setAttribute("aria-selected", isActive ? "true" : "false");
+      if (isActive && els.localeMenuValue) {
+        const code = button.querySelector(".localeCode");
+        setText(els.localeMenuValue, code ? code.textContent : button.textContent);
+      }
+    });
+  }
+
+  // The language menu in the top bar. is-active marks it open (and is what lets its list blur the page).
+  function setLocaleMenuOpen(open, restoreFocus) {
+    if (!els.localeMenu || !els.localeMenuList) return;
+    els.localeMenu.classList.toggle("is-active", open);
+    setHidden(els.localeMenuList, !open);
+    setAttr(els.localeMenuButton, "aria-expanded", open ? "true" : "false");
+    if (open) {
+      const current = els.localeMenuList.querySelector(".localeButton.is-active") || els.localeButtons[0];
+      if (current) current.focus();
+    } else if (restoreFocus) {
+      els.localeMenuButton.focus();
+    }
+  }
+
+  function bindLocaleMenu() {
+    if (!els.localeMenuButton || !els.localeMenuList) return;
+    els.localeMenuButton.addEventListener("click", () => setLocaleMenuOpen(els.localeMenuList.hidden, false));
+    els.localeMenu.addEventListener("keydown", (event) => {
+      if (els.localeMenuList.hidden) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setLocaleMenuOpen(false, true);
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const index = els.localeButtons.indexOf(document.activeElement);
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        const next = els.localeButtons[(index + step + els.localeButtons.length) % els.localeButtons.length];
+        if (next) next.focus();
+      }
+    });
+    els.localeMenu.addEventListener("focusout", (event) => {
+      if (!els.localeMenu.contains(event.relatedTarget)) setLocaleMenuOpen(false, false);
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!els.localeMenuList.hidden && !els.localeMenu.contains(event.target)) setLocaleMenuOpen(false, false);
     });
   }
 
@@ -532,6 +662,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderBackgroundControls();
     renderOverview();
     renderHome();
+    renderActivity();
     renderProceduralWorkspace();
     renderLlmConfig();
     renderLlmTestResult();
@@ -597,8 +728,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const badge = isRead ? els.readPolicyState : els.writePolicyState;
     const meta = isRead ? els.readPolicyMeta : els.writePolicyMeta;
     const variant = isRead ? "readPolicy" : "writePolicy";
-    // The Read/Write controls are compact pills in the top bar; the long explanation lives in Settings.
-    setClass(card, "policyPill glassPill " + variant + " " +
+    // The Read/Write controls share one compact pill in the top bar; the long explanation lives in Settings.
+    setClass(card, "policyPill " + variant + " " +
       (enabled ? "is-enabled" : "is-disabled") +
       (state.isSavingPolicy ? " is-saving" : ""));
     if (toggle.checked !== !!enabled) toggle.checked = !!enabled;
@@ -2358,6 +2489,1283 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     await Promise.allSettled(jobs);
   }
 
+  // ---------- Activity ----------
+
+  function localDayKey(date) {
+    return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
+  }
+
+  function shiftDays(date, days) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+  }
+
+  function formatCount(value) {
+    return Number(value || 0).toLocaleString(state.locale);
+  }
+
+  // The selected window as local midnights, half-open [from, to). Presets are recomputed on every call, so Today
+  // and 7 days roll over at midnight.
+  function getActivityWindow() {
+    const act = state.activity;
+    const today = shiftDays(new Date(), 0);
+    let from = shiftDays(today, -6);
+    let to = shiftDays(today, 1);
+    if (act.range === "today") {
+      from = today;
+    } else if (act.range === "yesterday") {
+      from = shiftDays(today, -1);
+      to = today;
+    } else if (act.range === "custom") {
+      const start = parseLocalDay(act.customFrom);
+      const end = parseLocalDay(act.customTo);
+      if (start && end && start <= end) {
+        from = start;
+        to = shiftDays(end, 1);
+      }
+    }
+    // A DST change can stretch 120 local days past the API's 120 x 24 h limit; trim the extra hour off the start.
+    if (to.getTime() - from.getTime() > ACTIVITY_MAX_DAYS * ACTIVITY_DAY_MS) {
+      from = new Date(to.getTime() - ACTIVITY_MAX_DAYS * ACTIVITY_DAY_MS);
+    }
+    return { from, to, firstDay: localDayKey(from), lastDay: localDayKey(shiftDays(to, -1)) };
+  }
+
+  function activityIncludesToday(win) {
+    const now = Date.now();
+    return win.from.getTime() <= now && now < win.to.getTime();
+  }
+
+  // Today and Yesterday are relative to the local date. The 5 s poll must notice midnight, because
+  // Yesterday's window never contains "now" and would otherwise keep showing the previous day.
+  function activityWindowStale() {
+    const act = state.activity;
+    const todayKey = localDayKey(new Date());
+    const previous = act.localDay;
+    act.localDay = todayKey;
+    return !!previous && previous !== todayKey && (act.range === "today" || act.range === "yesterday");
+  }
+
+  function activityKey(win) {
+    const act = state.activity;
+    return [win.from.toISOString(), win.to.toISOString(), act.project, act.agent, act.kind].join("|");
+  }
+
+  function activityUrl(win, limit, cursor) {
+    const act = state.activity;
+    const params = new URLSearchParams({
+      from: win.from.toISOString(),
+      to: win.to.toISOString(),
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+      kind: act.kind,
+      limit: String(limit),
+    });
+    if (act.project) params.set("project", act.project);
+    if (act.agent) params.set("agent", act.agent);
+    if (cursor) params.set("cursor", cursor);
+    return "/admin/api/activity?" + params.toString();
+  }
+
+  // Memories counted under the current kind filter: typed = outcome + context, plus legacy when it is shown.
+  function activityMeasure(row) {
+    const typed = Number(row && row.outcome || 0) + Number(row && row.context || 0);
+    const legacy = Number(row && row.legacy || 0);
+    const kind = state.activity.kind;
+    return kind === "legacy" ? legacy : kind === "all" ? typed + legacy : typed;
+  }
+
+  // A project keeps one palette slot for the session. The slot starts at a hash of the path and steps to the next
+  // free one, so two visible projects only share a colour once every slot is taken.
+  function projectHue(projectPath) {
+    const text = String(projectPath || "").toLowerCase();
+    if (!text) return "none";
+    const hues = state.activity.hues;
+    if (hues.has(text)) return hues.get(text);
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+    }
+    const used = new Set(hues.values());
+    let slot = hash % ACTIVITY_HUES;
+    for (let step = 0; step < ACTIVITY_HUES && used.has(slot); step += 1) slot = (slot + 1) % ACTIVITY_HUES;
+    hues.set(text, slot);
+    return slot;
+  }
+
+  // Slots are handed out in path order, so the same set of projects gets the same colours on every visit.
+  function assignActivityHues(rows) {
+    const paths = Array.from(new Set(rows.map((row) => String(row.project_path || "").toLowerCase()).filter(Boolean))).sort();
+    paths.forEach(projectHue);
+  }
+
+  // mode: "reset" loads the first page of a new window or filter, "more" appends the next page, and "refresh"
+  // re-reads the loaded head and merges it by id. Only the newest request may write state; a refresh never
+  // overlaps a reset or a load-more.
+  async function loadActivity(mode) {
+    const act = state.activity;
+    const win = getActivityWindow();
+    const key = activityKey(win);
+    if (mode !== "reset" && key !== act.windowKey) mode = "reset";
+    if (mode === "refresh" && act.busySeq) return;
+    if (mode === "more" && (!act.nextCursor || act.moreSeq)) return;
+    const seq = act.seq + 1;
+    act.seq = seq;
+    const loaded = act.cards.length;
+    const limit = mode === "refresh"
+      ? Math.min(ACTIVITY_MAX_PAGE, Math.max(ACTIVITY_PAGE, loaded + ACTIVITY_REFRESH_HEADROOM))
+      : ACTIVITY_PAGE;
+    if (mode !== "refresh") act.busySeq = seq;
+    if (mode === "reset") {
+      act.windowKey = key;
+      act.error = "";
+      act.stale = true;
+      act.moreSeq = 0;
+      // The old cursor belongs to the previous window or filter; Load more waits for the new first page.
+      act.nextCursor = null;
+    }
+    if (mode === "more") act.moreSeq = seq;
+    renderActivity();
+    try {
+      const payload = await fetchJson(activityUrl(win, limit, mode === "more" ? act.nextCursor : null));
+      if (seq !== act.seq) return;
+      const incoming = Array.isArray(payload.cards) ? payload.cards : [];
+      if (mode === "more") {
+        const seen = new Set(act.cards.map((card) => card.id));
+        act.cards = act.cards.concat(incoming.filter((card) => !seen.has(card.id)));
+        act.nextCursor = payload.next_cursor || null;
+      } else if (mode === "refresh" && loaded + ACTIVITY_REFRESH_HEADROOM > ACTIVITY_MAX_PAGE && incoming.length) {
+        // More cards are loaded than one request returns: keep the older pages behind the refreshed head.
+        const lastId = incoming[incoming.length - 1].id;
+        const index = act.cards.findIndex((card) => card.id === lastId);
+        if (index >= 0) {
+          act.cards = incoming.concat(act.cards.slice(index + 1));
+        } else {
+          act.cards = incoming;
+          act.nextCursor = payload.next_cursor || null;
+        }
+      } else {
+        act.cards = incoming;
+        act.nextCursor = payload.next_cursor || null;
+      }
+      act.payload = payload;
+      act.loadedAt = Date.now();
+      act.refreshFailed = false;
+      act.error = "";
+    } catch (error) {
+      if (seq !== act.seq) return;
+      if (mode === "reset") {
+        act.payload = null;
+        act.cards = [];
+        act.nextCursor = null;
+        act.error = (error && error.message) || t("activity.errorTitle");
+      } else {
+        act.refreshFailed = true;
+      }
+    } finally {
+      if (act.busySeq === seq) act.busySeq = 0;
+      if (act.moreSeq === seq) act.moreSeq = 0;
+      if (seq === act.seq) {
+        act.stale = false;
+        renderActivity();
+      }
+    }
+  }
+
+  // Splits a "{n} …" template around the count so the number can be bold, with the rest escaped.
+  function richCount(key, value) {
+    return t(key).split("{n}").map(escapeHtml).join("<strong>" + escapeHtml(value) + "</strong>");
+  }
+
+  function renderActivitySparkline(days) {
+    if (!days.length) return "";
+    const values = days.map(activityMeasure);
+    const max = Math.max(1, ...values);
+    const height = 24;
+    const step = Math.max(2, Math.min(9, 120 / days.length));
+    const barWidth = Math.max(1.2, step * 0.64);
+    const width = step * days.length;
+    const parts = days.map((day, index) => {
+      const x = index * step + (step - barWidth) / 2;
+      const label = '<title>' + escapeHtml(t("activity.sparkDay", { date: formatShortDate(parseLocalDay(day.day)), n: formatCount(values[index]) })) + '</title>';
+      if (!values[index]) {
+        return '<g>' + label + '<circle class="sparkZero" cx="' + (x + barWidth / 2).toFixed(1) + '" cy="' + (height - 1.6) + '" r="' + Math.min(1.6, barWidth / 2 + 0.2).toFixed(1) + '"/></g>';
+      }
+      const barHeight = Math.max(3, (values[index] / max) * height);
+      return '<g>' + label + '<rect class="sparkBar" x="' + x.toFixed(1) + '" y="' + (height - barHeight).toFixed(1) + '" width="' + barWidth.toFixed(1) + '" height="' + barHeight.toFixed(1) + '" rx="' + Math.min(1.5, barWidth / 2).toFixed(1) + '"/></g>';
+    });
+    return '<svg class="actSparkSvg" width="' + Math.ceil(width) + '" height="' + height + '" viewBox="0 0 ' + width.toFixed(1) + ' ' + height + '" aria-hidden="true" focusable="false">' + parts.join("") + '</svg>';
+  }
+
+  function renderActivitySummary() {
+    const act = state.activity;
+    const payload = act.payload;
+    const totals = payload && payload.totals;
+    const signature = [state.locale, act.kind, JSON.stringify(totals || null)].join("|");
+    if (act.signatures.summary !== signature) {
+      act.signatures.summary = signature;
+      const count = (name) => (totals ? formatCount(totals[name]) : "—");
+      const memories = Number(totals && totals.memories || 0);
+      const legacy = Number(totals && totals.legacy || 0);
+      els.activitySumMemories.innerHTML = richCount(totals && memories === 1 ? "activity.sumMemory" : "activity.sumMemories", count("memories"));
+      els.activitySumOutcome.innerHTML = richCount("activity.sumOutcome", count("outcome"));
+      els.activitySumContext.innerHTML = richCount("activity.sumContext", count("context"));
+      els.activitySumLegacy.innerHTML = richCount(totals && legacy === 1 ? "activity.sumLegacyOne" : "activity.sumLegacy", count("legacy"));
+    }
+    setAttr(els.activitySumLegacy, "aria-pressed", act.kind === "all" ? "true" : "false");
+    setAttr(els.activitySumLegacy, "title", t(act.kind === "all" ? "activity.legacyHide" : "activity.legacyShow"));
+    const days = payload && Array.isArray(payload.days) ? payload.days : [];
+    const sparkSignature = [state.locale, act.kind, JSON.stringify(days)].join("|");
+    if (act.signatures.spark !== sparkSignature) {
+      act.signatures.spark = sparkSignature;
+      els.activitySparkline.innerHTML = renderActivitySparkline(days);
+    }
+  }
+
+  function renderActivityToolbar() {
+    const act = state.activity;
+    els.activityRangeButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", button.getAttribute("data-activity-range") === act.range ? "true" : "false");
+    });
+    setText(els.activityProjectValue, act.project ? projectBasename(act.project) : t("activity.all"));
+    setAttr(els.activityProjectButton, "title", act.project);
+    setClass(els.activityProjectButton, "actPopup" + (act.project ? " is-filtered" : ""));
+    setText(els.activityAgentValue, act.agent || t("activity.all"));
+    setAttr(els.activityAgentButton, "title", act.agent);
+    setClass(els.activityAgentButton, "actPopup" + (act.agent ? " is-filtered" : ""));
+
+    const win = getActivityWindow();
+    const withYear = win.from.getFullYear() !== new Date().getFullYear();
+    const options = withYear
+      ? { weekday: "short", month: "short", day: "numeric", year: "numeric" }
+      : { weekday: "short", month: "short", day: "numeric" };
+    const format = (day) => parseLocalDay(day).toLocaleDateString(state.locale, options);
+    // Chinese dates carry no spaces, so the range dash sits tight there; English sets it off with spaces.
+    const dash = state.locale === "zh-CN" ? "–" : " – ";
+    setText(els.activityRangeLabel, win.firstDay === win.lastDay ? format(win.lastDay) : format(win.firstDay) + dash + format(win.lastDay));
+    const updated = act.refreshFailed
+      ? t("activity.refreshFailed", { time: formatClock(new Date()) })
+      : act.loadedAt ? t("activity.updated", { time: formatClock(new Date(act.loadedAt)) }) : "";
+    setText(els.activityUpdated, updated ? " · " + updated : "");
+    setClass(els.activityUpdated, "actUpdated" + (act.refreshFailed ? " is-warn" : ""));
+  }
+
+  // Projects and agents come from breakdown, which ignores the project and agent filters; each list is narrowed
+  // by the other filter here so its counts match what selecting an entry would show.
+  function getActivityFacet(name) {
+    const act = state.activity;
+    const rows = act.payload && Array.isArray(act.payload.breakdown) ? act.payload.breakdown : [];
+    const field = name === "project" ? "project_path" : "agent_id";
+    const otherField = name === "project" ? "agent_id" : "project_path";
+    const other = (name === "project" ? act.agent : act.project).toLowerCase();
+    const selected = name === "project" ? act.project : act.agent;
+    const counts = new Map();
+    rows.forEach((row) => {
+      if (other && String(row[otherField] || "").toLowerCase() !== other) return;
+      const value = String(row[field] || "");
+      counts.set(value, (counts.get(value) || 0) + activityMeasure(row));
+    });
+    const items = Array.from(counts, (entry) => ({ value: entry[0], n: entry[1] })).filter((item) => item.n > 0);
+    if (selected && !items.some((item) => item.value.toLowerCase() === selected.toLowerCase())) {
+      items.push({ value: selected, n: 0 });
+    }
+    const label = (value) => (name === "project" ? projectBasename(value) : value);
+    items.sort((left, right) => right.n - left.n || label(left.value).localeCompare(label(right.value)));
+    return { items, total: items.reduce((sum, item) => sum + item.n, 0), selected, label };
+  }
+
+  function isActivitySelected(value, selected) {
+    return String(value || "").toLowerCase() === String(selected || "").toLowerCase();
+  }
+
+  function updateActivityChipsOverflow() {
+    const strip = els.activityChips;
+    if (!strip) return;
+    strip.classList.toggle("is-overflowing", strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 4);
+  }
+
+  function renderActivityChips() {
+    const act = state.activity;
+    const facet = getActivityFacet("project");
+    const signature = [state.locale, act.project, JSON.stringify(facet.items), facet.total, !!act.payload].join("|");
+    if (act.signatures.chips === signature) return;
+    act.signatures.chips = signature;
+    const chip = (value, inner, title) => {
+      const pressed = value ? isActivitySelected(value, act.project) : !act.project;
+      return '<button class="actChip" type="button" data-activity-project="' + escapeHtml(value) + '" aria-pressed="' + pressed + '"' +
+        (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + inner + '</button>';
+    };
+    els.activityChips.innerHTML = chip("", '<span class="actChipName">' + escapeHtml(t("activity.allProjects")) + '</span>' +
+      '<span class="actChipCount">' + escapeHtml(act.payload ? formatCount(facet.total) : "—") + '</span>') +
+      facet.items.map((item) => chip(item.value,
+        '<span class="actDot" data-hue="' + projectHue(item.value) + '" aria-hidden="true"></span>' +
+        '<span class="actChipName">' + escapeHtml(projectBasename(item.value)) + '</span>' +
+        '<span class="actChipCount">' + escapeHtml(formatCount(item.n)) + '</span>', item.value)).join("");
+    updateActivityChipsOverflow();
+  }
+
+  function renderActivityMenu(name, popover) {
+    const act = state.activity;
+    const facet = getActivityFacet(name);
+    const signature = [state.locale, facet.selected, JSON.stringify(facet.items), facet.total].join("|");
+    if (act.signatures[name] === signature) return;
+    act.signatures[name] = signature;
+    const attribute = "data-activity-" + name;
+    const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute(attribute) : null;
+    const option = (value, label, count, title) => {
+      const selected = value ? isActivitySelected(value, facet.selected) : !facet.selected;
+      return '<button class="actOption" type="button" role="option" tabindex="-1" ' + attribute + '="' + escapeHtml(value) + '" aria-selected="' + selected + '"' +
+        (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
+        (name === "project" && value ? '<span class="actDot" data-hue="' + projectHue(value) + '" aria-hidden="true"></span>' : '') +
+        '<span class="actOptionName">' + escapeHtml(label) + '</span>' +
+        '<span class="actOptionCount">' + escapeHtml(count) + '</span></button>';
+    };
+    popover.innerHTML = option("", t(name === "project" ? "activity.allProjects" : "activity.allAgents"), act.payload ? formatCount(facet.total) : "—") +
+      (facet.items.length ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
+      facet.items.map((item) => option(item.value, facet.label(item.value), formatCount(item.n), name === "project" ? item.value : "")).join("");
+    if (focused !== null) {
+      const target = Array.from(popover.querySelectorAll("[" + attribute + "]")).find((node) => node.getAttribute(attribute) === focused);
+      if (target) target.focus();
+    }
+    if (act.openPopover === name) positionActivityPopover(popover, name === "project" ? els.activityProjectButton : els.activityAgentButton);
+  }
+
+  function renderActivityCardBody(card) {
+    const created = parseTimestamp(card.created_at);
+    const kind = card.kind === "outcome" || card.kind === "context" ? card.kind : "legacy";
+    const kindLabel = t(kind === "outcome" ? "home.kindOutcome" : kind === "context" ? "home.kindContext" : "home.kindLegacy");
+    const badges = [];
+    if (card.source === "explicit") {
+      badges.push('<span class="actBadge is-mcp" title="' + escapeHtml(t("activity.mcpHint")) + '">' + escapeHtml(t("activity.mcp")) + '</span>');
+    }
+    if (card.fallback) {
+      badges.push('<span class="actBadge is-fallback" title="' + escapeHtml(t("activity.fallbackHint")) + '">' + escapeHtml(t("activity.fallback")) + '</span>');
+    }
+    const meta = [];
+    // The review mark sits with the other quiet counts on the right rather than among the coloured badges.
+    if (card.has_review) {
+      meta.push('<span class="actReview" role="img" aria-label="' + escapeHtml(t("activity.reviewHint")) + '" title="' + escapeHtml(t("activity.reviewHint")) + '">' + svgIcon("review", "actMetaIcon") + '</span>');
+    }
+    const metaItem = (icon, count, hint) => '<span class="actMetaItem" role="img" aria-label="' + escapeHtml(hint) + '" title="' + escapeHtml(hint) + '">' +
+      svgIcon(icon, "actMetaIcon") + escapeHtml(formatCount(count)) + '</span>';
+    const files = Number(card.files_count || 0);
+    const facts = Number(card.facts_count || 0);
+    if (files > 0) meta.push(metaItem("file", files, t(files === 1 ? "activity.filesHintOne" : "activity.filesHint", { n: formatCount(files), m: formatCount(card.files_modified_count) })));
+    if (facts > 0) meta.push(metaItem("facts", facts, t(facts === 1 ? "activity.factsHintOne" : "activity.factsHint", { n: formatCount(facts) })));
+    const title = String(card.title || "").trim();
+    return '<div class="actCardHead">' +
+        '<time class="actTime" datetime="' + escapeHtml(created ? created.toISOString() : "") + '" title="' + escapeHtml(created ? created.toLocaleString(state.locale) : "") + '">' + escapeHtml(created ? formatClock(created) : "—") + '</time>' +
+        '<span class="kindPill kind-' + kind + '">' + escapeHtml(kindLabel) + '</span>' + badges.join("") +
+        (meta.length ? '<span class="actMeta">' + meta.join("") + '</span>' : '') +
+      '</div>' +
+      '<p class="actTitle"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + escapeHtml(title || t("activity.untitled")) + '</p>' +
+      '<div class="actCardFoot">' +
+        '<span class="actProject" title="' + escapeHtml(card.project_path || "") + '"><span class="actDot" data-hue="' + projectHue(card.project_path) + '" aria-hidden="true"></span>' +
+        '<span class="actProjectName">' + escapeHtml(projectBasename(card.project_path) || "—") + '</span></span>' +
+        (card.agent_id ? '<span class="actAgent">' + escapeHtml(card.agent_id) + '</span>' : '') +
+      '</div>';
+  }
+
+  // Keyed reconcile: a card node is created once per memory id, its body is rewritten only when that memory's
+  // fields (or the locale) change, and nodes are moved rather than rebuilt when the order shifts.
+  function syncActivityCards(container, cards) {
+    const nodes = state.activity.cardNodes;
+    let cursor = container.firstElementChild;
+    cards.forEach((card) => {
+      let entry = nodes.get(card.id);
+      if (!entry) {
+        const node = document.createElement("article");
+        node.className = "actCard";
+        node.setAttribute("data-memory-id", card.id);
+        // The whole card opens the detail drawer, by pointer or by Enter / Space.
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-haspopup", "dialog");
+        entry = { node, signature: "" };
+        nodes.set(card.id, entry);
+      }
+      entry.node.classList.toggle("is-open", state.activity.drawer.id === card.id);
+      const signature = state.locale + "|" + JSON.stringify(card);
+      if (entry.signature !== signature) {
+        entry.signature = signature;
+        entry.node.innerHTML = renderActivityCardBody(card);
+      }
+      if (entry.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        container.insertBefore(entry.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+  }
+
+  function renderActivityColumn(index, dayKey, stats, visible) {
+    const act = state.activity;
+    const prefix = "activityColumn" + index;
+    const date = parseLocalDay(dayKey);
+    const ago = calendarDaysAgo(date);
+    // "Today Sat, Oct 17" and "Yesterday Fri, Oct 16"; any other day is headed by its date alone ("Thu, Oct 15").
+    const dateOptions = { weekday: "short", month: "short", day: "numeric" };
+    if (date.getFullYear() !== new Date().getFullYear()) dateOptions.year = "numeric";
+    const dateText = date.toLocaleDateString(state.locale, dateOptions);
+    const relative = ago === 0 ? t("home.today") : ago === 1 ? t("home.yesterday") : "";
+    setText(document.getElementById(prefix + "Title"), relative || dateText);
+    const dateNode = document.getElementById(prefix + "Date");
+    setText(dateNode, relative ? dateText : "");
+    setHidden(dateNode, !relative);
+
+    // Zero counts are noise: a pill only shows once its kind has at least one memory that day.
+    [["Outcome", "outcome", "activity.dayOutcome"], ["Context", "context", "activity.dayContext"], ["Legacy", "legacy", "activity.dayLegacy"]].forEach((entry) => {
+      const pill = document.getElementById(prefix + entry[0]);
+      const count = Number(stats && stats[entry[1]] || 0);
+      setText(pill.querySelector(".actDayCount"), formatCount(count));
+      setAttr(pill, "title", t(entry[2], { n: formatCount(count) }));
+      setHidden(pill, !act.payload || count === 0 || (entry[1] === "legacy" && act.kind === "typed"));
+    });
+
+    const container = document.getElementById(prefix + "Cards");
+    const empty = document.getElementById(prefix + "Empty");
+    const more = document.getElementById(prefix + "More");
+    if (!act.payload) {
+      if (!container.querySelector(".is-skeleton")) container.innerHTML = ACTIVITY_SKELETON + ACTIVITY_SKELETON + ACTIVITY_SKELETON;
+      setHidden(empty, true);
+      setHidden(more, true);
+      return;
+    }
+    const cards = act.cards.filter((card) => card.day === dayKey);
+    cards.forEach((card) => visible.add(card.id));
+    syncActivityCards(container, cards);
+    // A column is short of cards while the cursor has more and its day count says so; both columns share one cursor.
+    const needsMore = !!act.nextCursor && cards.length < activityMeasure(stats);
+    setHidden(empty, cards.length > 0 || needsMore);
+    setHidden(more, !needsMore);
+    setText(more, t(act.moreSeq ? "activity.loadingMore" : "activity.loadMore"));
+    setAttr(more, "aria-busy", act.moreSeq ? "true" : null);
+  }
+
+  function renderActivityBoard() {
+    const act = state.activity;
+    const payload = act.payload;
+    const win = getActivityWindow();
+    const days = [win.lastDay];
+    if (win.firstDay !== win.lastDay) days.push(localDayKey(shiftDays(parseLocalDay(win.lastDay), -1)));
+
+    let notice = null;
+    if (!payload && act.error) {
+      notice = { error: true, title: t("activity.errorTitle"), lead: act.error, action: ["retry", t("activity.retry")] };
+    } else if (payload && activityMeasure(payload.totals) === 0) {
+      const legacy = Number(payload.totals && payload.totals.legacy || 0);
+      const filtered = !!(act.project || act.agent);
+      const offerLegacy = act.kind === "typed" && legacy > 0;
+      notice = {
+        error: false,
+        title: t("activity.emptyTitle"),
+        lead: offerLegacy ? t("activity.emptyLeadLegacy", { n: formatCount(legacy) }) : t(filtered ? "activity.emptyLeadFiltered" : "activity.emptyLead"),
+        action: offerLegacy ? ["legacy", t("activity.showLegacy")] : null,
+        secondary: filtered ? ["clear", t("activity.clearFilters")] : null,
+      };
+    }
+    setHidden(els.activityNotice, !notice);
+    setHidden(els.activityColumns, !!notice);
+    if (notice) {
+      setClass(els.activityNotice, "actNotice glassCard glassBlur" + (notice.error ? " is-error" : ""));
+      setText(els.activityNoticeTitle, notice.title);
+      setText(els.activityNoticeLead, notice.lead);
+      [[els.activityNoticeAction, notice.action], [els.activityNoticeSecondary, notice.secondary]].forEach((entry) => {
+        setHidden(entry[0], !entry[1]);
+        setAttr(entry[0], "data-activity-action", entry[1] ? entry[1][0] : null);
+        setText(entry[0], entry[1] ? entry[1][1] : "");
+      });
+    }
+
+    setAttr(els.activityColumns, "aria-busy", !payload || act.stale ? "true" : "false");
+    setClass(els.activityColumns, "actColumns" + (days.length === 1 ? " is-single" : "") + (payload && act.stale ? " is-stale" : ""));
+    setHidden(document.getElementById("activityColumn1"), days.length < 2);
+    const byDay = new Map((payload && Array.isArray(payload.days) ? payload.days : []).map((day) => [day.day, day]));
+    const visible = new Set();
+    days.forEach((day, index) => renderActivityColumn(index, day, byDay.get(day), visible));
+    if (days.length < 2) syncActivityCards(document.getElementById("activityColumn1Cards"), []);
+    // Forget nodes of cards that left both columns so the cache stays bounded by what is on screen.
+    act.cardNodes.forEach((_entry, id) => {
+      if (!visible.has(id)) act.cardNodes.delete(id);
+    });
+  }
+
+  function renderActivity() {
+    if (!els.activityView) return;
+    const payload = state.activity.payload;
+    if (payload && Array.isArray(payload.breakdown)) assignActivityHues(payload.breakdown);
+    renderActivitySummary();
+    renderActivityToolbar();
+    renderActivityChips();
+    renderActivityMenu("project", els.activityProjectPopover);
+    renderActivityMenu("agent", els.activityAgentPopover);
+    renderActivityBoard();
+    renderActivityEarlier();
+    renderActivityDrawer();
+  }
+
+  // ---------- Activity: Earlier ----------
+
+  // Oldest day shown as a column for the current window; Earlier lists the days before it.
+  function anchorActivityEarlier() {
+    const win = getActivityWindow();
+    const early = state.activity.earlier;
+    early.anchorTo = win.to.toISOString();
+    early.anchor = win.firstDay === win.lastDay ? win.lastDay : localDayKey(shiftDays(parseLocalDay(win.lastDay), -1));
+  }
+
+  // One stats-only request (limit=0) for the 120 days before the anchored window end. It runs when Activity opens,
+  // a filter changes, or Today/Yesterday rolls past midnight. The ordinary 5 s tick does not call it.
+  async function loadActivityEarlier(force) {
+    const act = state.activity;
+    const early = act.earlier;
+    if (!early.anchorTo) anchorActivityEarlier();
+    const key = [early.anchorTo, act.project.toLowerCase(), act.agent.toLowerCase()].join("|");
+    const fresh = Date.now() - early.loadedAt < EARLIER_REFRESH_MS;
+    if (!force && key === early.key && (early.loading || (early.payload && fresh))) return;
+    if (key !== early.key) early.payload = null;
+    early.key = key;
+    early.loading = true;
+    early.error = "";
+    const seq = early.seq + 1;
+    early.seq = seq;
+    renderActivityEarlier();
+    const to = new Date(early.anchorTo);
+    const params = new URLSearchParams({
+      from: new Date(to.getTime() - ACTIVITY_MAX_DAYS * ACTIVITY_DAY_MS).toISOString(),
+      to: to.toISOString(),
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+      limit: "0",
+    });
+    if (act.project) params.set("project", act.project);
+    if (act.agent) params.set("agent", act.agent);
+    try {
+      const payload = await fetchJson("/admin/api/activity?" + params.toString());
+      if (seq !== early.seq) return;
+      early.payload = payload;
+      early.loadedAt = Date.now();
+    } catch (error) {
+      if (seq !== early.seq) return;
+      early.error = (error && error.message) || t("activity.earlierError");
+    } finally {
+      if (seq === early.seq) {
+        early.loading = false;
+        renderActivityEarlier();
+      }
+    }
+  }
+
+  function earlierTyped(day) {
+    return Number(day.outcome || 0) + Number(day.context || 0);
+  }
+
+  // Compacted memories are stored as outcome/context, while the day stays era "legacy" or "mixed".
+  // Counting only day.legacy shows 0 for a compacted day and drops those memories on a mixed day.
+  function earlierShownCount(day) {
+    const typed = earlierTyped(day);
+    if (day && (day.era === "legacy" || day.era === "mixed")) return typed + Number(day.legacy || 0);
+    return typed;
+  }
+
+  function renderEarlierRow(day, value, max, selectedDay) {
+    const date = parseLocalDay(day.day);
+    const typed = earlierTyped(day);
+    const legacyGroup = day.era === "legacy";
+    const width = max > 0 ? Math.max(4, Math.round((Math.sqrt(value) / Math.sqrt(max)) * 100)) : 0;
+    const full = date.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined });
+    // The breakdown line sits under v2.1 rows; legacy rows stay one quiet line and carry it in the tooltip.
+    const parts = [];
+    if (Number(day.outcome || 0) > 0) parts.push([t("activity.sumOutcome", { n: formatCount(day.outcome) }), false]);
+    if (Number(day.context || 0) > 0) parts.push([t("activity.sumContext", { n: formatCount(day.context) }), false]);
+    const fallback = Number(day.fallback || 0);
+    if (fallback > 0) parts.push([t(fallback === 1 ? "activity.earlierFallbackOne" : "activity.earlierFallbacks", { n: formatCount(fallback) }), true]);
+    if (Number(day.legacy || 0) > 0) parts.push([t("activity.earlierLegacyCount", { n: formatCount(day.legacy) }), false]);
+    const sub = legacyGroup ? [] : parts.map((part) => part[1] ? '<span class="actEarlierWarn">' + escapeHtml(part[0]) + '</span>' : escapeHtml(part[0]));
+    const tooltip = [full].concat(parts.map((part) => part[0])).join(" · ");
+    return '<button class="actEarlierRow' + (legacyGroup ? ' is-legacy' : '') + '" type="button" data-earlier-day="' + escapeHtml(day.day) + '" data-earlier-typed="' + typed + '"' +
+      (day.day === selectedDay ? ' aria-current="date"' : '') +
+      ' aria-label="' + escapeHtml(t("activity.earlierOpenDay", { date: full, n: formatCount(value) })) + '" title="' + escapeHtml(tooltip) + '">' +
+      '<span class="actEarlierDay"><span class="actEarlierWeek">' + escapeHtml(date.toLocaleDateString(state.locale, { weekday: "short" })) + '</span>' +
+      '<span class="actEarlierNum">' + escapeHtml(date.toLocaleDateString(state.locale, { day: "numeric" })) + '</span></span>' +
+      '<span class="actEarlierTrack" aria-hidden="true"><span class="actEarlierBar" style="width:' + width + '%"></span></span>' +
+      '<span class="actEarlierCount">' + escapeHtml(formatCount(value)) + '</span>' +
+      (sub.length ? '<span class="actEarlierSub">' + sub.join('<span class="actEarlierDot" aria-hidden="true"> · </span>') + '</span>' : '') +
+      '</button>';
+  }
+
+  // Rows of one group, with a month label wherever the month changes (the list can span four months).
+  function renderEarlierRows(days, measure, max, selectedDay, anchorMonth) {
+    let month = anchorMonth;
+    return days.map((day) => {
+      const date = parseLocalDay(day.day);
+      const key = date.getFullYear() + "-" + date.getMonth();
+      let label = "";
+      if (key !== month) {
+        month = key;
+        label = '<p class="actEarlierMonth">' + escapeHtml(date.toLocaleDateString(state.locale, { month: "long", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined })) + '</p>';
+      }
+      return label + renderEarlierRow(day, measure(day), max, selectedDay);
+    }).join("");
+  }
+
+  // Keep the Earlier panel inside the viewport. Measured from where it actually sits, so an expanded
+  // legacy list scrolls inside the card instead of pushing the card past the bottom of the window.
+  function fitActivityEarlierPanel() {
+    const rail = els.activityEarlierPanel;
+    if (!rail || !els.activityView || !els.activityView.classList.contains("is-active")) return;
+    if (rail.getClientRects().length === 0) return;
+    // Inline max-height wins over the stylesheet cap. Measure from the rail's real top so a list
+    // opened under the toolbar cannot run past the bottom of the window.
+    const top = Math.max(16, rail.getBoundingClientRect().top);
+    const room = Math.max(220, Math.round(window.innerHeight - top - 16));
+    const next = room + "px";
+    if (rail.style.maxHeight !== next) rail.style.maxHeight = next;
+  }
+
+  let activityEarlierFitFrame = 0;
+  function scheduleActivityEarlierFit() {
+    if (activityEarlierFitFrame) return;
+    activityEarlierFitFrame = window.requestAnimationFrame(() => {
+      activityEarlierFitFrame = 0;
+      fitActivityEarlierPanel();
+    });
+  }
+
+  function renderActivityEarlier() {
+    const body = els.activityEarlierBody;
+    if (!body) return;
+    const act = state.activity;
+    const early = act.earlier;
+    const selectedDay = act.range === "custom" && act.customFrom && act.customFrom === act.customTo ? act.customFrom : "";
+    const days = early.payload && Array.isArray(early.payload.days) ? early.payload.days : [];
+    const signature = [state.locale, early.loading, early.error, early.anchor, early.showAllV21, early.showAllLegacy, selectedDay, JSON.stringify(days)].join("|");
+    if (act.signatures.earlier === signature) {
+      fitActivityEarlierPanel();
+      return;
+    }
+    act.signatures.earlier = signature;
+    body.classList.toggle("is-expanded", early.showAllLegacy || early.showAllV21);
+
+    if (!early.payload) {
+      if (early.error) {
+        body.innerHTML = '<p class="actEarlierState is-error">' + escapeHtml(t("activity.earlierError")) + '</p>' +
+          '<button class="actRailLink" type="button" data-earlier-action="retry">' + escapeHtml(t("activity.retry")) + '</button>';
+      } else {
+        body.innerHTML = '<div class="actEarlierSkeleton" aria-hidden="true"><span></span><span></span><span></span><span></span></div>' +
+          '<p class="visuallyHidden">' + escapeHtml(t("activity.earlierLoading")) + '</p>';
+      }
+      fitActivityEarlierPanel();
+      return;
+    }
+
+    const older = days.filter((day) => day.day < early.anchor && earlierTyped(day) + Number(day.legacy || 0) > 0)
+      .sort((left, right) => (left.day < right.day ? 1 : -1));
+    if (!older.length) {
+      body.innerHTML = '<p class="actEarlierState">' + escapeHtml(t("activity.earlierEmpty")) + '</p>';
+      fitActivityEarlierPanel();
+      return;
+    }
+    // v2.1 rows count typed memories. Legacy and mixed rows add the raw records on the same √ scale.
+    const v21 = older.filter((day) => day.era !== "legacy");
+    const legacy = older.filter((day) => day.era === "legacy");
+    const max = Math.max(1, ...v21.map(earlierShownCount), ...legacy.map(earlierShownCount));
+    const anchorDate = parseLocalDay(early.anchor);
+    const anchorMonth = anchorDate ? anchorDate.getFullYear() + "-" + anchorDate.getMonth() : "";
+    const group = (title, rows, measure, limit, expanded, toggle) => {
+      if (!rows.length) return "";
+      const shown = expanded ? rows : rows.slice(0, limit);
+      const hiddenCount = rows.length - shown.length;
+      let link = "";
+      if (toggle === "legacy" && rows.length > limit) {
+        link = t(expanded ? "activity.earlierCollapse" : "activity.earlierExpand");
+      } else if (toggle === "v21" && rows.length > limit) {
+        link = expanded ? t("activity.earlierFewerDays") : t("activity.earlierMoreDays", { n: formatCount(hiddenCount) });
+      }
+      return '<section class="actEarlierGroup is-' + toggle + '">' +
+        '<h3 class="actEarlierTitle">' + escapeHtml(title) + '</h3>' +
+        '<div class="actEarlierRows">' + renderEarlierRows(shown, measure, max, selectedDay, anchorMonth) + '</div>' +
+        (link ? '<button class="actRailLink" type="button" data-earlier-toggle="' + toggle + '" aria-expanded="' + expanded + '">' + escapeHtml(link) + '</button>' : '') +
+        '</section>';
+    };
+    body.innerHTML = group(t("activity.earlierV21"), v21, earlierShownCount, EARLIER_V21_ROWS, early.showAllV21, "v21") +
+      group(t("activity.earlierLegacy"), legacy, earlierShownCount, EARLIER_LEGACY_ROWS, early.showAllLegacy, "legacy");
+    fitActivityEarlierPanel();
+  }
+
+  // ---------- Activity: memory detail drawer ----------
+
+  function isActivityDrawerOpen() {
+    return !!state.activity.drawer.id;
+  }
+
+  async function openActivityDrawer(id, trigger) {
+    const drawer = state.activity.drawer;
+    const wasOpen = isActivityDrawerOpen();
+    if (drawer.id !== id) {
+      drawer.summaryOpen = false;
+      drawer.factsOpen = false;
+    }
+    drawer.id = id;
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    if (!wasOpen) drawer.returnFocus = trigger || document.activeElement;
+    const seq = drawer.seq + 1;
+    drawer.seq = seq;
+    setActivityPopover("");
+    renderActivityDrawer();
+    renderActivityBoard();
+    if (els.activityDrawerClose) els.activityDrawerClose.focus();
+    try {
+      const payload = await fetchJson("/admin/api/memory-detail?id=" + encodeURIComponent(id));
+      if (seq !== drawer.seq) return;
+      drawer.payload = payload;
+    } catch (error) {
+      if (seq !== drawer.seq) return;
+      drawer.missing = !!(error && error.message === "Unknown memory ID");
+      drawer.error = (error && error.message) || t("activity.drawerError");
+    } finally {
+      if (seq === drawer.seq) renderActivityDrawer();
+    }
+  }
+
+  function closeActivityDrawer(restoreFocus) {
+    const drawer = state.activity.drawer;
+    if (!drawer.id) return;
+    const target = drawer.returnFocus;
+    drawer.id = "";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.seq += 1;
+    drawer.returnFocus = null;
+    renderActivityDrawer();
+    renderActivityBoard();
+    if (restoreFocus && target && document.contains(target)) target.focus();
+  }
+
+  function drawerList(items, className) {
+    return '<ul class="' + className + '">' + items.map((item) => '<li>' + escapeHtml(typeof item === "string" ? item : JSON.stringify(item)) + '</li>').join("") + '</ul>';
+  }
+
+  function drawerSection(title, count, inner) {
+    return '<section class="actSection"><h3 class="actSectionTitle">' + escapeHtml(title) +
+      (count !== null && count !== undefined ? '<span class="actSectionCount">' + escapeHtml(formatCount(count)) + '</span>' : '') +
+      '</h3>' + inner + '</section>';
+  }
+
+  function drawerEmpty(text) {
+    return '<p class="actSectionEmpty">' + escapeHtml(text) + '</p>';
+  }
+
+  function taskStatusTone(status) {
+    const value = String(status || "").toLowerCase();
+    if (value === "saved" || value === "done" || value === "ok" || value === "completed") return "ok";
+    if (value === "fallback" || value === "duplicate" || value === "skipped" || value === "pending") return "warn";
+    if (value === "error" || value === "failed") return "err";
+    return "neutral";
+  }
+
+  // Review recommendation entries are objects of varying shape; show the readable fields when there are any.
+  function describeRecommendation(entry) {
+    if (!entry || typeof entry !== "object") return String(entry);
+    const name = entry.title || entry.skill_title || entry.name || entry.skill_id || entry.id || "";
+    const stateText = entry.state || entry.status || entry.recommendation || "";
+    return [name, stateText].filter(Boolean).join(" · ") || JSON.stringify(entry);
+  }
+
+  // Tool dumps and other raw JSON are a wall of text. A few wrapped lines, then Show more.
+  function narrativeLooksRaw(text) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) return false;
+    if (trimmed.charAt(0) === "{" || trimmed.charAt(0) === "[") return true;
+    const marks = trimmed.match(/[{}\\[\\]]/g);
+    return !!(marks && marks.length >= 4);
+  }
+
+  function narrativeNeedsToggle(text) {
+    const value = String(text || "");
+    if (value.length > 320) return true;
+    if (value.split(String.fromCharCode(10)).length > 5) return true;
+    return narrativeLooksRaw(value) && value.length > 180;
+  }
+
+  function renderDrawerNarrative(text, forceRaw) {
+    const raw = !!forceRaw || narrativeLooksRaw(text);
+    const clamp = narrativeNeedsToggle(text);
+    const open = !!state.activity.drawer.summaryOpen;
+    const body = '<p class="actNarrative' + (raw ? " is-raw" : "") + '">' + escapeHtml(text) + '</p>';
+    if (!clamp) return body;
+    return '<div class="actNarrativeClamp' + (open ? " is-open" : "") + '">' + body +
+      '<button class="actNarrativeToggle" type="button" data-narrative-toggle="true" aria-expanded="' + (open ? "true" : "false") + '">' +
+      escapeHtml(t(open ? "activity.drawerShowLess" : "activity.drawerShowMore")) + '</button></div>';
+  }
+
+  // Fallback facts are often one long "N tool calls (a, b, c)" line. Same few-line clamp as the summary.
+  function factsNeedToggle(facts) {
+    const list = Array.isArray(facts) ? facts : [];
+    if (list.length > 5) return true;
+    let text = "";
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i];
+      text += (i ? String.fromCharCode(10) : "") + (typeof item === "string" ? item : JSON.stringify(item));
+    }
+    if (text.length > 320) return true;
+    return text.split(String.fromCharCode(10)).length > 5;
+  }
+
+  // A comma is a soft break, so each tool name stays whole and the list wraps between names.
+  function renderFactText(item) {
+    const text = typeof item === "string" ? item : JSON.stringify(item);
+    return escapeHtml(text).replace(/, /g, ",<wbr> ");
+  }
+
+  function renderDrawerFacts(facts) {
+    const list = '<ul class="actFacts">' + facts.map((item) => '<li>' + renderFactText(item) + '</li>').join("") + '</ul>';
+    if (!factsNeedToggle(facts)) return list;
+    const open = !!state.activity.drawer.factsOpen;
+    return '<div class="actNarrativeClamp' + (open ? " is-open" : "") + '">' + list +
+      '<button class="actNarrativeToggle" type="button" data-facts-toggle="true" aria-expanded="' + (open ? "true" : "false") + '">' +
+      escapeHtml(t(open ? "activity.drawerShowLess" : "activity.drawerShowMore")) + '</button></div>';
+  }
+
+  function renderActivityDrawerBody(detail) {
+    const memory = detail.memory || {};
+    const parts = [];
+    const narrative = String(memory.narrative || "").trim();
+    parts.push(drawerSection(t("activity.drawerSummary"), null,
+      narrative ? renderDrawerNarrative(narrative, memory.fallback && narrative.length > 180) : drawerEmpty(t("activity.drawerNoSummary"))));
+    const facts = Array.isArray(memory.facts) ? memory.facts : [];
+    if (facts.length) parts.push(drawerSection(t("activity.drawerFacts"), facts.length, renderDrawerFacts(facts)));
+    const concepts = Array.isArray(memory.concepts) ? memory.concepts : [];
+    if (concepts.length) {
+      parts.push(drawerSection(t("activity.drawerConcepts"), null, '<div class="actTags">' +
+        concepts.map((concept) => '<span class="actTag">' + escapeHtml(typeof concept === "string" ? concept : JSON.stringify(concept)) + '</span>').join("") + '</div>'));
+    }
+    const modified = Array.isArray(memory.files_modified) ? memory.files_modified : [];
+    const read = Array.isArray(memory.files_read) ? memory.files_read : [];
+    if (modified.length) parts.push(drawerSection(t("activity.drawerFilesModified"), modified.length, drawerList(modified, "actFiles is-modified")));
+    if (read.length) parts.push(drawerSection(t("activity.drawerFilesRead"), read.length, drawerList(read, "actFiles")));
+
+    const tasks = Array.isArray(detail.tasks) ? detail.tasks : [];
+    const taskRows = tasks.map((task) => {
+      const created = parseTimestamp(task.created_at);
+      const stats = [];
+      if (Number(task.segment_count || 0) > 1) stats.push(t("activity.drawerTaskSegment", { i: formatCount(Number(task.segment_index || 0) + 1), n: formatCount(task.segment_count) }));
+      stats.push(t("activity.drawerTaskEvents", { n: formatCount(task.event_count) }));
+      stats.push(t("activity.drawerTaskEvidence", { n: formatCount(task.evidence_count) }));
+      stats.push(t("activity.drawerTaskLlm", { n: formatCount(task.llm_calls) }));
+      if (task.trigger) stats.push(t("activity.drawerTaskTrigger", { name: task.trigger }));
+      return '<li class="actTask">' +
+        '<div class="actTaskHead"><span class="actStatus tone-' + taskStatusTone(task.status) + '">' + escapeHtml(task.status || "—") + '</span>' +
+        '<code class="actMono" title="' + escapeHtml(task.task_id || "") + '">' + escapeHtml(String(task.task_id || "").slice(0, 8)) + '</code>' +
+        (created ? '<time class="actTaskTime" datetime="' + escapeHtml(created.toISOString()) + '">' + escapeHtml(formatClock(created)) + '</time>' : '') + '</div>' +
+        '<p class="actTaskFacts">' + stats.map(escapeHtml).join('<span aria-hidden="true"> · </span>') + '</p>' +
+        (task.last_error ? '<p class="actTaskError">' + escapeHtml(task.last_error) + '</p>' : '') +
+        '</li>';
+    }).join("");
+    parts.push(drawerSection(t("activity.drawerTasks"), tasks.length,
+      tasks.length ? '<ul class="actTasks">' + taskRows + '</ul>' + (detail.evidence_available ? '<p class="actSectionNote">' + escapeHtml(t("activity.drawerEvidence")) + '</p>' : '')
+        : drawerEmpty(t("activity.drawerTasksEmpty"))));
+
+    const flags = Array.isArray(detail.duplicate_flags) ? detail.duplicate_flags : [];
+    parts.push(drawerSection(t("activity.drawerDuplicates"), flags.length || null, flags.length
+      ? '<ul class="actFlags">' + flags.map((flag) => '<li class="actFlag"><span class="actStatus tone-' + taskStatusTone(flag.status) + '">' + escapeHtml(flag.status || "—") + '</span>' +
+        '<span class="actFlagTask">' + escapeHtml(t("activity.drawerDuplicateTask", { id: String(flag.task_id || "").slice(0, 8) })) + '</span>' +
+        (flag.reason ? '<span class="actFlagReason">' + escapeHtml(flag.reason) + '</span>' : '') + '</li>').join("") + '</ul>'
+      : drawerEmpty(t("activity.drawerDuplicatesEmpty"))));
+
+    const review = detail.review;
+    let reviewHtml = drawerEmpty(t("activity.drawerReviewEmpty"));
+    if (review) {
+      const generated = parseTimestamp(review.generated_at);
+      const skills = Array.isArray(review.matched_skill_titles) ? review.matched_skill_titles : [];
+      const states = Array.isArray(review.recommendation_states) ? review.recommendation_states : [];
+      reviewHtml = '<div class="actReviewBox">' +
+        '<div class="actReviewHead"><span class="actStatus tone-' + (review.status === "open" ? "info" : taskStatusTone(review.status)) + '">' + escapeHtml(review.status || "—") + '</span>' +
+        (generated ? '<span class="actReviewTime">' + escapeHtml(t("activity.drawerReviewGenerated", { time: generated.toLocaleString(state.locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) })) + '</span>' : '') + '</div>' +
+        '<dl class="actReviewFields">' +
+        '<dt>' + escapeHtml(t("activity.drawerReviewQuery")) + '</dt><dd>' + escapeHtml(review.query_text || "—") + '</dd>' +
+        '<dt>' + escapeHtml(t("activity.drawerReviewSkills")) + '</dt><dd>' + (skills.length
+          ? '<div class="actTags">' + skills.map((skill) => '<span class="actTag">' + escapeHtml(String(skill)) + '</span>').join("") + '</div>'
+          : escapeHtml(t("activity.drawerReviewNone"))) + '</dd>' +
+        '<dt>' + escapeHtml(t("activity.drawerReviewStates")) + '</dt><dd>' + (states.length
+          ? drawerList(states.map(describeRecommendation), "actFacts")
+          : escapeHtml(t("activity.drawerReviewNone"))) + '</dd>' +
+        '</dl></div>';
+    }
+    parts.push(drawerSection(t("activity.drawerReview"), null, reviewHtml));
+
+    const idRows = [[t("activity.drawerId"), memory.id], [t("activity.drawerSession"), memory.session_id], [t("activity.drawerSource"), memory.source]];
+    let footer = '<dl class="actIds">' + idRows.filter((row) => row[1]).map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd><code class="actMono">' + escapeHtml(row[1]) + '</code></dd>').join("");
+    if (detail.compacted_into) {
+      footer += '<dt>' + escapeHtml(t("activity.drawerCompacted")) + '</dt><dd><button class="actLinkButton" type="button" data-drawer-open="' + escapeHtml(detail.compacted_into) + '"><code class="actMono">' + escapeHtml(detail.compacted_into) + '</code></button></dd>';
+    }
+    parts.push('<section class="actSection is-ids">' + footer + '</dl></section>');
+    return parts.join("");
+  }
+
+  function renderActivityDrawer() {
+    const drawerEl = els.activityDrawer;
+    if (!drawerEl) return;
+    const act = state.activity;
+    const drawer = act.drawer;
+    const open = !!drawer.id;
+    setHidden(drawerEl, !open);
+    setHidden(els.activityDrawerScrim, !open);
+    els.activityView.classList.toggle("has-drawer", open);
+    const signature = [state.locale, drawer.id, drawer.error, JSON.stringify(drawer.payload)].join("|");
+    if (act.signatures.drawer === signature) return;
+    act.signatures.drawer = signature;
+    if (!open) {
+      els.activityDrawerMeta.innerHTML = "";
+      els.activityDrawerSub.innerHTML = "";
+      els.activityDrawerBody.innerHTML = "";
+      setText(els.activityDrawerTitle, "");
+      return;
+    }
+    // Until the detail arrives, the card already on screen supplies the header.
+    const card = act.cards.find((item) => item.id === drawer.id) || null;
+    const memory = drawer.payload && drawer.payload.memory ? drawer.payload.memory : card;
+    if (memory) {
+      const created = parseTimestamp(memory.created_at);
+      const kind = memory.kind === "outcome" || memory.kind === "context" ? memory.kind : "legacy";
+      const badges = [];
+      if (memory.source === "explicit") badges.push('<span class="actBadge is-mcp" title="' + escapeHtml(t("activity.mcpHint")) + '">' + escapeHtml(t("activity.mcp")) + '</span>');
+      if (memory.fallback) badges.push('<span class="actBadge is-fallback" title="' + escapeHtml(t("activity.fallbackHint")) + '">' + escapeHtml(t("activity.fallback")) + '</span>');
+      els.activityDrawerMeta.innerHTML = '<span class="kindPill kind-' + kind + '">' + escapeHtml(t(kind === "outcome" ? "home.kindOutcome" : kind === "context" ? "home.kindContext" : "home.kindLegacy")) + '</span>' + badges.join("") +
+        (created ? '<time class="actDrawerTime" datetime="' + escapeHtml(created.toISOString()) + '">' +
+          escapeHtml(created.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric" }) + " · " + formatClock(created)) + '</time>' : '');
+      const title = String(memory.title || "").trim();
+      setText(els.activityDrawerTitle, title || t("activity.untitled"));
+      setAttr(els.activityDrawerTitle, "title", title);
+      els.activityDrawerSub.innerHTML = '<span class="actProject" title="' + escapeHtml(memory.project_path || "") + '"><span class="actDot" data-hue="' + projectHue(memory.project_path) + '" aria-hidden="true"></span>' +
+        '<span class="actProjectName">' + escapeHtml(projectBasename(memory.project_path) || "—") + '</span></span>' +
+        (memory.agent_id ? '<span class="actAgent">' + escapeHtml(memory.agent_id) + '</span>' : '');
+    } else {
+      els.activityDrawerMeta.innerHTML = "";
+      els.activityDrawerSub.innerHTML = "";
+      setText(els.activityDrawerTitle, drawer.error ? t("activity.drawerError") : t("activity.drawerLoading"));
+      setAttr(els.activityDrawerTitle, "title", "");
+    }
+    if (drawer.payload) {
+      els.activityDrawerBody.innerHTML = renderActivityDrawerBody(drawer.payload);
+    } else if (drawer.error) {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState is-error"><p>' + escapeHtml(drawer.missing ? t("activity.drawerMissing") : drawer.error) + '</p>' +
+        (drawer.missing ? '' : '<button class="bgButton" type="button" data-drawer-open="' + escapeHtml(drawer.id) + '">' + escapeHtml(t("activity.retry")) + '</button>') + '</div>';
+    } else {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerSkeleton" aria-hidden="true"><span class="is-long"></span><span class="is-long"></span><span class="is-mid"></span><span class="is-short"></span></div>' +
+        '<p class="visuallyHidden">' + escapeHtml(t("activity.drawerLoading")) + '</p>';
+    }
+  }
+
+  function trapActivityDrawerFocus(event) {
+    const focusable = Array.from(els.activityDrawer.querySelectorAll("button, [href], input, [tabindex]:not([tabindex='-1'])"))
+      .filter((node) => !node.disabled && node.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === els.activityDrawer)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function getActivityPopoverParts(name) {
+    if (name === "project") return [els.activityProjectPopover, els.activityProjectButton];
+    if (name === "agent") return [els.activityAgentPopover, els.activityAgentButton];
+    if (name === "custom") return [els.activityCustomPopover, els.activityRangeCustom];
+    return null;
+  }
+
+  // Popovers are children of the view (position: relative), so they scroll with the page and only need placing
+  // when they open or their content changes width.
+  function positionActivityPopover(popover, anchor) {
+    const view = els.activityView.getBoundingClientRect();
+    const rect = anchor.getBoundingClientRect();
+    const left = Math.max(0, Math.min(rect.left - view.left, view.width - popover.offsetWidth));
+    popover.style.left = Math.round(left) + "px";
+    popover.style.top = Math.round(rect.bottom - view.top + 8) + "px";
+  }
+
+  function setActivityPopover(name) {
+    const act = state.activity;
+    act.openPopover = getActivityPopoverParts(name) ? name : "";
+    ["project", "agent", "custom"].forEach((key) => {
+      const parts = getActivityPopoverParts(key);
+      const open = key === act.openPopover;
+      setHidden(parts[0], !open);
+      setAttr(parts[1], "aria-expanded", open ? "true" : "false");
+      if (open) positionActivityPopover(parts[0], parts[1]);
+    });
+  }
+
+  function closeActivityPopover(restoreFocus) {
+    const parts = getActivityPopoverParts(state.activity.openPopover);
+    setActivityPopover("");
+    if (parts && restoreFocus) parts[1].focus();
+  }
+
+  function openActivityMenu(name) {
+    if (state.activity.openPopover === name) {
+      closeActivityPopover(false);
+      return;
+    }
+    setActivityPopover(name);
+    const popover = getActivityPopoverParts(name)[0];
+    const target = popover.querySelector('[aria-selected="true"]') || popover.querySelector(".actOption");
+    if (target) target.focus();
+  }
+
+  function openActivityCustom() {
+    if (state.activity.openPopover === "custom") {
+      closeActivityPopover(false);
+      return;
+    }
+    const act = state.activity;
+    const win = getActivityWindow();
+    const today = localDayKey(new Date());
+    els.activityCustomFrom.value = act.customFrom || win.firstDay;
+    els.activityCustomTo.value = act.customTo || win.lastDay;
+    els.activityCustomFrom.max = today;
+    els.activityCustomTo.max = today;
+    setHidden(els.activityCustomError, true);
+    setActivityPopover("custom");
+    els.activityCustomFrom.focus();
+  }
+
+  function applyActivityCustomRange() {
+    const from = els.activityCustomFrom.value;
+    const to = els.activityCustomTo.value;
+    const start = parseLocalDay(from);
+    const end = parseLocalDay(to);
+    let error = "";
+    if (!start || !end) {
+      error = t("activity.customMissing");
+    } else if (start > end) {
+      error = t("activity.customOrder");
+    } else if (Math.round((shiftDays(end, 1).getTime() - start.getTime()) / ACTIVITY_DAY_MS) > ACTIVITY_MAX_DAYS) {
+      error = t("activity.customTooLong");
+    }
+    if (error) {
+      setText(els.activityCustomError, error);
+      setHidden(els.activityCustomError, false);
+      return;
+    }
+    const act = state.activity;
+    act.customFrom = from;
+    act.customTo = to;
+    act.range = "custom";
+    closeActivityPopover(true);
+    setActivityFilters({}, false);
+  }
+
+  // keepEarlier: a day opened from the Earlier list keeps that list where it is instead of re-anchoring it.
+  function setActivityFilters(patch, keepEarlier) {
+    Object.assign(state.activity, patch);
+    if (!keepEarlier) anchorActivityEarlier();
+    void loadActivity("reset");
+    void loadActivityEarlier(false);
+  }
+
+  function bindActivityEvents() {
+    if (!els.activityView) return;
+    els.activityView.addEventListener("click", (event) => {
+      const act = state.activity;
+      if (event.target.closest("#activityDrawerClose") || event.target === els.activityDrawerScrim) {
+        closeActivityDrawer(true);
+        return;
+      }
+      const reopen = event.target.closest("[data-drawer-open]");
+      if (reopen) {
+        void openActivityDrawer(reopen.getAttribute("data-drawer-open"), null);
+        return;
+      }
+      const narrativeToggle = event.target.closest("[data-narrative-toggle]");
+      if (narrativeToggle) {
+        const drawer = act.drawer;
+        drawer.summaryOpen = !drawer.summaryOpen;
+        const wrap = narrativeToggle.closest(".actNarrativeClamp");
+        if (wrap) wrap.classList.toggle("is-open", drawer.summaryOpen);
+        narrativeToggle.setAttribute("aria-expanded", drawer.summaryOpen ? "true" : "false");
+        narrativeToggle.textContent = t(drawer.summaryOpen ? "activity.drawerShowLess" : "activity.drawerShowMore");
+        return;
+      }
+      const factsToggle = event.target.closest("[data-facts-toggle]");
+      if (factsToggle) {
+        const drawer = act.drawer;
+        drawer.factsOpen = !drawer.factsOpen;
+        const wrap = factsToggle.closest(".actNarrativeClamp");
+        if (wrap) wrap.classList.toggle("is-open", drawer.factsOpen);
+        factsToggle.setAttribute("aria-expanded", drawer.factsOpen ? "true" : "false");
+        factsToggle.textContent = t(drawer.factsOpen ? "activity.drawerShowLess" : "activity.drawerShowMore");
+        return;
+      }
+      if (event.target.closest("#activityDrawer")) return;
+      const card = event.target.closest(".actCard[data-memory-id]");
+      if (card) {
+        void openActivityDrawer(card.getAttribute("data-memory-id"), card);
+        return;
+      }
+      const earlierDay = event.target.closest("[data-earlier-day]");
+      if (earlierDay) {
+        const day = earlierDay.getAttribute("data-earlier-day");
+        // A day with only legacy records would open empty under the typed filter, so it brings them along.
+        const legacyOnly = earlierDay.getAttribute("data-earlier-typed") === "0";
+        setActivityPopover("");
+        setActivityFilters({ range: "custom", customFrom: day, customTo: day, kind: legacyOnly ? "all" : act.kind }, true);
+        return;
+      }
+      const earlierToggle = event.target.closest("[data-earlier-toggle]");
+      if (earlierToggle) {
+        const which = earlierToggle.getAttribute("data-earlier-toggle");
+        if (which === "legacy") act.earlier.showAllLegacy = !act.earlier.showAllLegacy;
+        else act.earlier.showAllV21 = !act.earlier.showAllV21;
+        renderActivityEarlier();
+        // Keep focus on the toggle without scrolling the list down to where it now sits.
+        const again = els.activityEarlierBody.querySelector('[data-earlier-toggle="' + which + '"]');
+        if (again) again.focus({ preventScroll: true });
+        return;
+      }
+      if (event.target.closest('[data-earlier-action="retry"]')) {
+        void loadActivityEarlier(true);
+        return;
+      }
+      const range = event.target.closest("[data-activity-range]");
+      if (range) {
+        const value = range.getAttribute("data-activity-range");
+        if (value === "custom") {
+          openActivityCustom();
+        } else {
+          setActivityPopover("");
+          setActivityFilters({ range: value });
+        }
+        return;
+      }
+      if (event.target.closest("#activityProjectButton")) {
+        openActivityMenu("project");
+        return;
+      }
+      if (event.target.closest("#activityAgentButton")) {
+        openActivityMenu("agent");
+        return;
+      }
+      const project = event.target.closest("[data-activity-project]");
+      if (project) {
+        const value = project.getAttribute("data-activity-project") || "";
+        const fromChip = project.classList.contains("actChip");
+        if (!fromChip) closeActivityPopover(true);
+        // A chip toggles: clicking the selected project again goes back to all projects.
+        setActivityFilters({ project: fromChip && value && isActivitySelected(value, act.project) ? "" : value });
+        return;
+      }
+      const agent = event.target.closest("[data-activity-agent]");
+      if (agent) {
+        closeActivityPopover(true);
+        setActivityFilters({ agent: agent.getAttribute("data-activity-agent") || "" });
+        return;
+      }
+      if (event.target.closest("[data-activity-more]")) {
+        void loadActivity("more");
+        return;
+      }
+      if (event.target.closest("#activitySumLegacy")) {
+        setActivityFilters({ kind: act.kind === "typed" ? "all" : "typed" });
+        return;
+      }
+      const action = event.target.closest("[data-activity-action]");
+      if (action) {
+        const name = action.getAttribute("data-activity-action");
+        if (name === "legacy") setActivityFilters({ kind: "all" });
+        else if (name === "clear") setActivityFilters({ project: "", agent: "" });
+        else void loadActivity("reset");
+        return;
+      }
+      if (event.target.closest("#activityCustomApply")) {
+        applyActivityCustomRange();
+        return;
+      }
+      if (event.target.closest("#activityCustomCancel")) {
+        closeActivityPopover(true);
+      }
+    });
+
+    els.activityView.addEventListener("keydown", (event) => {
+      if (isActivityDrawerOpen() && els.activityDrawer.contains(event.target)) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          closeActivityDrawer(true);
+        } else if (event.key === "Tab") {
+          trapActivityDrawerFocus(event);
+        }
+        return;
+      }
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches(".actCard[data-memory-id]")) {
+        event.preventDefault();
+        void openActivityDrawer(event.target.getAttribute("data-memory-id"), event.target);
+        return;
+      }
+      const open = state.activity.openPopover;
+      if (!open) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeActivityPopover(true);
+        return;
+      }
+      if (open === "custom") {
+        if (event.key === "Enter" && event.target.matches(".actDateInput")) {
+          event.preventDefault();
+          applyActivityCustomRange();
+        }
+        return;
+      }
+      const popover = getActivityPopoverParts(open)[0];
+      const options = Array.from(popover.querySelectorAll(".actOption"));
+      const index = options.indexOf(document.activeElement);
+      let next = -1;
+      if (event.key === "ArrowDown") next = Math.min(options.length - 1, index + 1);
+      else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = options.length - 1;
+      else if (event.key === "Tab") {
+        event.preventDefault();
+        closeActivityPopover(true);
+        return;
+      }
+      if (next >= 0 && options[next]) {
+        event.preventDefault();
+        options[next].focus();
+      }
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      const parts = getActivityPopoverParts(state.activity.openPopover);
+      if (!parts || parts[0].contains(event.target) || parts[1].contains(event.target)) return;
+      setActivityPopover("");
+    });
+
+    window.addEventListener("resize", () => {
+      if (state.activity.openPopover) setActivityPopover("");
+      updateActivityChipsOverflow();
+      scheduleActivityEarlierFit();
+    });
+
+    window.addEventListener("scroll", scheduleActivityEarlierFit, { passive: true });
+
+    els.activityChips.addEventListener("scroll", updateActivityChipsOverflow, { passive: true });
+
+    // Escape with focus outside the drawer (after a click on the scrim, say) still closes it.
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !event.defaultPrevented && isActivityDrawerOpen()) closeActivityDrawer(true);
+    });
+  }
+
   async function loadReleaseCheck() {
     if (!state.overview || !state.overview.release) return;
     state.isCheckingRelease = true;
@@ -3021,9 +4429,30 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function updateBackground(patch, persist) {
     if (!bg.api) return;
     bg.settings = bg.api.normalize(Object.assign({}, bg.settings, patch));
-    bg.api.apply(bg.settings);
+    applyBackdrop();
     renderBackgroundControls();
     if (persist) persistBackground();
+  }
+
+  // Activity has its own default backdrop (artwork, light or dark with the system). It shows while the user has
+  // not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
+  function usesActivityBackdrop() {
+    const settings = bg.settings;
+    return state.activeView === "activityView" && !!settings && !settings.pinned &&
+      settings.preset === bg.api.defaults.preset && settings.tone === "auto";
+  }
+
+  function applyBackdrop() {
+    if (!bg.api || !bg.settings) return;
+    bg.api.apply(bg.settings);
+    const root = document.documentElement;
+    if (!usesActivityBackdrop()) {
+      if (root.hasAttribute("data-act-bg")) root.removeAttribute("data-act-bg");
+      return;
+    }
+    const scheme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    root.setAttribute("data-act-bg", scheme);
+    root.setAttribute("data-glass", scheme);
   }
 
   function openWallpaperDb() {
@@ -3087,7 +4516,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       useWallpaperBlob(record.blob);
     } else if (bg.settings && bg.settings.preset === "custom") {
       // The image was cleared with the site data (or never stored): fall back to the default preset.
-      updateBackground({ preset: bg.api.defaults.preset }, true);
+      updateBackground({ preset: bg.api.defaults.preset, pinned: false }, true);
       bg.statusKey = "bg.customMissing";
       bg.statusError = true;
     }
@@ -3224,7 +4653,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       stored = false;
     }
     bg.busy = false;
-    updateBackground({ preset: "custom", customLuma: prepared.luma, customColor: prepared.color }, true);
+    updateBackground({ preset: "custom", customLuma: prepared.luma, customColor: prepared.color, pinned: true }, true);
     setBackgroundStatus(stored ? "bg.uploadSaved" : "bg.uploadSessionOnly", !stored);
   }
 
@@ -3248,13 +4677,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
     bg.settings = bg.api.read();
-    bg.api.apply(bg.settings);
+    applyBackdrop();
     renderBackgroundControls();
     void loadStoredWallpaper();
   }
 
   function bindBackgroundEvents() {
     if (!bg.api || !els.bgPopover) return;
+    const schemeQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    if (schemeQuery && schemeQuery.addEventListener) schemeQuery.addEventListener("change", applyBackdrop);
     els.bgPickerButton.addEventListener("click", () => setBackgroundPickerOpen(!bg.open, false));
     els.bgPopoverClose.addEventListener("click", () => setBackgroundPickerOpen(false, true));
     els.bgDoneButton.addEventListener("click", () => setBackgroundPickerOpen(false, true));
@@ -3262,7 +4693,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       button.addEventListener("click", () => {
         const preset = button.getAttribute("data-bg-preset");
         if (preset === "custom" && !bg.customAvailable) return;
-        updateBackground({ preset }, true);
+        updateBackground({ preset, pinned: true }, true);
       });
     });
     els.bgToneButtons.forEach((button) => {
@@ -3282,7 +4713,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
     els.bgResetButton.addEventListener("click", () => {
       const defaults = bg.api.defaults;
-      updateBackground({ preset: defaults.preset, tone: defaults.tone, blur: defaults.blur, dim: defaults.dim, opacity: defaults.opacity }, true);
+      updateBackground({ preset: defaults.preset, tone: defaults.tone, blur: defaults.blur, dim: defaults.dim, opacity: defaults.opacity, pinned: false }, true);
       setBackgroundStatus("bg.resetDone", false);
     });
     document.addEventListener("keydown", (event) => {
@@ -3346,8 +4777,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
     syncNavItems();
     syncPageTitle();
+    applyBackdrop();
     if (nextView === "homeView") {
       void refreshHomeData(false);
+    }
+    if (nextView === "activityView") {
+      void loadActivity(state.activity.payload ? "refresh" : "reset");
+      void loadActivityEarlier(false);
+      window.requestAnimationFrame(() => {
+        updateActivityChipsOverflow();
+        fitActivityEarlierPanel();
+      });
+    } else {
+      if (state.activity.openPopover) setActivityPopover("");
+      closeActivityDrawer(false);
     }
     if (nextView === "devToolsView") {
       void ensureDevToolsLoaded();
@@ -3427,13 +4870,32 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
+  // Midnight moves Today and Yesterday. Reload the columns and the Earlier list once; a custom range stays put.
+  async function reloadActivityWindow() {
+    anchorActivityEarlier();
+    await loadActivity("reset");
+    await loadActivityEarlier(true);
+  }
+
   async function pollVisibleView() {
+    let overviewOk = true;
     try {
       await loadOverview();
     } catch (error) {
       // The Worker card and the attention list already show the failed poll.
+      overviewOk = false;
+    }
+    // Activity follows the 5 s poll only while its window includes today; past windows cannot change.
+    // Today and Yesterday are the exception at midnight: the local date moved, so reload that window.
+    if (state.activeView === "activityView") {
+      if (activityWindowStale()) {
+        await reloadActivityWindow();
+        return;
+      }
+      if (activityIncludesToday(getActivityWindow())) await loadActivity("refresh");
       return;
     }
+    if (!overviewOk) return;
     if (state.activeView === "homeView") {
       await refreshHomeData(false);
       return;
@@ -3464,6 +4926,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.localeButtons.forEach((button) => {
       button.addEventListener("click", () => {
         const nextLocale = normalizeLocale(button.getAttribute("data-locale-choice"));
+        setLocaleMenuOpen(false, true);
         if (state.locale === nextLocale) return;
         state.locale = nextLocale;
         applyLocale(false);
@@ -3790,6 +5253,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setDevToolsEnabled(readDevToolsPreference(), false);
     bindEvents();
     bindBackgroundEvents();
+    bindLocaleMenu();
+    bindActivityEvents();
     activateView("homeView");
     try {
       await loadOverview();
