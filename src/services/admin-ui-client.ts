@@ -189,6 +189,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       windowKey: "",
       loadedAt: 0,
       error: "",
+      readsDisabled: false,
+      message: "",
       refreshFailed: false,
       stale: false,
       seq: 0,
@@ -201,9 +203,43 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       hues: new Map(),
       // Earlier: one stats-only request for the 120 days before the window ends. anchor is the oldest column day
       // when the window was last set from the toolbar; opening a day from the list keeps it, so the list stays put.
-      earlier: { key: "", payload: null, loading: false, error: "", seq: 0, loadedAt: 0, anchor: "", showAllV21: false, showAllLegacy: false },
-      drawer: { id: "", payload: null, error: "", missing: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false },
+      earlier: { key: "", payload: null, loading: false, error: "", readsDisabled: false, message: "", seq: 0, loadedAt: 0, anchor: "", showAllV21: false, showAllLegacy: false },
     },
+    // Memory: page 1 carries the stats; later pages follow next_cursor, which is bound to the filters.
+    memory: {
+      query: "",
+      project: "",
+      agent: "",
+      // "default" sends no kind (outcome + context); otherwise outcome, context, legacy or all.
+      kind: "default",
+      source: "",
+      range: "any",
+      customFrom: "",
+      customTo: "",
+      items: [],
+      days: [],
+      stats: null,
+      nextCursor: null,
+      // Filters of the list on screen; a change drops the cursor and reloads page 1.
+      key: "",
+      loaded: false,
+      loadedAt: 0,
+      error: "",
+      readsDisabled: false,
+      refreshFailed: false,
+      stale: false,
+      seq: 0,
+      busySeq: 0,
+      moreSeq: 0,
+      searchTimer: 0,
+      lastScrollAt: 0,
+      openPopover: "",
+      rowNodes: new Map(),
+      groupNodes: new Map(),
+      signatures: {},
+    },
+    // The one memory detail drawer. host is the view that opened it; the drawer node moves into that view.
+    drawer: { id: "", host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
   };
 
   const els = {
@@ -422,6 +458,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     activityCustomFrom: document.getElementById("activityCustomFrom"),
     activityCustomTo: document.getElementById("activityCustomTo"),
     activityCustomError: document.getElementById("activityCustomError"),
+    activityEarlierTitle: document.getElementById("activityEarlierTitle"),
+    activityEarlierLead: document.getElementById("activityEarlierLead"),
+    activityEarlierNote: document.getElementById("activityEarlierNote"),
     activityEarlierBody: document.getElementById("activityEarlierBody"),
     activityEarlierPanel: document.getElementById("activityEarlierPanel"),
     activityDrawer: document.getElementById("activityDrawer"),
@@ -431,6 +470,42 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     activityDrawerSub: document.getElementById("activityDrawerSub"),
     activityDrawerBody: document.getElementById("activityDrawerBody"),
     activityDrawerClose: document.getElementById("activityDrawerClose"),
+    memoryDrawerCopy: document.getElementById("memoryDrawerCopy"),
+    memoryView: document.getElementById("memoryView"),
+    memoryToolbar: document.getElementById("memoryToolbar"),
+    memorySearchInput: document.getElementById("memorySearchInput"),
+    memorySearchClear: document.getElementById("memorySearchClear"),
+    memoryRangeButtons: Array.from(document.querySelectorAll("[data-memory-range]")),
+    memoryRangeCustom: document.getElementById("memoryRangeCustom"),
+    memoryProjectButton: document.getElementById("memoryProjectButton"),
+    memoryProjectValue: document.getElementById("memoryProjectValue"),
+    memoryAgentButton: document.getElementById("memoryAgentButton"),
+    memoryAgentValue: document.getElementById("memoryAgentValue"),
+    memoryKindButton: document.getElementById("memoryKindButton"),
+    memoryKindValue: document.getElementById("memoryKindValue"),
+    memorySourceButton: document.getElementById("memorySourceButton"),
+    memorySourceValue: document.getElementById("memorySourceValue"),
+    memoryProjectPopover: document.getElementById("memoryProjectPopover"),
+    memoryAgentPopover: document.getElementById("memoryAgentPopover"),
+    memoryKindPopover: document.getElementById("memoryKindPopover"),
+    memorySourcePopover: document.getElementById("memorySourcePopover"),
+    memoryCustomPopover: document.getElementById("memoryCustomPopover"),
+    memoryCustomFrom: document.getElementById("memoryCustomFrom"),
+    memoryCustomTo: document.getElementById("memoryCustomTo"),
+    memoryCustomError: document.getElementById("memoryCustomError"),
+    memorySummary: document.getElementById("memorySummary"),
+    memorySumTotal: document.getElementById("memorySumTotal"),
+    memorySumKinds: Array.from(document.querySelectorAll("[data-memory-sum-kind]")),
+    memoryUpdated: document.getElementById("memoryUpdated"),
+    memoryTopProjects: document.getElementById("memoryTopProjects"),
+    memoryTopBar: document.getElementById("memoryTopBar"),
+    memoryListHead: document.getElementById("memoryListHead"),
+    memoryList: document.getElementById("memoryList"),
+    memoryNotice: document.getElementById("memoryNotice"),
+    memoryNoticeTitle: document.getElementById("memoryNoticeTitle"),
+    memoryNoticeLead: document.getElementById("memoryNoticeLead"),
+    memoryNoticeAction: document.getElementById("memoryNoticeAction"),
+    memoryLoadMore: document.getElementById("memoryLoadMore"),
   };
 
   // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
@@ -663,6 +738,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderOverview();
     renderHome();
     renderActivity();
+    renderMemory();
+    renderMemoryDrawer();
     renderProceduralWorkspace();
     renderLlmConfig();
     renderLlmTestResult();
@@ -2426,7 +2503,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const text = await response.text();
     const payload = text ? JSON.parse(text) : {};
     if (!response.ok) {
-      throw new Error(payload.error || "Request failed (" + response.status + ")");
+      const error = new Error(payload.error || "Request failed (" + response.status + ")");
+      error.status = response.status;
+      throw error;
     }
     return payload;
   }
@@ -2450,6 +2529,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     state.overviewError = false;
     state.overview = nextOverview;
     state.overviewAt = Date.now();
+    applyReadPolicyToViews(nextOverview.policy);
     renderOverview();
   }
 
@@ -2626,35 +2706,51 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     try {
       const payload = await fetchJson(activityUrl(win, limit, mode === "more" ? act.nextCursor : null));
       if (seq !== act.seq) return;
-      const incoming = Array.isArray(payload.cards) ? payload.cards : [];
-      if (mode === "more") {
-        const seen = new Set(act.cards.map((card) => card.id));
-        act.cards = act.cards.concat(incoming.filter((card) => !seen.has(card.id)));
-        act.nextCursor = payload.next_cursor || null;
-      } else if (mode === "refresh" && loaded + ACTIVITY_REFRESH_HEADROOM > ACTIVITY_MAX_PAGE && incoming.length) {
-        // More cards are loaded than one request returns: keep the older pages behind the refreshed head.
-        const lastId = incoming[incoming.length - 1].id;
-        const index = act.cards.findIndex((card) => card.id === lastId);
-        if (index >= 0) {
-          act.cards = incoming.concat(act.cards.slice(index + 1));
+      // 200 with disabled: true is the read switch, not a failed load. Drop cards so null lists never render.
+      if (payload.disabled) {
+        act.cards = [];
+        act.nextCursor = null;
+        act.payload = null;
+        act.readsDisabled = true;
+        act.message = payload.message || "";
+        act.error = "";
+        act.refreshFailed = false;
+        act.loadedAt = Date.now();
+      } else {
+        act.readsDisabled = false;
+        act.message = "";
+        const incoming = Array.isArray(payload.cards) ? payload.cards : [];
+        if (mode === "more") {
+          const seen = new Set(act.cards.map((card) => card.id));
+          act.cards = act.cards.concat(incoming.filter((card) => !seen.has(card.id)));
+          act.nextCursor = payload.next_cursor || null;
+        } else if (mode === "refresh" && loaded + ACTIVITY_REFRESH_HEADROOM > ACTIVITY_MAX_PAGE && incoming.length) {
+          // More cards are loaded than one request returns: keep the older pages behind the refreshed head.
+          const lastId = incoming[incoming.length - 1].id;
+          const index = act.cards.findIndex((card) => card.id === lastId);
+          if (index >= 0) {
+            act.cards = incoming.concat(act.cards.slice(index + 1));
+          } else {
+            act.cards = incoming;
+            act.nextCursor = payload.next_cursor || null;
+          }
         } else {
           act.cards = incoming;
           act.nextCursor = payload.next_cursor || null;
         }
-      } else {
-        act.cards = incoming;
-        act.nextCursor = payload.next_cursor || null;
+        act.payload = payload;
+        act.loadedAt = Date.now();
+        act.refreshFailed = false;
+        act.error = "";
       }
-      act.payload = payload;
-      act.loadedAt = Date.now();
-      act.refreshFailed = false;
-      act.error = "";
     } catch (error) {
       if (seq !== act.seq) return;
       if (mode === "reset") {
         act.payload = null;
         act.cards = [];
         act.nextCursor = null;
+        act.readsDisabled = false;
+        act.message = "";
         act.error = (error && error.message) || t("activity.errorTitle");
       } else {
         act.refreshFailed = true;
@@ -2880,7 +2976,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         entry = { node, signature: "" };
         nodes.set(card.id, entry);
       }
-      entry.node.classList.toggle("is-open", state.activity.drawer.id === card.id);
+      entry.node.classList.toggle("is-open", state.drawer.id === card.id);
       const signature = state.locale + "|" + JSON.stringify(card);
       if (entry.signature !== signature) {
         entry.signature = signature;
@@ -2951,7 +3047,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (win.firstDay !== win.lastDay) days.push(localDayKey(shiftDays(parseLocalDay(win.lastDay), -1)));
 
     let notice = null;
-    if (!payload && act.error) {
+    if (act.readsDisabled) {
+      notice = {
+        error: false,
+        title: t("activity.readsDisabledTitle"),
+        lead: t("activity.readsDisabledLead"),
+        action: null,
+        secondary: null,
+      };
+    } else if (!payload && act.error) {
       notice = { error: true, title: t("activity.errorTitle"), lead: act.error, action: ["retry", t("activity.retry")] };
     } else if (payload && activityMeasure(payload.totals) === 0) {
       const legacy = Number(payload.totals && payload.totals.legacy || 0);
@@ -3002,7 +3106,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderActivityMenu("agent", els.activityAgentPopover);
     renderActivityBoard();
     renderActivityEarlier();
-    renderActivityDrawer();
+    if (state.drawer.host === "activityView") renderMemoryDrawer();
   }
 
   // ---------- Activity: Earlier ----------
@@ -3043,10 +3147,24 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     try {
       const payload = await fetchJson("/admin/api/activity?" + params.toString());
       if (seq !== early.seq) return;
-      early.payload = payload;
-      early.loadedAt = Date.now();
+      // A disabled payload is not a fresh cache: loadedAt stays 0 so the next open refetches.
+      if (payload.disabled) {
+        early.payload = null;
+        early.loadedAt = 0;
+        early.readsDisabled = true;
+        early.message = payload.message || "";
+        early.error = "";
+        applyReadPolicyToViews({ readEnabled: false });
+      } else {
+        early.payload = payload;
+        early.loadedAt = Date.now();
+        early.readsDisabled = false;
+        early.message = "";
+      }
     } catch (error) {
       if (seq !== early.seq) return;
+      early.readsDisabled = false;
+      early.message = "";
       early.error = (error && error.message) || t("activity.earlierError");
     } finally {
       if (seq === early.seq) {
@@ -3137,9 +3255,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!body) return;
     const act = state.activity;
     const early = act.earlier;
+    // Reads-off: only the disabled notice. Title, lead and note stay in the markup and come back with reads.
+    setHidden(els.activityEarlierTitle, !!early.readsDisabled);
+    setHidden(els.activityEarlierLead, !!early.readsDisabled);
+    setHidden(els.activityEarlierNote, !!early.readsDisabled);
     const selectedDay = act.range === "custom" && act.customFrom && act.customFrom === act.customTo ? act.customFrom : "";
     const days = early.payload && Array.isArray(early.payload.days) ? early.payload.days : [];
-    const signature = [state.locale, early.loading, early.error, early.anchor, early.showAllV21, early.showAllLegacy, selectedDay, JSON.stringify(days)].join("|");
+    const signature = [state.locale, early.loading, early.error, early.readsDisabled, early.anchor, early.showAllV21, early.showAllLegacy, selectedDay, JSON.stringify(days)].join("|");
     if (act.signatures.earlier === signature) {
       fitActivityEarlierPanel();
       return;
@@ -3148,7 +3270,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     body.classList.toggle("is-expanded", early.showAllLegacy || early.showAllV21);
 
     if (!early.payload) {
-      if (early.error) {
+      if (early.readsDisabled && !early.loading) {
+        body.innerHTML = '<p class="actEarlierState">' + escapeHtml(t("activity.readsDisabledTitle")) + '</p>' +
+          '<p class="actEarlierState">' + escapeHtml(t("activity.readsDisabledLead")) + '</p>';
+      } else if (early.error) {
         body.innerHTML = '<p class="actEarlierState is-error">' + escapeHtml(t("activity.earlierError")) + '</p>' +
           '<button class="actRailLink" type="button" data-earlier-action="retry">' + escapeHtml(t("activity.retry")) + '</button>';
       } else {
@@ -3193,55 +3318,157 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     fitActivityEarlierPanel();
   }
 
-  // ---------- Activity: memory detail drawer ----------
+  // ---------- Memory detail drawer (shared by Activity and Memory) ----------
 
-  function isActivityDrawerOpen() {
-    return !!state.activity.drawer.id;
+  function isMemoryDrawerOpen() {
+    return !!state.drawer.id;
   }
 
-  async function openActivityDrawer(id, trigger) {
-    const drawer = state.activity.drawer;
-    const wasOpen = isActivityDrawerOpen();
+  // The drawer markup lives in Activity. It moves into the view that opens it, so its blur only runs inside the
+  // visible view. Activity always shows it as a modal sheet over a scrim. Memory docks it beside the list only
+  // at 1440px and wider; below that it uses the same modal sheet, scrim and focus handling as Activity.
+  function memoryDrawerIsDocked(host) {
+    const query = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
+    return host === "memoryView" && !!(query && query.matches);
+  }
+
+  function mountMemoryDrawer(host) {
+    const view = document.getElementById(host);
+    const drawerEl = els.activityDrawer;
+    if (!view || !drawerEl) return;
+    if (drawerEl.parentNode !== view) {
+      view.appendChild(els.activityDrawerScrim);
+      view.appendChild(drawerEl);
+    }
+    const docked = memoryDrawerIsDocked(host);
+    setAttr(drawerEl, "aria-modal", docked ? "false" : "true");
+    drawerEl.classList.toggle("is-docked", docked);
+  }
+
+  // Marks the open memory on the Activity cards and Memory rows without re-rendering either list.
+  function markOpenMemory() {
+    const id = state.drawer.id;
+    state.activity.cardNodes.forEach((entry, key) => entry.node.classList.toggle("is-open", key === id));
+    state.memory.rowNodes.forEach((entry, key) => {
+      entry.node.classList.toggle("is-open", key === id);
+      setAttr(entry.node, "aria-expanded", key === id ? "true" : "false");
+    });
+  }
+
+  async function openMemoryDrawer(id, trigger, host) {
+    const drawer = state.drawer;
+    const wasOpen = isMemoryDrawerOpen();
+    const nextHost = host || drawer.host || state.activeView;
     if (drawer.id !== id) {
       drawer.summaryOpen = false;
       drawer.factsOpen = false;
     }
     drawer.id = id;
+    drawer.host = nextHost;
     drawer.payload = null;
     drawer.error = "";
     drawer.missing = false;
-    if (!wasOpen) drawer.returnFocus = trigger || document.activeElement;
+    drawer.readsDisabled = false;
+    drawer.copied = false;
+    if (!wasOpen || trigger) drawer.returnFocus = trigger || document.activeElement;
     const seq = drawer.seq + 1;
     drawer.seq = seq;
     setActivityPopover("");
-    renderActivityDrawer();
-    renderActivityBoard();
-    if (els.activityDrawerClose) els.activityDrawerClose.focus();
+    setMemoryPopover("");
+    mountMemoryDrawer(nextHost);
+    renderMemoryDrawer();
+    markOpenMemory();
+    placeMemoryDrawer();
+    // The modal sheet takes focus; the docked drawer leaves it on the row so the list stays easy to walk.
+    if (!memoryDrawerIsDocked(nextHost) && els.activityDrawerClose) els.activityDrawerClose.focus();
     try {
       const payload = await fetchJson("/admin/api/memory-detail?id=" + encodeURIComponent(id));
       if (seq !== drawer.seq) return;
-      drawer.payload = payload;
+      if (payload.disabled) {
+        drawer.readsDisabled = true;
+        drawer.payload = null;
+        drawer.error = "";
+        drawer.missing = false;
+        applyReadPolicyToViews({ readEnabled: false });
+      } else {
+        drawer.payload = payload;
+        drawer.readsDisabled = false;
+      }
     } catch (error) {
       if (seq !== drawer.seq) return;
+      drawer.readsDisabled = false;
       drawer.missing = !!(error && error.message === "Unknown memory ID");
       drawer.error = (error && error.message) || t("activity.drawerError");
     } finally {
-      if (seq === drawer.seq) renderActivityDrawer();
+      if (seq === drawer.seq) renderMemoryDrawer();
     }
   }
 
-  function closeActivityDrawer(restoreFocus) {
-    const drawer = state.activity.drawer;
+  function closeMemoryDrawer(restoreFocus) {
+    const drawer = state.drawer;
     if (!drawer.id) return;
     const target = drawer.returnFocus;
     drawer.id = "";
     drawer.payload = null;
     drawer.error = "";
+    drawer.missing = false;
+    drawer.readsDisabled = false;
+    drawer.copied = false;
     drawer.seq += 1;
     drawer.returnFocus = null;
-    renderActivityDrawer();
-    renderActivityBoard();
-    if (restoreFocus && target && document.contains(target)) target.focus();
+    renderMemoryDrawer();
+    markOpenMemory();
+    drawer.host = "";
+    placeMemoryDrawer();
+    if (restoreFocus && target && document.contains(target)) target.focus({ preventScroll: true });
+  }
+
+  // Docked in Memory, the drawer starts under the summary line and climbs to the top as the page scrolls.
+  // Below 1440px it is a modal sheet, so the inline top is cleared and the stylesheet places it like Activity.
+  function placeMemoryDrawer() {
+    const drawerEl = els.activityDrawer;
+    if (!drawerEl) return;
+    if (!memoryDrawerIsDocked(state.drawer.host) || !state.drawer.id || !els.memorySummary) {
+      if (drawerEl.style.top) drawerEl.style.top = "";
+      return;
+    }
+    const anchor = els.memorySummary.hidden ? els.memoryToolbar : els.memorySummary;
+    const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + 10)) + "px";
+    if (drawerEl.style.top !== next) drawerEl.style.top = next;
+  }
+
+  let memoryDrawerPlaceFrame = 0;
+  function scheduleMemoryDrawerPlace() {
+    if (memoryDrawerPlaceFrame) return;
+    memoryDrawerPlaceFrame = window.requestAnimationFrame(() => {
+      memoryDrawerPlaceFrame = 0;
+      placeMemoryDrawer();
+    });
+  }
+
+  function copyMemoryId() {
+    const drawer = state.drawer;
+    const id = drawer.id;
+    if (!id || !navigator.clipboard) return;
+    navigator.clipboard.writeText(id).then(() => {
+      if (drawer.id !== id) return;
+      drawer.copied = true;
+      renderMemoryDrawerCopy();
+      window.setTimeout(() => {
+        drawer.copied = false;
+        renderMemoryDrawerCopy();
+      }, 1600);
+    }).catch(() => {});
+  }
+
+  function renderMemoryDrawerCopy() {
+    const button = els.memoryDrawerCopy;
+    if (!button) return;
+    const label = t(state.drawer.copied ? "memory.drawerCopied" : "memory.drawerCopyId");
+    setAttr(button, "title", label);
+    setAttr(button, "aria-label", label);
+    button.classList.toggle("is-done", !!state.drawer.copied);
+    button.innerHTML = svgIcon(state.drawer.copied ? "check" : "copy", "actIcon");
   }
 
   function drawerList(items, className) {
@@ -3293,7 +3520,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function renderDrawerNarrative(text, forceRaw) {
     const raw = !!forceRaw || narrativeLooksRaw(text);
     const clamp = narrativeNeedsToggle(text);
-    const open = !!state.activity.drawer.summaryOpen;
+    const open = !!state.drawer.summaryOpen;
     const body = '<p class="actNarrative' + (raw ? " is-raw" : "") + '">' + escapeHtml(text) + '</p>';
     if (!clamp) return body;
     return '<div class="actNarrativeClamp' + (open ? " is-open" : "") + '">' + body +
@@ -3323,49 +3550,73 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function renderDrawerFacts(facts) {
     const list = '<ul class="actFacts">' + facts.map((item) => '<li>' + renderFactText(item) + '</li>').join("") + '</ul>';
     if (!factsNeedToggle(facts)) return list;
-    const open = !!state.activity.drawer.factsOpen;
+    const open = !!state.drawer.factsOpen;
     return '<div class="actNarrativeClamp' + (open ? " is-open" : "") + '">' + list +
       '<button class="actNarrativeToggle" type="button" data-facts-toggle="true" aria-expanded="' + (open ? "true" : "false") + '">' +
       escapeHtml(t(open ? "activity.drawerShowLess" : "activity.drawerShowMore")) + '</button></div>';
   }
 
-  function renderActivityDrawerBody(detail) {
+  // Long paths keep their last three segments on screen; the full path is in the tooltip.
+  function drawerFileTail(text) {
+    const parts = String(text).split(String.fromCharCode(92)).join("/").split("/").filter(Boolean);
+    return parts.length > 3 ? parts.slice(-3).join("/") : String(text);
+  }
+
+  function renderDrawerFiles(title, files, modified) {
+    const rows = files.map((file) => {
+      const text = typeof file === "string" ? file : JSON.stringify(file);
+      return '<li title="' + escapeHtml(text) + '">' + svgIcon("file", "actFileIcon") + '<span class="actFileName">' + escapeHtml(drawerFileTail(text)) + '</span></li>';
+    }).join("");
+    return '<section class="actPane actFilesPane">' +
+      '<h3 class="actPaneTitle">' + svgIcon("file", "actPaneIcon") + '<span>' + escapeHtml(title) + '</span><span class="actSectionCount">' + escapeHtml(formatCount(files.length)) + '</span></h3>' +
+      '<ul class="actFiles' + (modified ? ' is-modified' : '') + '">' + rows + '</ul></section>';
+  }
+
+  function renderDrawerTask(task) {
+    const created = parseTimestamp(task.created_at);
+    const tone = taskStatusTone(task.status);
+    const stat = (label, value) => '<div class="actStat"><span class="actStatLabel">' + escapeHtml(label) + '</span><span class="actStatValue">' + value + '</span></div>';
+    const notes = ['<code class="actMono" title="' + escapeHtml(task.task_id || "") + '">' + escapeHtml(String(task.task_id || "").slice(0, 8)) + '</code>'];
+    if (Number(task.segment_count || 0) > 1) notes.push(escapeHtml(t("activity.drawerTaskSegment", { i: formatCount(Number(task.segment_index || 0) + 1), n: formatCount(task.segment_count) })));
+    if (task.trigger) notes.push(escapeHtml(t("activity.drawerTaskTrigger", { name: task.trigger })));
+    if (created) notes.push('<time datetime="' + escapeHtml(created.toISOString()) + '">' + escapeHtml(formatShortDate(created) + " · " + formatClock(created)) + '</time>');
+    return '<li class="actPane actTask">' +
+      '<div class="actStats">' +
+        stat(t("memory.drawerStatus"), '<span class="actStatusDot tone-' + tone + '" aria-hidden="true"></span><span class="actStatusWord tone-' + tone + '">' + escapeHtml(task.status || "—") + '</span>') +
+        stat(t("memory.drawerEvents"), escapeHtml(formatCount(task.event_count))) +
+        stat(t("memory.drawerEvidence"), escapeHtml(formatCount(task.evidence_count))) +
+        stat(t("memory.drawerLlmCalls"), escapeHtml(formatCount(task.llm_calls))) +
+      '</div>' +
+      '<p class="actTaskFacts">' + notes.join('<span aria-hidden="true"> · </span>') + '</p>' +
+      (task.last_error ? '<p class="actTaskError">' + escapeHtml(task.last_error) + '</p>' : '') +
+      '</li>';
+  }
+
+  function renderMemoryDrawerBody(detail) {
     const memory = detail.memory || {};
     const parts = [];
     const narrative = String(memory.narrative || "").trim();
-    parts.push(drawerSection(t("activity.drawerSummary"), null,
-      narrative ? renderDrawerNarrative(narrative, memory.fallback && narrative.length > 180) : drawerEmpty(t("activity.drawerNoSummary"))));
+    // The summary reads as the drawer's lead paragraph; its heading is for screen readers.
+    parts.push('<section class="actSection is-lead"><h3 class="visuallyHidden">' + escapeHtml(t("activity.drawerSummary")) + '</h3>' +
+      (narrative ? renderDrawerNarrative(narrative, memory.fallback && narrative.length > 180) : drawerEmpty(t("activity.drawerNoSummary"))) + '</section>');
     const facts = Array.isArray(memory.facts) ? memory.facts : [];
     if (facts.length) parts.push(drawerSection(t("activity.drawerFacts"), facts.length, renderDrawerFacts(facts)));
     const concepts = Array.isArray(memory.concepts) ? memory.concepts : [];
     if (concepts.length) {
-      parts.push(drawerSection(t("activity.drawerConcepts"), null, '<div class="actTags">' +
-        concepts.map((concept) => '<span class="actTag">' + escapeHtml(typeof concept === "string" ? concept : JSON.stringify(concept)) + '</span>').join("") + '</div>'));
+      parts.push(drawerSection(t("activity.drawerConcepts"), concepts.length, '<div class="actTags">' +
+        concepts.map((concept) => '<span class="actTag is-concept">' + escapeHtml(typeof concept === "string" ? concept : JSON.stringify(concept)) + '</span>').join("") + '</div>'));
     }
     const modified = Array.isArray(memory.files_modified) ? memory.files_modified : [];
     const read = Array.isArray(memory.files_read) ? memory.files_read : [];
-    if (modified.length) parts.push(drawerSection(t("activity.drawerFilesModified"), modified.length, drawerList(modified, "actFiles is-modified")));
-    if (read.length) parts.push(drawerSection(t("activity.drawerFilesRead"), read.length, drawerList(read, "actFiles")));
+    if (modified.length || read.length) {
+      parts.push('<div class="actPanes' + (modified.length && read.length ? ' is-pair' : '') + '">' +
+        (modified.length ? renderDrawerFiles(t("activity.drawerFilesModified"), modified, true) : '') +
+        (read.length ? renderDrawerFiles(t("activity.drawerFilesRead"), read, false) : '') + '</div>');
+    }
 
     const tasks = Array.isArray(detail.tasks) ? detail.tasks : [];
-    const taskRows = tasks.map((task) => {
-      const created = parseTimestamp(task.created_at);
-      const stats = [];
-      if (Number(task.segment_count || 0) > 1) stats.push(t("activity.drawerTaskSegment", { i: formatCount(Number(task.segment_index || 0) + 1), n: formatCount(task.segment_count) }));
-      stats.push(t("activity.drawerTaskEvents", { n: formatCount(task.event_count) }));
-      stats.push(t("activity.drawerTaskEvidence", { n: formatCount(task.evidence_count) }));
-      stats.push(t("activity.drawerTaskLlm", { n: formatCount(task.llm_calls) }));
-      if (task.trigger) stats.push(t("activity.drawerTaskTrigger", { name: task.trigger }));
-      return '<li class="actTask">' +
-        '<div class="actTaskHead"><span class="actStatus tone-' + taskStatusTone(task.status) + '">' + escapeHtml(task.status || "—") + '</span>' +
-        '<code class="actMono" title="' + escapeHtml(task.task_id || "") + '">' + escapeHtml(String(task.task_id || "").slice(0, 8)) + '</code>' +
-        (created ? '<time class="actTaskTime" datetime="' + escapeHtml(created.toISOString()) + '">' + escapeHtml(formatClock(created)) + '</time>' : '') + '</div>' +
-        '<p class="actTaskFacts">' + stats.map(escapeHtml).join('<span aria-hidden="true"> · </span>') + '</p>' +
-        (task.last_error ? '<p class="actTaskError">' + escapeHtml(task.last_error) + '</p>' : '') +
-        '</li>';
-    }).join("");
-    parts.push(drawerSection(t("activity.drawerTasks"), tasks.length,
-      tasks.length ? '<ul class="actTasks">' + taskRows + '</ul>' + (detail.evidence_available ? '<p class="actSectionNote">' + escapeHtml(t("activity.drawerEvidence")) + '</p>' : '')
+    parts.push(drawerSection(t("activity.drawerTasks"), tasks.length || null,
+      tasks.length ? '<ul class="actTasks">' + tasks.map(renderDrawerTask).join("") + '</ul>' + (detail.evidence_available ? '<p class="actSectionNote">' + escapeHtml(t("activity.drawerEvidence")) + '</p>' : '')
         : drawerEmpty(t("activity.drawerTasksEmpty"))));
 
     const flags = Array.isArray(detail.duplicate_flags) ? detail.duplicate_flags : [];
@@ -3381,7 +3632,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const generated = parseTimestamp(review.generated_at);
       const skills = Array.isArray(review.matched_skill_titles) ? review.matched_skill_titles : [];
       const states = Array.isArray(review.recommendation_states) ? review.recommendation_states : [];
-      reviewHtml = '<div class="actReviewBox">' +
+      reviewHtml = '<div class="actPane actReviewBox">' +
         '<div class="actReviewHead"><span class="actStatus tone-' + (review.status === "open" ? "info" : taskStatusTone(review.status)) + '">' + escapeHtml(review.status || "—") + '</span>' +
         (generated ? '<span class="actReviewTime">' + escapeHtml(t("activity.drawerReviewGenerated", { time: generated.toLocaleString(state.locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) })) + '</span>' : '') + '</div>' +
         '<dl class="actReviewFields">' +
@@ -3405,18 +3656,51 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return parts.join("");
   }
 
-  function renderActivityDrawer() {
+  function memorySourceLabel(source) {
+    if (source === "task") return t("memory.sourceTask");
+    if (source === "tool") return t("memory.sourceTool");
+    if (source === "legacy_compacted") return t("memory.sourceCompacted");
+    return "";
+  }
+
+  // Header chips: kind, source, agent, project and time, as in a list row.
+  function renderMemoryDrawerMeta(memory) {
+    const created = parseTimestamp(memory.created_at);
+    const kind = memory.kind === "outcome" || memory.kind === "context" ? memory.kind : "legacy";
+    const chips = ['<span class="kindPill kind-' + kind + '">' + escapeHtml(memoryKindLabel(kind)) + '</span>'];
+    if (memory.source === "explicit") chips.push('<span class="actBadge is-mcp" title="' + escapeHtml(t("activity.mcpHint")) + '">' + escapeHtml(t("activity.mcp")) + '</span>');
+    if (memory.fallback) chips.push('<span class="actBadge is-fallback" title="' + escapeHtml(t("activity.fallbackHint")) + '">' + escapeHtml(t("activity.fallback")) + '</span>');
+    const items = [];
+    const source = memorySourceLabel(memory.source);
+    if (source) items.push('<span class="actMetaChip">' + svgIcon(memory.source === "tool" ? "terminal" : "file", "actMetaChipIcon") + escapeHtml(source) + '</span>');
+    if (memory.agent_id) items.push('<span class="actMetaChip is-agent">' + escapeHtml(memory.agent_id) + '</span>');
+    if (memory.project_path) items.push('<span class="actMetaChip" title="' + escapeHtml(memory.project_path) + '">' + escapeHtml(projectBasename(memory.project_path)) + '</span>');
+    if (created) {
+      const ago = calendarDaysAgo(created);
+      const when = ago === 0 ? formatClock(created) : formatShortDate(created) + " · " + formatClock(created);
+      items.push('<time class="actMetaChip actDrawerTime" datetime="' + escapeHtml(created.toISOString()) + '" title="' + escapeHtml(created.toLocaleString(state.locale)) + '">' + escapeHtml(when) + '</time>');
+    }
+    return chips.join("") + (items.length ? '<span class="actMetaChips">' + items.join("") + '</span>' : '');
+  }
+
+  function renderMemoryDrawer() {
     const drawerEl = els.activityDrawer;
     if (!drawerEl) return;
-    const act = state.activity;
-    const drawer = act.drawer;
+    const drawer = state.drawer;
     const open = !!drawer.id;
     setHidden(drawerEl, !open);
-    setHidden(els.activityDrawerScrim, !open);
-    els.activityView.classList.toggle("has-drawer", open);
-    const signature = [state.locale, drawer.id, drawer.error, JSON.stringify(drawer.payload)].join("|");
-    if (act.signatures.drawer === signature) return;
-    act.signatures.drawer = signature;
+    setHidden(els.memoryDrawerCopy, !!drawer.readsDisabled);
+    // Activity's sheet is always modal over the scrim. Memory hides the scrim only while docked (1440px and wider).
+    // is-drawer-open stays on for Memory so the wide-viewport CSS can reserve list space; that reserve is itself
+    // limited to min-width 1440px.
+    setHidden(els.activityDrawerScrim, !open || memoryDrawerIsDocked(drawer.host));
+    if (els.activityView) els.activityView.classList.toggle("has-drawer", open && drawer.host === "activityView");
+    if (els.memoryView) els.memoryView.classList.toggle("is-drawer-open", open && drawer.host === "memoryView");
+    const card = !open || drawer.readsDisabled ? null : findDrawerCard(drawer.id);
+    const signature = [state.locale, drawer.id, drawer.host, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload), drawer.payload ? "" : JSON.stringify(card)].join("|");
+    if (drawer.signature === signature) return;
+    drawer.signature = signature;
+    renderMemoryDrawerCopy();
     if (!open) {
       els.activityDrawerMeta.innerHTML = "";
       els.activityDrawerSub.innerHTML = "";
@@ -3424,32 +3708,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       setText(els.activityDrawerTitle, "");
       return;
     }
-    // Until the detail arrives, the card already on screen supplies the header.
-    const card = act.cards.find((item) => item.id === drawer.id) || null;
+    // Until the detail arrives, the row or card already on screen supplies the header.
     const memory = drawer.payload && drawer.payload.memory ? drawer.payload.memory : card;
+    els.activityDrawerSub.innerHTML = "";
     if (memory) {
-      const created = parseTimestamp(memory.created_at);
-      const kind = memory.kind === "outcome" || memory.kind === "context" ? memory.kind : "legacy";
-      const badges = [];
-      if (memory.source === "explicit") badges.push('<span class="actBadge is-mcp" title="' + escapeHtml(t("activity.mcpHint")) + '">' + escapeHtml(t("activity.mcp")) + '</span>');
-      if (memory.fallback) badges.push('<span class="actBadge is-fallback" title="' + escapeHtml(t("activity.fallbackHint")) + '">' + escapeHtml(t("activity.fallback")) + '</span>');
-      els.activityDrawerMeta.innerHTML = '<span class="kindPill kind-' + kind + '">' + escapeHtml(t(kind === "outcome" ? "home.kindOutcome" : kind === "context" ? "home.kindContext" : "home.kindLegacy")) + '</span>' + badges.join("") +
-        (created ? '<time class="actDrawerTime" datetime="' + escapeHtml(created.toISOString()) + '">' +
-          escapeHtml(created.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric" }) + " · " + formatClock(created)) + '</time>' : '');
+      els.activityDrawerMeta.innerHTML = renderMemoryDrawerMeta(memory);
       const title = String(memory.title || "").trim();
       setText(els.activityDrawerTitle, title || t("activity.untitled"));
       setAttr(els.activityDrawerTitle, "title", title);
-      els.activityDrawerSub.innerHTML = '<span class="actProject" title="' + escapeHtml(memory.project_path || "") + '"><span class="actDot" data-hue="' + projectHue(memory.project_path) + '" aria-hidden="true"></span>' +
-        '<span class="actProjectName">' + escapeHtml(projectBasename(memory.project_path) || "—") + '</span></span>' +
-        (memory.agent_id ? '<span class="actAgent">' + escapeHtml(memory.agent_id) + '</span>' : '');
     } else {
       els.activityDrawerMeta.innerHTML = "";
-      els.activityDrawerSub.innerHTML = "";
-      setText(els.activityDrawerTitle, drawer.error ? t("activity.drawerError") : t("activity.drawerLoading"));
+      setText(els.activityDrawerTitle, drawer.readsDisabled ? t("activity.readsDisabledTitle") : (drawer.error ? t("activity.drawerError") : t("activity.drawerLoading")));
       setAttr(els.activityDrawerTitle, "title", "");
     }
-    if (drawer.payload) {
-      els.activityDrawerBody.innerHTML = renderActivityDrawerBody(drawer.payload);
+    if (drawer.readsDisabled) {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState"><p>' + escapeHtml(t("activity.drawerReadsDisabled")) + '</p></div>';
+    } else if (drawer.payload) {
+      els.activityDrawerBody.innerHTML = renderMemoryDrawerBody(drawer.payload);
     } else if (drawer.error) {
       els.activityDrawerBody.innerHTML = '<div class="actDrawerState is-error"><p>' + escapeHtml(drawer.missing ? t("activity.drawerMissing") : drawer.error) + '</p>' +
         (drawer.missing ? '' : '<button class="bgButton" type="button" data-drawer-open="' + escapeHtml(drawer.id) + '">' + escapeHtml(t("activity.retry")) + '</button>') + '</div>';
@@ -3459,7 +3734,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
-  function trapActivityDrawerFocus(event) {
+  function findDrawerCard(id) {
+    const list = state.drawer.host === "memoryView" ? state.memory.items : state.activity.cards;
+    return list.find((item) => item.id === id) || null;
+  }
+
+  function trapMemoryDrawerFocus(event) {
     const focusable = Array.from(els.activityDrawer.querySelectorAll("button, [href], input, [tabindex]:not([tabindex='-1'])"))
       .filter((node) => !node.disabled && node.offsetParent !== null);
     if (!focusable.length) return;
@@ -3474,6 +3754,71 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
+  // The drawer's own controls. Listeners sit on the drawer node, so they follow it into either view.
+  function bindMemoryDrawerEvents() {
+    const drawerEl = els.activityDrawer;
+    if (!drawerEl) return;
+    drawerEl.addEventListener("click", (event) => {
+      const drawer = state.drawer;
+      if (event.target.closest("#activityDrawerClose")) {
+        closeMemoryDrawer(true);
+        return;
+      }
+      if (event.target.closest("#memoryDrawerCopy")) {
+        copyMemoryId();
+        return;
+      }
+      const reopen = event.target.closest("[data-drawer-open]");
+      if (reopen) {
+        void openMemoryDrawer(reopen.getAttribute("data-drawer-open"), null, drawer.host);
+        return;
+      }
+      const narrativeToggle = event.target.closest("[data-narrative-toggle]");
+      if (narrativeToggle) {
+        drawer.summaryOpen = !drawer.summaryOpen;
+        const wrap = narrativeToggle.closest(".actNarrativeClamp");
+        if (wrap) wrap.classList.toggle("is-open", drawer.summaryOpen);
+        narrativeToggle.setAttribute("aria-expanded", drawer.summaryOpen ? "true" : "false");
+        narrativeToggle.textContent = t(drawer.summaryOpen ? "activity.drawerShowLess" : "activity.drawerShowMore");
+        return;
+      }
+      const factsToggle = event.target.closest("[data-facts-toggle]");
+      if (factsToggle) {
+        drawer.factsOpen = !drawer.factsOpen;
+        const wrap = factsToggle.closest(".actNarrativeClamp");
+        if (wrap) wrap.classList.toggle("is-open", drawer.factsOpen);
+        factsToggle.setAttribute("aria-expanded", drawer.factsOpen ? "true" : "false");
+        factsToggle.textContent = t(drawer.factsOpen ? "activity.drawerShowLess" : "activity.drawerShowMore");
+      }
+    });
+    drawerEl.addEventListener("keydown", (event) => {
+      if (!isMemoryDrawerOpen()) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMemoryDrawer(true);
+      } else if (event.key === "Tab" && !memoryDrawerIsDocked(state.drawer.host)) {
+        trapMemoryDrawerFocus(event);
+      }
+    });
+    if (els.activityDrawerScrim) els.activityDrawerScrim.addEventListener("click", () => closeMemoryDrawer(true));
+    // Escape with focus outside the drawer (after a click on the scrim, say) still closes it.
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !event.defaultPrevented && isMemoryDrawerOpen()) closeMemoryDrawer(true);
+    });
+    // One listener: crossing 1440px while Memory's drawer is open flips docked and modal (scrim, aria-modal, focus).
+    const memoryDrawerDockQuery = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
+    if (memoryDrawerDockQuery && memoryDrawerDockQuery.addEventListener) {
+      memoryDrawerDockQuery.addEventListener("change", () => {
+        if (!isMemoryDrawerOpen() || state.drawer.host !== "memoryView") return;
+        mountMemoryDrawer(state.drawer.host);
+        renderMemoryDrawer();
+        placeMemoryDrawer();
+        if (!memoryDrawerIsDocked(state.drawer.host) && els.activityDrawerClose) els.activityDrawerClose.focus();
+      });
+    }
+  }
+
   function getActivityPopoverParts(name) {
     if (name === "project") return [els.activityProjectPopover, els.activityProjectButton];
     if (name === "agent") return [els.activityAgentPopover, els.activityAgentButton];
@@ -3484,7 +3829,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // Popovers are children of the view (position: relative), so they scroll with the page and only need placing
   // when they open or their content changes width.
   function positionActivityPopover(popover, anchor) {
-    const view = els.activityView.getBoundingClientRect();
+    placeViewPopover(els.activityView, popover, anchor);
+  }
+
+  function placeViewPopover(viewEl, popover, anchor) {
+    const view = viewEl.getBoundingClientRect();
     const rect = anchor.getBoundingClientRect();
     const left = Math.max(0, Math.min(rect.left - view.left, view.width - popover.offsetWidth));
     popover.style.left = Math.round(left) + "px";
@@ -3575,39 +3924,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!els.activityView) return;
     els.activityView.addEventListener("click", (event) => {
       const act = state.activity;
-      if (event.target.closest("#activityDrawerClose") || event.target === els.activityDrawerScrim) {
-        closeActivityDrawer(true);
-        return;
-      }
-      const reopen = event.target.closest("[data-drawer-open]");
-      if (reopen) {
-        void openActivityDrawer(reopen.getAttribute("data-drawer-open"), null);
-        return;
-      }
-      const narrativeToggle = event.target.closest("[data-narrative-toggle]");
-      if (narrativeToggle) {
-        const drawer = act.drawer;
-        drawer.summaryOpen = !drawer.summaryOpen;
-        const wrap = narrativeToggle.closest(".actNarrativeClamp");
-        if (wrap) wrap.classList.toggle("is-open", drawer.summaryOpen);
-        narrativeToggle.setAttribute("aria-expanded", drawer.summaryOpen ? "true" : "false");
-        narrativeToggle.textContent = t(drawer.summaryOpen ? "activity.drawerShowLess" : "activity.drawerShowMore");
-        return;
-      }
-      const factsToggle = event.target.closest("[data-facts-toggle]");
-      if (factsToggle) {
-        const drawer = act.drawer;
-        drawer.factsOpen = !drawer.factsOpen;
-        const wrap = factsToggle.closest(".actNarrativeClamp");
-        if (wrap) wrap.classList.toggle("is-open", drawer.factsOpen);
-        factsToggle.setAttribute("aria-expanded", drawer.factsOpen ? "true" : "false");
-        factsToggle.textContent = t(drawer.factsOpen ? "activity.drawerShowLess" : "activity.drawerShowMore");
-        return;
-      }
-      if (event.target.closest("#activityDrawer")) return;
+      // The shared drawer and its scrim handle their own clicks (see bindMemoryDrawerEvents).
+      if (els.activityDrawer.contains(event.target) || event.target === els.activityDrawerScrim) return;
       const card = event.target.closest(".actCard[data-memory-id]");
       if (card) {
-        void openActivityDrawer(card.getAttribute("data-memory-id"), card);
+        void openMemoryDrawer(card.getAttribute("data-memory-id"), card, "activityView");
         return;
       }
       const earlierDay = event.target.closest("[data-earlier-day]");
@@ -3694,19 +4015,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
 
     els.activityView.addEventListener("keydown", (event) => {
-      if (isActivityDrawerOpen() && els.activityDrawer.contains(event.target)) {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          closeActivityDrawer(true);
-        } else if (event.key === "Tab") {
-          trapActivityDrawerFocus(event);
-        }
-        return;
-      }
+      if (els.activityDrawer.contains(event.target)) return;
       if ((event.key === "Enter" || event.key === " ") && event.target.matches(".actCard[data-memory-id]")) {
         event.preventDefault();
-        void openActivityDrawer(event.target.getAttribute("data-memory-id"), event.target);
+        void openMemoryDrawer(event.target.getAttribute("data-memory-id"), event.target, "activityView");
         return;
       }
       const open = state.activity.openPopover;
@@ -3758,11 +4070,767 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     window.addEventListener("scroll", scheduleActivityEarlierFit, { passive: true });
 
     els.activityChips.addEventListener("scroll", updateActivityChipsOverflow, { passive: true });
+  }
 
-    // Escape with focus outside the drawer (after a click on the scrim, say) still closes it.
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !event.defaultPrevented && isActivityDrawerOpen()) closeActivityDrawer(true);
+  // ---------- Memory ----------
+
+  const MEMORY_PAGE = 50;
+  const MEMORY_MAX_PAGE = 100;
+  const MEMORY_REFRESH_HEADROOM = 20;
+  const MEMORY_SEARCH_DELAY_MS = 300;
+  const MEMORY_SCROLL_IDLE_MS = 1500;
+  const MEMORY_SKELETON = '<div class="memGroup is-skeleton" aria-hidden="true"><div class="memDayHead"><span class="actSkel is-short"></span></div><div class="memRows">' +
+    '<div class="memRow is-skeleton"><span class="actSkel is-short"></span><span class="actSkel is-long"></span></div>'.repeat(6) + '</div></div>';
+  const MEMORY_KINDS = [["default", "memory.kindDefault"], ["outcome", "memory.kindOutcome"], ["context", "memory.kindContext"], ["legacy", "memory.kindLegacy"], ["all", "memory.kindEverything"]];
+  const MEMORY_SOURCES = [["", "memory.allSources"], ["task", "memory.sourceTask"], ["tool", "memory.sourceTool"], ["explicit", "memory.sourceExplicit"], ["legacy_compacted", "memory.sourceCompacted"]];
+
+  // Any time sends no bounds; 7 and 30 days start at a local midnight and stay open-ended, so the cursor survives
+  // the poll; Custom covers whole local days.
+  function getMemoryRange() {
+    const mem = state.memory;
+    const today = shiftDays(new Date(), 0);
+    if (mem.range === "7d") return { from: shiftDays(today, -6), to: null };
+    if (mem.range === "30d") return { from: shiftDays(today, -29), to: null };
+    if (mem.range === "custom") {
+      const start = parseLocalDay(mem.customFrom);
+      const end = parseLocalDay(mem.customTo);
+      if (start && end && start <= end) return { from: start, to: shiftDays(end, 1) };
+    }
+    return { from: null, to: null };
+  }
+
+  function memoryKey() {
+    const mem = state.memory;
+    const range = getMemoryRange();
+    return JSON.stringify([mem.query, mem.project.toLowerCase(), mem.agent.toLowerCase(), mem.kind, mem.source,
+      range.from ? range.from.toISOString() : "", range.to ? range.to.toISOString() : ""]);
+  }
+
+  function memoryUrl(limit, cursor) {
+    const mem = state.memory;
+    const range = getMemoryRange();
+    const params = new URLSearchParams({
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+      limit: String(limit),
+      stats: cursor ? "0" : "1",
     });
+    if (mem.query) params.set("query", mem.query);
+    if (mem.project) params.set("project", mem.project);
+    if (mem.agent) params.set("agent", mem.agent);
+    if (mem.kind !== "default") params.set("kind", mem.kind);
+    if (mem.source) params.set("source", mem.source);
+    if (range.from) params.set("from", range.from.toISOString());
+    if (range.to) params.set("to", range.to.toISOString());
+    if (cursor) params.set("cursor", cursor);
+    return "/admin/api/memories?" + params.toString();
+  }
+
+  function isMemoryFiltered() {
+    const mem = state.memory;
+    return !!(mem.query || mem.project || mem.agent || mem.kind !== "default" || mem.source || mem.range !== "any");
+  }
+
+  // The 5 s poll only refreshes the plain list. isMemoryFiltered covers search text, project, agent, kind,
+  // source and range; a debounce that has not fired yet still sits in searchTimer.
+  function memoryCanPoll() {
+    const mem = state.memory;
+    return state.activeView === "memoryView" && !document.hidden && (mem.loaded || mem.readsDisabled) &&
+      !isMemoryFiltered() && !mem.searchTimer &&
+      !isMemoryDrawerOpen() && !mem.openPopover && Date.now() - mem.lastScrollAt > MEMORY_SCROLL_IDLE_MS;
+  }
+
+  // days[] holds full-day counts for the days on a page; the boundary day repeats on the next page.
+  function mergeMemoryDays(current, incoming) {
+    const counts = new Map(current.map((day) => [day.day, day.count]));
+    incoming.forEach((day) => counts.set(day.day, Number(day.count) || 0));
+    return Array.from(counts, (entry) => ({ day: entry[0], count: entry[1] })).sort((left, right) => (left.day < right.day ? 1 : left.day > right.day ? -1 : 0));
+  }
+
+  // mode: "reset" loads page 1 of new filters, "more" appends the next page, "refresh" re-reads the loaded head and
+  // keeps older pages behind it. Only the newest request may write state.
+  async function loadMemories(mode) {
+    const mem = state.memory;
+    const key = memoryKey();
+    // After reads were off, page 1 is the next load. A poll or load-more must not resume the old cursor.
+    if (mem.readsDisabled) mode = "reset";
+    if (mode !== "reset" && key !== mem.key) mode = "reset";
+    if (mode === "refresh" && mem.busySeq) return;
+    if (mode === "refresh" && !mem.loaded) mode = "reset";
+    if (mode === "more" && (!mem.nextCursor || mem.moreSeq)) return;
+    const seq = mem.seq + 1;
+    mem.seq = seq;
+    const loaded = mem.items.length;
+    const limit = mode === "refresh" ? Math.min(MEMORY_MAX_PAGE, Math.max(MEMORY_PAGE, loaded + MEMORY_REFRESH_HEADROOM)) : MEMORY_PAGE;
+    const cursor = mode === "more" ? mem.nextCursor : null;
+    if (mode !== "refresh") mem.busySeq = seq;
+    if (mode === "reset") {
+      mem.key = key;
+      mem.error = "";
+      mem.stale = true;
+      mem.moreSeq = 0;
+      // The old cursor is bound to the old filters.
+      mem.nextCursor = null;
+    }
+    if (mode === "more") mem.moreSeq = seq;
+    renderMemory();
+    try {
+      const payload = await fetchJson(memoryUrl(limit, cursor));
+      if (seq !== mem.seq) return;
+      if (payload.disabled) {
+        mem.items = [];
+        mem.days = [];
+        mem.stats = null;
+        mem.nextCursor = null;
+        mem.loaded = false;
+        mem.readsDisabled = true;
+        mem.error = "";
+        mem.refreshFailed = false;
+        // Drop rows that are already on screen. Page 1, a poll and load-more all land here.
+        mem.groupNodes.clear();
+        mem.rowNodes.clear();
+        if (els.memoryList) els.memoryList.innerHTML = "";
+        applyReadPolicyToViews({ readEnabled: false });
+      } else {
+        // Reads came back on this response: do not merge onto pages from before the gap.
+        if (mem.readsDisabled) mode = "reset";
+        mem.readsDisabled = false;
+        const incoming = Array.isArray(payload.items) ? payload.items : [];
+        const days = Array.isArray(payload.days) ? payload.days : [];
+        if (mode === "more") {
+          const seen = new Set(mem.items.map((item) => item.id));
+          mem.items = mem.items.concat(incoming.filter((item) => !seen.has(item.id)));
+          mem.days = mergeMemoryDays(mem.days, days);
+          mem.nextCursor = payload.next_cursor || null;
+        } else if (mode === "refresh" && loaded + MEMORY_REFRESH_HEADROOM > MEMORY_MAX_PAGE && incoming.length && payload.next_cursor) {
+          // More rows are loaded than one request returns: the refreshed head replaces its part and the older
+          // pages stay behind it, with the cursor that already points past them.
+          const index = mem.items.findIndex((item) => item.id === incoming[incoming.length - 1].id);
+          if (index >= 0) {
+            mem.items = incoming.concat(mem.items.slice(index + 1));
+            mem.days = mergeMemoryDays(mem.days, days);
+          } else {
+            mem.items = incoming;
+            mem.days = mergeMemoryDays([], days);
+            mem.nextCursor = payload.next_cursor || null;
+          }
+        } else {
+          mem.items = incoming;
+          mem.days = mergeMemoryDays([], days);
+          mem.nextCursor = payload.next_cursor || null;
+        }
+        if (!cursor) mem.stats = payload.stats || null;
+        mem.loaded = true;
+        mem.refreshFailed = false;
+        mem.error = "";
+      }
+      mem.loadedAt = Date.now();
+    } catch (error) {
+      if (seq !== mem.seq) return;
+      if (mode === "more" && error && error.status === 400) {
+        // A stale cursor: start over from page 1 under the same filters.
+        void loadMemories("reset");
+        return;
+      }
+      if (mode === "reset") {
+        mem.items = [];
+        mem.days = [];
+        mem.stats = null;
+        mem.nextCursor = null;
+        mem.loaded = false;
+        mem.readsDisabled = false;
+        mem.error = (error && error.message) || t("memory.errorTitle");
+      } else {
+        mem.refreshFailed = true;
+      }
+    } finally {
+      if (mem.busySeq === seq) mem.busySeq = 0;
+      if (mem.moreSeq === seq) mem.moreSeq = 0;
+      if (seq === mem.seq) {
+        mem.stale = false;
+        renderMemory();
+      }
+    }
+  }
+
+  function setMemoryFilters(patch) {
+    const mem = state.memory;
+    if (mem.searchTimer) {
+      window.clearTimeout(mem.searchTimer);
+      mem.searchTimer = 0;
+    }
+    // A search typed but not yet sent goes along with the new filter.
+    if (!Object.prototype.hasOwnProperty.call(patch, "query") && els.memorySearchInput) {
+      patch.query = els.memorySearchInput.value.trim().slice(0, 200);
+    }
+    Object.assign(mem, patch);
+    void loadMemories("reset");
+  }
+
+  function clearMemoryFilters() {
+    if (els.memorySearchInput) els.memorySearchInput.value = "";
+    setMemoryFilters({ query: "", project: "", agent: "", kind: "default", source: "", range: "any", customFrom: "", customTo: "" });
+  }
+
+  function applyMemorySearch() {
+    const value = els.memorySearchInput.value.trim().slice(0, 200);
+    if (state.memory.searchTimer) {
+      window.clearTimeout(state.memory.searchTimer);
+      state.memory.searchTimer = 0;
+    }
+    if (value === state.memory.query) return;
+    setMemoryFilters({ query: value });
+  }
+
+  function memoryKindLabel(kind) {
+    const entry = MEMORY_KINDS.find((item) => item[0] === kind);
+    return entry ? t(entry[1]) : kind;
+  }
+
+  function memorySourceName(source) {
+    const entry = MEMORY_SOURCES.find((item) => item[0] === source);
+    return entry ? t(entry[1]) : source;
+  }
+
+  // Project and agent lists come from the 5 s overview.
+  function memoryFacetValues(name) {
+    const mem = state.memory;
+    const raw = state.overview && Array.isArray(state.overview[name === "project" ? "projects" : "agents"]) ? state.overview[name === "project" ? "projects" : "agents"] : [];
+    const values = raw.map((value) => (typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || ""))).filter(Boolean);
+    const selected = name === "project" ? mem.project : mem.agent;
+    if (selected && !values.some((value) => isActivitySelected(value, selected))) values.push(selected);
+    const label = (value) => (name === "project" ? projectBasename(value) : value);
+    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: name === "project" ? value : "" }));
+  }
+
+  function memoryMenuOptions(name) {
+    const mem = state.memory;
+    if (name === "project") return [{ value: "", label: t("memory.allProjects") }].concat(memoryFacetValues("project"));
+    if (name === "agent") return [{ value: "", label: t("memory.allAgents") }].concat(memoryFacetValues("agent"));
+    if (name === "kind") return MEMORY_KINDS.map((item) => ({ value: item[0], label: t(item[1]), dot: item[0] === "outcome" || item[0] === "context" || item[0] === "legacy" ? item[0] : "" }));
+    return MEMORY_SOURCES.map((item) => ({ value: item[0], label: t(item[1]) }));
+  }
+
+  function renderMemoryMenu(name, popover) {
+    const mem = state.memory;
+    const options = memoryMenuOptions(name);
+    const selected = mem[name];
+    const signature = [state.locale, selected, JSON.stringify(options)].join("|");
+    if (mem.signatures["menu-" + name] === signature) return;
+    mem.signatures["menu-" + name] = signature;
+    const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute("data-memory-value") : null;
+    popover.innerHTML = options.map((option, index) => {
+      const isSelected = name === "project" || name === "agent" ? (option.value ? isActivitySelected(option.value, selected) : !selected) : option.value === selected;
+      return (index === 1 ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
+        '<button class="actOption" type="button" role="option" tabindex="-1" data-memory-option="' + name + '" data-memory-value="' + escapeHtml(option.value) + '" aria-selected="' + isSelected + '"' +
+        (option.title ? ' title="' + escapeHtml(option.title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
+        (option.dot ? '<span class="memOptDot kind-' + option.dot + '" aria-hidden="true"></span>' : '') +
+        '<span class="actOptionName">' + escapeHtml(option.label) + '</span></button>';
+    }).join("");
+    if (focused !== null) {
+      const target = Array.from(popover.querySelectorAll("[data-memory-value]")).find((node) => node.getAttribute("data-memory-value") === focused);
+      if (target) target.focus();
+    }
+  }
+
+  function renderMemoryMenus() {
+    if (!els.memoryView) return;
+    renderMemoryMenu("project", els.memoryProjectPopover);
+    renderMemoryMenu("agent", els.memoryAgentPopover);
+    renderMemoryMenu("kind", els.memoryKindPopover);
+    renderMemoryMenu("source", els.memorySourcePopover);
+    const parts = getMemoryPopoverParts(state.memory.openPopover);
+    if (parts) placeViewPopover(els.memoryView, parts[0], parts[1]);
+  }
+
+  function renderMemoryToolbar() {
+    const mem = state.memory;
+    els.memoryRangeButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", button.getAttribute("data-memory-range") === mem.range ? "true" : "false");
+    });
+    // A custom range names its days on the segment itself.
+    const range = getMemoryRange();
+    let customText = t("memory.rangeCustom");
+    if (mem.range === "custom" && range.from && range.to) {
+      const format = (date) => formatShortDate(date);
+      const last = shiftDays(range.to, -1);
+      customText = localDayKey(range.from) === localDayKey(last) ? format(last) : format(range.from) + (state.locale === "zh-CN" ? "–" : " – ") + format(last);
+    }
+    setText(els.memoryRangeCustom, customText);
+    const popup = (button, valueEl, value, text, title) => {
+      setText(valueEl, text);
+      setAttr(button, "title", title || "");
+      setClass(button, "actPopup" + (value ? " is-filtered" : ""));
+    };
+    popup(els.memoryProjectButton, els.memoryProjectValue, mem.project, mem.project ? projectBasename(mem.project) : t("memory.all"), mem.project);
+    popup(els.memoryAgentButton, els.memoryAgentValue, mem.agent, mem.agent || t("memory.all"), mem.agent);
+    popup(els.memoryKindButton, els.memoryKindValue, mem.kind !== "default",
+      mem.kind === "default" ? t("memory.all") : mem.kind === "all" ? t("memory.kindEverythingShort") : memoryKindLabel(mem.kind), memoryKindLabel(mem.kind));
+    popup(els.memorySourceButton, els.memorySourceValue, mem.source, mem.source ? memorySourceName(mem.source) : t("memory.all"), "");
+    const input = els.memorySearchInput;
+    if (input && document.activeElement !== input && !mem.searchTimer && input.value.trim() !== mem.query) input.value = mem.query;
+    setHidden(els.memorySearchClear, !(input && input.value));
+  }
+
+  function renderMemorySummary() {
+    const mem = state.memory;
+    const stats = mem.stats;
+    setHidden(els.memorySummary, mem.readsDisabled || (!mem.loaded && !!mem.error));
+    const total = Number(stats && stats.total || 0);
+    const kinds = stats && stats.kinds || {};
+    const signature = [state.locale, mem.kind, JSON.stringify(stats ? [stats.total, kinds] : null)].join("|");
+    if (mem.signatures.summary !== signature) {
+      mem.signatures.summary = signature;
+      els.memorySumTotal.innerHTML = richCount(stats && total === 1 ? "memory.sumMemory" : "memory.sumMemories", stats ? formatCount(total) : "—");
+      els.memorySumKinds.forEach((button) => {
+        const kind = button.getAttribute("data-memory-sum-kind");
+        const key = kind === "outcome" ? "memory.sumOutcome" : kind === "context" ? "memory.sumContext" : "memory.sumLegacy";
+        button.querySelector(".memSumText").innerHTML = richCount(key, stats ? formatCount(kinds[kind]) : "—");
+        const pressed = mem.kind === kind;
+        setAttr(button, "aria-pressed", pressed ? "true" : "false");
+        setAttr(button, "title", pressed ? t("memory.sumShowDefault") : t("memory.sumShowOnly", { kind: memoryKindLabel(kind) }));
+      });
+    }
+    const updated = mem.refreshFailed
+      ? t("memory.refreshFailed", { time: formatClock(new Date()) })
+      : mem.loaded && mem.loadedAt ? t("memory.updated", { time: formatClock(new Date(mem.loadedAt)) }) : "";
+    setText(els.memoryUpdated, updated);
+    setClass(els.memoryUpdated, "memUpdated" + (mem.refreshFailed ? " is-warn" : ""));
+  }
+
+  // Top five projects as one proportional bar; the remainder is a quiet "Other" sliver when no project is picked.
+  function renderMemoryTopProjects() {
+    const mem = state.memory;
+    const stats = mem.stats;
+    const rows = stats && Array.isArray(stats.top_projects) ? stats.top_projects.filter((row) => Number(row.count) > 0).slice(0, 5) : [];
+    setHidden(els.memoryTopProjects, mem.readsDisabled || !rows.length);
+    if (!rows.length) return;
+    const sum = rows.reduce((total, row) => total + Number(row.count), 0);
+    const other = mem.project ? 0 : Math.max(0, Number(stats.total || 0) - sum);
+    const signature = [state.locale, mem.project, JSON.stringify(rows), other].join("|");
+    if (mem.signatures.top === signature) return;
+    mem.signatures.top = signature;
+    const segments = rows.map((row, index) => {
+      const pressed = isActivitySelected(row.project_path, mem.project);
+      const name = projectBasename(row.project_path);
+      return '<button class="memTopSeg' + (mem.project && !pressed ? ' is-dim' : '') + '" type="button" data-memory-top="' + escapeHtml(row.project_path) + '" data-rank="' + index + '" aria-pressed="' + pressed + '"' +
+        ' style="flex-grow:' + Number(row.count) + '" title="' + escapeHtml(t("memory.topProjectHint", { name: row.project_path, n: formatCount(row.count) })) + '">' +
+        '<span class="memTopFill" aria-hidden="true"></span>' +
+        '<span class="memTopLegend"><span class="memTopDot" aria-hidden="true"></span><span class="memTopName">' + escapeHtml(name) + '</span>' +
+        '<span class="memTopCount">' + escapeHtml(formatCount(row.count)) + '</span></span></button>';
+    }).join("");
+    els.memoryTopBar.innerHTML = segments + (other > 0
+      ? '<span class="memTopSeg is-other" style="flex-grow:' + other + '" title="' + escapeHtml(t("memory.topProjectHint", { name: t("memory.topOther"), n: formatCount(other) })) + '"><span class="memTopFill" aria-hidden="true"></span></span>'
+      : '');
+  }
+
+  function memoryDayLabel(dayKey) {
+    const date = parseLocalDay(dayKey);
+    if (!date) return { name: dayKey, date: "" };
+    const ago = calendarDaysAgo(date);
+    const withYear = date.getFullYear() !== new Date().getFullYear();
+    const full = date.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
+    if (ago === 0) return { name: t("home.today"), date: full };
+    if (ago === 1) return { name: t("home.yesterday"), date: full };
+    return {
+      name: date.toLocaleDateString(state.locale, { month: "short", day: "numeric", year: withYear ? "numeric" : undefined }),
+      date: date.toLocaleDateString(state.locale, { weekday: "long" }),
+    };
+  }
+
+  function renderMemoryRowBody(item) {
+    const created = parseTimestamp(item.created_at);
+    const kind = item.kind === "outcome" || item.kind === "context" ? item.kind : "legacy";
+    const badges = [];
+    if (item.source === "explicit") badges.push('<span class="actBadge is-mcp" title="' + escapeHtml(t("memory.mcpHint")) + '">' + escapeHtml(t("memory.mcp")) + '</span>');
+    if (item.fallback) badges.push('<span class="actBadge is-fallback" title="' + escapeHtml(t("memory.fallbackHint")) + '">' + escapeHtml(t("memory.fallback")) + '</span>');
+    if (item.has_review) badges.push('<span class="actReview" role="img" aria-label="' + escapeHtml(t("memory.reviewHint")) + '" title="' + escapeHtml(t("memory.reviewHint")) + '">' + svgIcon("review", "actMetaIcon") + '</span>');
+    const title = String(item.title || "").trim();
+    const preview = String(item.preview || "").trim();
+    const facts = Number(item.facts_count || 0);
+    const files = Number(item.files_count || 0);
+    const factsHint = t(facts === 1 ? "memory.factsHintOne" : "memory.factsHint", { n: formatCount(facts) });
+    const filesHint = t(files === 1 ? "memory.filesHintOne" : "memory.filesHint", { n: formatCount(files), m: formatCount(item.files_modified_count) });
+    return '<time class="memCell memTime" datetime="' + escapeHtml(created ? created.toISOString() : "") + '" title="' + escapeHtml(created ? created.toLocaleString(state.locale) : "") + '">' + escapeHtml(created ? formatClock(created) : "—") + '</time>' +
+      '<span class="memCell memKind"><span class="kindPill kind-' + kind + '">' + escapeHtml(memoryKindLabel(kind)) + '</span></span>' +
+      '<span class="memCell memMain"><span class="memTitleLine"><span class="memTitle"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + escapeHtml(title || t("memory.untitled")) + '</span>' + badges.join("") + '</span>' +
+        (preview ? '<span class="memPreview">' + escapeHtml(preview + (item.preview_truncated ? " …" : "")) + '</span>' : '') + '</span>' +
+      '<span class="memCell memProject" title="' + escapeHtml(item.project_path || "") + '">' + escapeHtml(projectBasename(item.project_path) || "—") + '</span>' +
+      '<span class="memCell memAgent">' + escapeHtml(item.agent_id || "—") + '</span>' +
+      '<span class="memCell memNum' + (facts ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(factsHint) + '" title="' + escapeHtml(factsHint) + '">' + svgIcon("facts", "memNumIcon") + escapeHtml(formatCount(facts)) + '</span>' +
+      '<span class="memCell memNum' + (files ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(filesHint) + '" title="' + escapeHtml(filesHint) + '">' + svgIcon("file", "memNumIcon") + escapeHtml(formatCount(files)) + '</span>';
+  }
+
+  // Keyed reconcile, as on Activity: one node per memory id, rewritten only when its fields or the locale change.
+  function syncMemoryRows(container, items) {
+    const nodes = state.memory.rowNodes;
+    let cursor = container.firstElementChild;
+    items.forEach((item) => {
+      let entry = nodes.get(item.id);
+      if (!entry) {
+        const node = document.createElement("article");
+        node.className = "memRow";
+        node.setAttribute("data-memory-id", item.id);
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-haspopup", "dialog");
+        entry = { node, signature: "" };
+        nodes.set(item.id, entry);
+      }
+      entry.node.classList.toggle("is-open", state.drawer.id === item.id);
+      setAttr(entry.node, "aria-expanded", state.drawer.id === item.id ? "true" : "false");
+      const signature = state.locale + "|" + JSON.stringify(item);
+      if (entry.signature !== signature) {
+        entry.signature = signature;
+        entry.node.innerHTML = renderMemoryRowBody(item);
+      }
+      if (entry.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        container.insertBefore(entry.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+  }
+
+  function renderMemoryNotice() {
+    const mem = state.memory;
+    let notice = null;
+    if (mem.readsDisabled) {
+      notice = { tone: "", title: t("memory.readsDisabledTitle"), lead: t("memory.readsDisabledLead"), action: null };
+    } else if (!mem.loaded && mem.error) {
+      notice = { tone: " is-error", title: t("memory.errorTitle"), lead: mem.error, action: ["retry", t("memory.retry")] };
+    } else if (mem.loaded && !mem.stale && !mem.items.length) {
+      notice = isMemoryFiltered()
+        ? { tone: "", title: t("memory.noResultsTitle"), lead: mem.query ? t("memory.noResultsQuery", { query: mem.query }) : t("memory.noResultsLead"), action: ["clear", t("memory.clearFilters")] }
+        : { tone: "", title: t("memory.emptyTitle"), lead: t("memory.emptyLead"), action: null };
+    }
+    setHidden(els.memoryNotice, !notice);
+    if (notice) {
+      setClass(els.memoryNotice, "actNotice memNotice glassCard glassBlur" + notice.tone);
+      setText(els.memoryNoticeTitle, notice.title);
+      setText(els.memoryNoticeLead, notice.lead);
+      setHidden(els.memoryNoticeAction, !notice.action);
+      setAttr(els.memoryNoticeAction, "data-memory-action", notice.action ? notice.action[0] : null);
+      setText(els.memoryNoticeAction, notice.action ? notice.action[1] : "");
+    }
+    return !!notice;
+  }
+
+  function renderMemoryList() {
+    const mem = state.memory;
+    const list = els.memoryList;
+    // Clear before the notice early-return, so a disabled payload cannot leave the previous rows up.
+    if (mem.readsDisabled && list) {
+      list.innerHTML = "";
+      mem.groupNodes.clear();
+      mem.rowNodes.clear();
+    }
+    const noticed = renderMemoryNotice();
+    setHidden(list, noticed);
+    setHidden(els.memoryListHead, noticed);
+    setAttr(list, "aria-busy", mem.stale || !mem.loaded ? "true" : "false");
+    list.classList.toggle("is-stale", mem.stale && mem.items.length > 0);
+    setHidden(els.memoryLoadMore, noticed || !mem.nextCursor);
+    setText(els.memoryLoadMore, t(mem.moreSeq ? "memory.loadingMore" : "memory.loadMore"));
+    setAttr(els.memoryLoadMore, "aria-busy", mem.moreSeq ? "true" : null);
+    if (noticed) return;
+    if (!mem.items.length) {
+      // First load or a reload of an empty list: skeleton rows.
+      if (!list.querySelector(".is-skeleton")) {
+        list.innerHTML = MEMORY_SKELETON;
+        mem.groupNodes.clear();
+        mem.rowNodes.clear();
+      }
+      return;
+    }
+    const skeleton = list.querySelector(".memGroup.is-skeleton");
+    if (skeleton) skeleton.remove();
+    const order = [];
+    const byDay = new Map();
+    mem.items.forEach((item) => {
+      const created = parseTimestamp(item.created_at);
+      const day = item.day || (created ? localDayKey(created) : "");
+      if (!byDay.has(day)) {
+        byDay.set(day, []);
+        order.push(day);
+      }
+      byDay.get(day).push(item);
+    });
+    const counts = new Map(mem.days.map((day) => [day.day, day.count]));
+    const visible = new Set();
+    let cursor = list.firstElementChild;
+    order.forEach((day) => {
+      let group = mem.groupNodes.get(day);
+      if (!group) {
+        const node = document.createElement("section");
+        node.className = "memGroup";
+        node.innerHTML = '<h3 class="memDayHead"></h3><div class="memRows"></div>';
+        group = { node, head: node.firstElementChild, rows: node.lastElementChild, signature: "" };
+        mem.groupNodes.set(day, group);
+      }
+      const label = memoryDayLabel(day);
+      const count = counts.has(day) ? counts.get(day) : byDay.get(day).length;
+      const signature = [state.locale, label.name, label.date, count].join("|");
+      if (group.signature !== signature) {
+        group.signature = signature;
+        group.head.innerHTML = '<span class="memDayName">' + escapeHtml(label.name) + '</span>' +
+          (label.date ? '<span class="memDayDate">' + escapeHtml(label.date) + '</span>' : '') +
+          '<span class="memDayCount">' + escapeHtml(t("memory.dayCount", { n: formatCount(count) })) + '</span>';
+      }
+      syncMemoryRows(group.rows, byDay.get(day));
+      byDay.get(day).forEach((item) => visible.add(item.id));
+      if (group.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        list.insertBefore(group.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+    mem.groupNodes.forEach((_group, day) => {
+      if (!byDay.has(day)) mem.groupNodes.delete(day);
+    });
+    mem.rowNodes.forEach((_entry, id) => {
+      if (!visible.has(id)) mem.rowNodes.delete(id);
+    });
+  }
+
+  function renderMemory() {
+    if (!els.memoryView) return;
+    renderMemoryToolbar();
+    renderMemorySummary();
+    renderMemoryTopProjects();
+    renderMemoryMenus();
+    renderMemoryList();
+    if (state.drawer.host === "memoryView") renderMemoryDrawer();
+    placeMemoryDrawer();
+  }
+
+  function getMemoryPopoverParts(name) {
+    if (name === "project") return [els.memoryProjectPopover, els.memoryProjectButton];
+    if (name === "agent") return [els.memoryAgentPopover, els.memoryAgentButton];
+    if (name === "kind") return [els.memoryKindPopover, els.memoryKindButton];
+    if (name === "source") return [els.memorySourcePopover, els.memorySourceButton];
+    if (name === "custom") return [els.memoryCustomPopover, els.memoryRangeCustom];
+    return null;
+  }
+
+  function setMemoryPopover(name) {
+    if (!els.memoryView) return;
+    const mem = state.memory;
+    mem.openPopover = getMemoryPopoverParts(name) ? name : "";
+    ["project", "agent", "kind", "source", "custom"].forEach((key) => {
+      const parts = getMemoryPopoverParts(key);
+      const open = key === mem.openPopover;
+      setHidden(parts[0], !open);
+      setAttr(parts[1], "aria-expanded", open ? "true" : "false");
+      if (open) placeViewPopover(els.memoryView, parts[0], parts[1]);
+    });
+  }
+
+  function closeMemoryPopover(restoreFocus) {
+    const parts = getMemoryPopoverParts(state.memory.openPopover);
+    setMemoryPopover("");
+    if (parts && restoreFocus) parts[1].focus();
+  }
+
+  function openMemoryMenu(name) {
+    if (state.memory.openPopover === name) {
+      closeMemoryPopover(false);
+      return;
+    }
+    setMemoryPopover(name);
+    const popover = getMemoryPopoverParts(name)[0];
+    const target = popover.querySelector('[aria-selected="true"]') || popover.querySelector(".actOption");
+    if (target) target.focus();
+  }
+
+  function openMemoryCustom() {
+    if (state.memory.openPopover === "custom") {
+      closeMemoryPopover(false);
+      return;
+    }
+    const mem = state.memory;
+    const today = localDayKey(new Date());
+    els.memoryCustomFrom.value = mem.customFrom || localDayKey(shiftDays(new Date(), -6));
+    els.memoryCustomTo.value = mem.customTo || today;
+    els.memoryCustomFrom.max = today;
+    els.memoryCustomTo.max = today;
+    setHidden(els.memoryCustomError, true);
+    setMemoryPopover("custom");
+    els.memoryCustomFrom.focus();
+  }
+
+  function applyMemoryCustomRange() {
+    const from = els.memoryCustomFrom.value;
+    const to = els.memoryCustomTo.value;
+    const start = parseLocalDay(from);
+    const end = parseLocalDay(to);
+    const error = !start || !end ? t("memory.customMissing") : start > end ? t("memory.customOrder") : "";
+    if (error) {
+      setText(els.memoryCustomError, error);
+      setHidden(els.memoryCustomError, false);
+      return;
+    }
+    closeMemoryPopover(true);
+    setMemoryFilters({ range: "custom", customFrom: from, customTo: to });
+  }
+
+  function bindMemoryEvents() {
+    if (!els.memoryView) return;
+    els.memoryView.addEventListener("click", (event) => {
+      const mem = state.memory;
+      if (els.activityDrawer.contains(event.target)) return;
+      const row = event.target.closest(".memRow[data-memory-id]");
+      if (row) {
+        const id = row.getAttribute("data-memory-id");
+        // The open row closes the drawer again; any other row swaps its content.
+        if (state.drawer.id === id) closeMemoryDrawer(false);
+        else void openMemoryDrawer(id, row, "memoryView");
+        return;
+      }
+      const range = event.target.closest("[data-memory-range]");
+      if (range) {
+        const value = range.getAttribute("data-memory-range");
+        if (value === "custom") {
+          openMemoryCustom();
+        } else {
+          setMemoryPopover("");
+          if (value !== mem.range) setMemoryFilters({ range: value });
+        }
+        return;
+      }
+      const popup = event.target.closest("#memoryProjectButton, #memoryAgentButton, #memoryKindButton, #memorySourceButton");
+      if (popup) {
+        openMemoryMenu(popup.id.replace("memory", "").replace("Button", "").toLowerCase());
+        return;
+      }
+      const option = event.target.closest("[data-memory-option]");
+      if (option) {
+        const name = option.getAttribute("data-memory-option");
+        closeMemoryPopover(true);
+        setMemoryFilters({ [name]: option.getAttribute("data-memory-value") || (name === "kind" ? "default" : "") });
+        return;
+      }
+      const top = event.target.closest("[data-memory-top]");
+      if (top) {
+        const value = top.getAttribute("data-memory-top");
+        setMemoryFilters({ project: isActivitySelected(value, mem.project) ? "" : value });
+        return;
+      }
+      const sumKind = event.target.closest("[data-memory-sum-kind]");
+      if (sumKind) {
+        const kind = sumKind.getAttribute("data-memory-sum-kind");
+        setMemoryFilters({ kind: mem.kind === kind ? "default" : kind });
+        return;
+      }
+      if (event.target.closest("#memorySearchClear")) {
+        els.memorySearchInput.value = "";
+        applyMemorySearch();
+        renderMemoryToolbar();
+        els.memorySearchInput.focus();
+        return;
+      }
+      if (event.target.closest("#memoryLoadMore")) {
+        void loadMemories("more");
+        return;
+      }
+      const action = event.target.closest("[data-memory-action]");
+      if (action) {
+        if (action.getAttribute("data-memory-action") === "clear") clearMemoryFilters();
+        else void loadMemories("reset");
+        return;
+      }
+      if (event.target.closest("#memoryCustomApply")) {
+        applyMemoryCustomRange();
+        return;
+      }
+      if (event.target.closest("#memoryCustomCancel")) closeMemoryPopover(true);
+    });
+
+    els.memoryView.addEventListener("keydown", (event) => {
+      if (els.activityDrawer.contains(event.target)) return;
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches(".memRow[data-memory-id]")) {
+        event.preventDefault();
+        event.target.click();
+        return;
+      }
+      const open = state.memory.openPopover;
+      if (!open) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMemoryPopover(true);
+        return;
+      }
+      if (open === "custom") {
+        if (event.key === "Enter" && event.target.matches(".actDateInput")) {
+          event.preventDefault();
+          applyMemoryCustomRange();
+        }
+        return;
+      }
+      const options = Array.from(getMemoryPopoverParts(open)[0].querySelectorAll(".actOption"));
+      const index = options.indexOf(document.activeElement);
+      let next = -1;
+      if (event.key === "ArrowDown") next = Math.min(options.length - 1, index + 1);
+      else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = options.length - 1;
+      else if (event.key === "Tab") {
+        event.preventDefault();
+        closeMemoryPopover(true);
+        return;
+      }
+      if (next >= 0 && options[next]) {
+        event.preventDefault();
+        options[next].focus();
+      }
+    });
+
+    const input = els.memorySearchInput;
+    input.addEventListener("input", () => {
+      const mem = state.memory;
+      setHidden(els.memorySearchClear, !input.value);
+      if (mem.searchTimer) window.clearTimeout(mem.searchTimer);
+      mem.searchTimer = window.setTimeout(() => {
+        mem.searchTimer = 0;
+        applyMemorySearch();
+      }, MEMORY_SEARCH_DELAY_MS);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        applyMemorySearch();
+      } else if (event.key === "Escape" && input.value) {
+        event.preventDefault();
+        event.stopPropagation();
+        input.value = "";
+        applyMemorySearch();
+        renderMemoryToolbar();
+      }
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      const parts = getMemoryPopoverParts(state.memory.openPopover);
+      if (!parts || parts[0].contains(event.target) || parts[1].contains(event.target)) return;
+      setMemoryPopover("");
+    });
+    window.addEventListener("resize", () => {
+      if (state.memory.openPopover) setMemoryPopover("");
+      scheduleMemoryDrawerPlace();
+    });
+    window.addEventListener("scroll", () => {
+      if (state.activeView !== "memoryView") return;
+      state.memory.lastScrollAt = Date.now();
+      scheduleMemoryDrawerPlace();
+    }, { passive: true });
   }
 
   async function loadReleaseCheck() {
@@ -4347,6 +5415,65 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setStoredStatusLine("searchDiagnostics", els.searchDiagnosticsStatus, "search.readyStatus", {}, "");
   }
 
+  // The Memory poll does not run while a filter, a pending search or the drawer is open, so a read
+  // switch has to clear those views itself. Bumping the seqs drops an in-flight list or detail response.
+  function applyReadPolicyToViews(policy) {
+    if (!policy) return;
+    const mem = state.memory;
+    const early = state.activity.earlier;
+    const drawer = state.drawer;
+    if (policy.readEnabled) {
+      if (!mem.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
+      mem.readsDisabled = false;
+      early.readsDisabled = false;
+      early.message = "";
+      early.payload = null;
+      early.loadedAt = 0;
+      early.key = "";
+      early.loading = false;
+      early.seq += 1;
+      const refreshDrawer = !!drawer.id && drawer.readsDisabled;
+      drawer.readsDisabled = false;
+      if (state.activeView === "memoryView") void loadMemories("reset");
+      if (state.activeView === "activityView") void loadActivityEarlier(true);
+      if (refreshDrawer) void openMemoryDrawer(drawer.id, null, drawer.host);
+      return;
+    }
+    if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && !drawer.payload && (!drawer.id || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
+    mem.items = [];
+    mem.days = [];
+    mem.stats = null;
+    mem.nextCursor = null;
+    mem.loaded = false;
+    mem.error = "";
+    mem.refreshFailed = false;
+    mem.stale = false;
+    mem.readsDisabled = true;
+    mem.groupNodes.clear();
+    mem.rowNodes.clear();
+    mem.busySeq = 0;
+    mem.moreSeq = 0;
+    mem.seq += 1;
+    if (els.memoryList) els.memoryList.innerHTML = "";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.copied = false;
+    drawer.signature = "";
+    drawer.seq += 1;
+    if (drawer.id) drawer.readsDisabled = true;
+    early.payload = null;
+    early.loadedAt = 0;
+    early.key = "";
+    early.loading = false;
+    early.error = "";
+    early.readsDisabled = true;
+    early.seq += 1;
+    renderMemory();
+    renderActivityEarlier();
+    if (drawer.id) renderMemoryDrawer();
+  }
+
   async function savePolicy() {
     if (!state.overview || state.isSavingPolicy) return;
     const previousPolicy = {
@@ -4371,6 +5498,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       state.overview.policy = payload.policy;
       state.pendingPolicy = null;
       state.isSavingPolicy = false;
+      applyReadPolicyToViews(payload.policy);
       renderOverview();
     } catch (error) {
       state.pendingPolicy = null;
@@ -4433,11 +5561,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (persist) persistBackground();
   }
 
-  // Activity has its own default backdrop (artwork, light or dark with the system). It shows while the user has
-  // not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
+  // Activity and Memory have their own default backdrop (artwork, light or dark with the system). It shows while the
+  // user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
   function usesActivityBackdrop() {
     const settings = bg.settings;
-    return state.activeView === "activityView" && !!settings && !settings.pinned &&
+    return (state.activeView === "activityView" || state.activeView === "memoryView") && !!settings && !settings.pinned &&
       settings.preset === bg.api.defaults.preset && settings.tone === "auto";
   }
 
@@ -4787,10 +5915,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         updateActivityChipsOverflow();
         fitActivityEarlierPanel();
       });
-    } else {
-      if (state.activity.openPopover) setActivityPopover("");
-      closeActivityDrawer(false);
+    } else if (state.activity.openPopover) {
+      setActivityPopover("");
     }
+    if (nextView === "memoryView") {
+      void loadMemories(state.memory.loaded ? "refresh" : "reset");
+    } else if (state.memory.openPopover) {
+      setMemoryPopover("");
+    }
+    if (state.drawer.id && state.drawer.host !== nextView) closeMemoryDrawer(false);
     if (nextView === "devToolsView") {
       void ensureDevToolsLoaded();
     }
@@ -4894,6 +6027,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (activityIncludesToday(getActivityWindow())) await loadActivity("refresh");
       return;
     }
+    if (state.activeView === "memoryView") {
+      renderMemoryMenus();
+      if (memoryCanPoll()) await loadMemories("refresh");
+      return;
+    }
     if (!overviewOk) return;
     if (state.activeView === "homeView") {
       await refreshHomeData(false);
@@ -4958,6 +6096,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       } else {
         window.scrollTo(0, 0);
       }
+      // Activity's search button lands in the Memory search field.
+      const focusTarget = document.getElementById(trigger.getAttribute("data-focus-target") || "");
+      if (focusTarget) focusTarget.focus({ preventScroll: true });
     });
 
     els.devToolsToggle.addEventListener("change", () => {
@@ -5254,6 +6395,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindBackgroundEvents();
     bindLocaleMenu();
     bindActivityEvents();
+    bindMemoryEvents();
+    bindMemoryDrawerEvents();
     activateView("homeView");
     try {
       await loadOverview();

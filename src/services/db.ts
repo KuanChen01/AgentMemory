@@ -465,10 +465,10 @@ function activityInstant(value: string, label: 'from' | 'to'): Date {
   return new Date(ms);
 }
 
-function activityOffset(value: number | undefined): number {
+function activityOffset(value: number | undefined, invalid: (detail: string) => Error = invalidActivity): number {
   if (value === undefined) return 0;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < -840 || value > 840) {
-    throw invalidActivity('tz_offset_minutes');
+    throw invalid('tz_offset_minutes');
   }
   return value;
 }
@@ -487,25 +487,25 @@ function activityKind(value: string | undefined): 'typed' | 'legacy' | 'all' {
   throw invalidActivity('kind');
 }
 
-function activityExact(value: string | undefined, label: string): string | undefined {
+function activityExact(value: string | undefined, label: string, invalid: (detail: string) => Error = invalidActivity): string | undefined {
   if (value === undefined || value === '') return undefined;
-  if (typeof value !== 'string') throw invalidActivity(label);
+  if (typeof value !== 'string') throw invalid(label);
   return value;
 }
 
-function decodeActivityCursor(cursor: string): { t: string; r: number } {
-  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalidActivity('cursor');
+function decodeActivityCursor(cursor: string, invalid: (detail: string) => Error = invalidActivity): { t: string; r: number } {
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) throw invalid('cursor');
   let parsed: any;
   try {
     parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
   } catch {
-    throw invalidActivity('cursor');
+    throw invalid('cursor');
   }
   const t = parsed?.t;
   const r = parsed?.r;
-  if (typeof t !== 'string' || !ACTIVITY_CURSOR_TIME.test(t) || !Number.isSafeInteger(r)) throw invalidActivity('cursor');
+  if (typeof t !== 'string' || !ACTIVITY_CURSOR_TIME.test(t) || !Number.isSafeInteger(r)) throw invalid('cursor');
   const ms = Date.parse(`${t.replace(' ', 'T')}Z`);
-  if (!Number.isFinite(ms) || activitySqlTime(new Date(ms)) !== t) throw invalidActivity('cursor');
+  if (!Number.isFinite(ms) || activitySqlTime(new Date(ms)) !== t) throw invalid('cursor');
   return { t, r };
 }
 
@@ -582,6 +582,23 @@ const ACTIVITY_NATIVE = `SUM(CASE WHEN m.record_kind IN ('outcome','context') AN
 const ACTIVITY_OLD = `SUM(CASE WHEN m.record_kind IN ('outcome','context') AND IFNULL(m.source_kind,'')!='legacy_compacted' THEN 0 ELSE 1 END)`;
 const ACTIVITY_FILES_READ = `CASE WHEN json_valid(o.files_read) AND json_type(o.files_read)='array' THEN o.files_read ELSE '[]' END`;
 const ACTIVITY_FILES_MOD = `CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN o.files_modified ELSE '[]' END`;
+// Shared card columns. The day's `?` is the tz shift and stays the first bound parameter.
+const ADMIN_CARD_COLUMNS = `o.id, o.created_at, o.rowid AS cursor_rowid, datetime(o.created_at) AS cursor_time,
+        date(datetime(o.created_at), ?) AS day,
+        CASE WHEN m.record_kind IN ('outcome','context') THEN m.record_kind ELSE 'legacy' END AS kind,
+        m.source_kind AS source,
+        CASE WHEN m.record_kind IN ('outcome','context') AND r.status='fallback' THEN 1 ELSE 0 END AS fallback,
+        substr(o.title, 1, 200) AS title,
+        o.project_path, o.agent_id,
+        (SELECT COUNT(DISTINCT value) FROM (
+          SELECT value FROM json_each(${ACTIVITY_FILES_READ})
+          UNION ALL
+          SELECT value FROM json_each(${ACTIVITY_FILES_MOD})
+        )) AS files_count,
+        CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN json_array_length(o.files_modified) ELSE 0 END AS files_modified_count,
+        CASE WHEN json_valid(o.facts) AND json_type(o.facts)='array' THEN json_array_length(o.facts) ELSE 0 END AS facts_count,
+        (SELECT COUNT(*) FROM task_results t WHERE t.observation_id=o.id) AS task_count,
+        EXISTS(SELECT 1 FROM post_task_reviews p WHERE p.source_observation_id=o.id) AS has_review`;
 
 function activityScope(project?: string, agent?: string): { sql: string; params: any[] } {
   const params: any[] = [];
@@ -658,22 +675,7 @@ function buildAdminActivityQueries(input: NormalizedAdminActivity): ActivityQuer
   // plans as a sorter and reports USE TEMP B-TREE FOR ORDER BY on the cards query.
   queries.push({
     name: 'cards',
-    sql: `SELECT o.id, o.created_at, o.rowid AS cursor_rowid, datetime(o.created_at) AS cursor_time,
-        date(datetime(o.created_at), ?) AS day,
-        CASE WHEN m.record_kind IN ('outcome','context') THEN m.record_kind ELSE 'legacy' END AS kind,
-        m.source_kind AS source,
-        CASE WHEN m.record_kind IN ('outcome','context') AND r.status='fallback' THEN 1 ELSE 0 END AS fallback,
-        substr(o.title, 1, 200) AS title,
-        o.project_path, o.agent_id,
-        (SELECT COUNT(DISTINCT value) FROM (
-          SELECT value FROM json_each(${ACTIVITY_FILES_READ})
-          UNION ALL
-          SELECT value FROM json_each(${ACTIVITY_FILES_MOD})
-        )) AS files_count,
-        CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN json_array_length(o.files_modified) ELSE 0 END AS files_modified_count,
-        CASE WHEN json_valid(o.facts) AND json_type(o.facts)='array' THEN json_array_length(o.facts) ELSE 0 END AS facts_count,
-        (SELECT COUNT(*) FROM task_results t WHERE t.observation_id=o.id) AS task_count,
-        EXISTS(SELECT 1 FROM post_task_reviews p WHERE p.source_observation_id=o.id) AS has_review
+    sql: `SELECT ${ADMIN_CARD_COLUMNS}
       ${ACTIVITY_JOINS}
       WHERE ${cardsWindowSql}${cursorSql}${scope.sql}${activityKindSql(input.kind)}
       ORDER BY datetime(o.created_at) DESC, o.rowid DESC
@@ -681,6 +683,502 @@ function buildAdminActivityQueries(input: NormalizedAdminActivity): ActivityQuer
     params,
   });
   return queries;
+}
+
+type MemoryKind = 'outcome' | 'context' | 'legacy';
+type MemorySource = 'task' | 'tool' | 'explicit' | 'legacy_compacted';
+type MemoriesCardMode = 'skip' | 'index' | 'scan';
+
+const MEMORIES_KINDS: MemoryKind[] = ['outcome', 'context', 'legacy'];
+const MEMORIES_SOURCES: MemorySource[] = ['task', 'tool', 'explicit', 'legacy_compacted'];
+const MEMORIES_STATS_CACHE_MAX = 32;
+const MEMORIES_STATS_CACHE_TTL_MS = 60000;
+// Title, narrative, project and agent match the raw text. facts, concepts, files_read and
+// files_modified are JSON, so those four are matched again against the JSON-escaped query.
+const MEMORIES_LIKE_SQL = `(
+        o.title LIKE ? ESCAPE '\\'
+        OR o.narrative LIKE ? ESCAPE '\\'
+        OR o.facts LIKE ? ESCAPE '\\'
+        OR o.concepts LIKE ? ESCAPE '\\'
+        OR o.files_read LIKE ? ESCAPE '\\'
+        OR o.files_modified LIKE ? ESCAPE '\\'
+        OR o.project_path LIKE ? ESCAPE '\\'
+        OR o.agent_id LIKE ? ESCAPE '\\'
+        OR o.facts LIKE ? ESCAPE '\\'
+        OR o.concepts LIKE ? ESCAPE '\\'
+        OR o.files_read LIKE ? ESCAPE '\\'
+        OR o.files_modified LIKE ? ESCAPE '\\'
+      )`;
+const MEMORIES_JOINS_SCAN = `FROM observations o NOT INDEXED
+    LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
+    LEFT JOIN task_results r ON r.id=o.id`;
+
+interface AdminMemoriesOptions {
+  query?: string;
+  project?: string;
+  agent?: string;
+  kind?: string;
+  source?: string;
+  from?: string;
+  to?: string;
+  tzOffsetMinutes?: number;
+  limit?: number;
+  cursor?: string | null;
+  stats?: boolean;
+}
+
+interface NormalizedAdminMemories {
+  query: string | null;
+  project?: string;
+  agent?: string;
+  kind: MemoryKind[];
+  source: MemorySource[] | null;
+  fromIso: string | null;
+  toIso: string | null;
+  fromSql: string | null;
+  toSql: string | null;
+  offset: number;
+  shift: string;
+  limit: number;
+  cursor: { t: string; r: number; f: string } | null;
+  stats: boolean;
+  filterHash: string;
+}
+
+interface AdminMemoriesStats {
+  total: number;
+  kinds: { outcome: number; context: number; legacy: number; fallback: number };
+  top_projects: Array<{ project_path: string; count: number }>;
+  cached: boolean;
+}
+
+interface MemoriesStatsCacheEntry {
+  at: number;
+  value: AdminMemoriesStats;
+}
+
+interface MemoriesQueryChoice {
+  stats: boolean;
+  cards: MemoriesCardMode;
+  dayRange: { start: string; end: string } | null;
+}
+
+function invalidMemories(detail: string): Error {
+  return new Error(`Invalid memories request: ${detail}`);
+}
+
+function escapeLikePattern(input: string): string {
+  return input.replace(/[\\%_]/g, '\\$&');
+}
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function memoriesQueryText(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'string') throw invalidMemories('query');
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  if (codePointLength(trimmed) > 200) throw invalidMemories('query');
+  return trimmed;
+}
+
+function memoriesKindList(value: string | undefined): MemoryKind[] {
+  if (value === undefined) return ['outcome', 'context'];
+  if (typeof value !== 'string') throw invalidMemories('kind');
+  const trimmed = value.trim();
+  if (trimmed === '') return ['outcome', 'context'];
+  if (trimmed === 'all') return ['outcome', 'context', 'legacy'];
+  const selected = new Set<MemoryKind>();
+  for (const token of trimmed.split(',')) {
+    const kind = token.trim();
+    if (kind !== 'outcome' && kind !== 'context' && kind !== 'legacy') throw invalidMemories('kind');
+    selected.add(kind);
+  }
+  return MEMORIES_KINDS.filter((kind) => selected.has(kind));
+}
+
+function memoriesSourceList(value: string | undefined): MemorySource[] | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'string') throw invalidMemories('source');
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  const selected = new Set<MemorySource>();
+  for (const token of trimmed.split(',')) {
+    const source = token.trim();
+    if (source !== 'task' && source !== 'tool' && source !== 'explicit' && source !== 'legacy_compacted') {
+      throw invalidMemories('source');
+    }
+    selected.add(source);
+  }
+  return MEMORIES_SOURCES.filter((source) => selected.has(source));
+}
+
+function memoriesInstant(value: string | undefined, label: 'from' | 'to'): { iso: string; sql: string } | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'string' || value.trim() === '') throw invalidMemories(label);
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) throw invalidMemories(label);
+  const date = new Date(ms);
+  return { iso: date.toISOString(), sql: activitySqlTime(date) };
+}
+
+function memoriesLimit(value: number | undefined): number {
+  if (value === undefined) return 50;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 100) throw invalidMemories('limit');
+  return value;
+}
+
+function memoriesStatsFlag(value: boolean | undefined): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'boolean') throw invalidMemories('stats');
+  return value;
+}
+
+function memoriesFilterHash(filters: {
+  query: string | null; project: string | null; agent: string | null;
+  kind: MemoryKind[]; source: MemorySource[] | null; from: string | null; to: string | null;
+}): string {
+  return createHash('sha1').update(JSON.stringify({
+    query: filters.query,
+    project: filters.project,
+    agent: filters.agent,
+    kind: [...filters.kind].sort(),
+    source: filters.source ? [...filters.source].sort() : null,
+    from: filters.from,
+    to: filters.to,
+  })).digest('hex').slice(0, 12);
+}
+
+function decodeMemoriesCursor(cursor: string): { t: string; r: number; f: string } {
+  const { t, r } = decodeActivityCursor(cursor, invalidMemories);
+  let parsed: any;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+  } catch {
+    throw invalidMemories('cursor');
+  }
+  const f = parsed?.f;
+  if (typeof f !== 'string' || !/^[0-9a-f]{12}$/.test(f)) throw invalidMemories('cursor');
+  return { t, r, f };
+}
+
+function normalizeAdminMemories(options: AdminMemoriesOptions): NormalizedAdminMemories {
+  const from = memoriesInstant(options.from, 'from');
+  const to = memoriesInstant(options.to, 'to');
+  if (from && to && !(Date.parse(to.iso) > Date.parse(from.iso))) throw invalidMemories('to must be after from');
+  const offset = activityOffset(options.tzOffsetMinutes, invalidMemories);
+  const query = memoriesQueryText(options.query);
+  const project = activityExact(options.project, 'project', invalidMemories);
+  const agent = activityExact(options.agent, 'agent', invalidMemories);
+  const kind = memoriesKindList(options.kind);
+  const source = memoriesSourceList(options.source);
+  const filterHash = memoriesFilterHash({
+    query,
+    project: project ?? null,
+    agent: agent ?? null,
+    kind,
+    source,
+    from: from ? from.iso : null,
+    to: to ? to.iso : null,
+  });
+  let cursor: { t: string; r: number; f: string } | null = null;
+  if (options.cursor !== undefined && options.cursor !== null && options.cursor !== '') {
+    if (typeof options.cursor !== 'string') throw invalidMemories('cursor');
+    cursor = decodeMemoriesCursor(options.cursor);
+    if (cursor.f !== filterHash) throw invalidMemories('cursor does not match filters');
+  }
+  return {
+    query,
+    project,
+    agent,
+    kind,
+    source,
+    fromIso: from ? from.iso : null,
+    toIso: to ? to.iso : null,
+    fromSql: from ? from.sql : null,
+    toSql: to ? to.sql : null,
+    offset,
+    shift: `${offset >= 0 ? '+' : ''}${offset} minutes`,
+    limit: memoriesLimit(options.limit),
+    cursor,
+    stats: memoriesStatsFlag(options.stats),
+    filterHash,
+  };
+}
+
+function memoriesKindParts(kinds: MemoryKind[]): string[] {
+  const parts: string[] = [];
+  const typed = kinds.filter((kind) => kind === 'outcome' || kind === 'context');
+  if (typed.length) parts.push(`m.record_kind IN (${typed.map((kind) => `'${kind}'`).join(',')})`);
+  if (kinds.includes('legacy')) parts.push(`(m.record_kind IS NULL OR m.record_kind NOT IN ('outcome','context'))`);
+  return parts;
+}
+
+function memoriesKindSql(kinds: MemoryKind[]): string {
+  if (kinds.length >= 3) return '';
+  const parts = memoriesKindParts(kinds);
+  if (parts.length === 1) return ` AND ${parts[0]}`;
+  return ` AND (${parts.join(' OR ')})`;
+}
+
+function memoriesKindCase(kinds: MemoryKind[]): string {
+  if (kinds.length >= 3) return '1';
+  const parts = memoriesKindParts(kinds);
+  if (parts.length === 1) return parts[0];
+  return `(${parts.join(' OR ')})`;
+}
+
+function memoriesSourceSql(sources: MemorySource[] | null): string {
+  if (!sources || !sources.length) return '';
+  return ` AND m.source_kind IN (${sources.map((source) => `'${source}'`).join(',')})`;
+}
+
+function memoriesPlainRange(fromSql: string | null, toSql: string | null): { sql: string; params: any[] } {
+  const parts: string[] = [];
+  const params: any[] = [];
+  if (fromSql !== null) {
+    parts.push('datetime(o.created_at) >= ?');
+    params.push(fromSql);
+  }
+  if (toSql !== null) {
+    parts.push('datetime(o.created_at) < ?');
+    params.push(toSql);
+  }
+  return { sql: parts.join(' AND '), params };
+}
+
+function memoriesCursorRange(input: NormalizedAdminMemories): { sql: string; params: any[] } {
+  const parts: string[] = [];
+  const params: any[] = [];
+  const cursor = input.cursor;
+  if (cursor && (input.toSql === null || cursor.t < input.toSql)) {
+    if (input.fromSql !== null) {
+      parts.push('datetime(o.created_at) >= ?');
+      params.push(input.fromSql);
+    }
+    parts.push('datetime(o.created_at) <= ?');
+    params.push(cursor.t);
+    parts.push('(datetime(o.created_at) < ? OR o.rowid < ?)');
+    params.push(cursor.t, cursor.r);
+  } else if (cursor && input.toSql !== null) {
+    if (input.fromSql !== null) {
+      parts.push('datetime(o.created_at) >= ?');
+      params.push(input.fromSql);
+    }
+    parts.push('datetime(o.created_at) < ?');
+    params.push(input.toSql);
+    parts.push('(datetime(o.created_at) < ? OR (datetime(o.created_at) = ? AND o.rowid < ?))');
+    params.push(cursor.t, cursor.t, cursor.r);
+  } else {
+    if (input.fromSql !== null) {
+      parts.push('datetime(o.created_at) >= ?');
+      params.push(input.fromSql);
+    }
+    if (input.toSql !== null) {
+      parts.push('datetime(o.created_at) < ?');
+      params.push(input.toSql);
+    }
+  }
+  return { sql: parts.join(' AND '), params };
+}
+
+function memoriesWhere(
+  range: { sql: string; params: any[] },
+  scope: { sql: string; params: any[] },
+  kindSql: string,
+  sourceSql: string,
+  query: string | null,
+): { sql: string; params: any[] } {
+  const params = [...range.params, ...scope.params];
+  let querySql = '';
+  if (query) {
+    querySql = ` AND ${MEMORIES_LIKE_SQL}`;
+    const pattern = `%${escapeLikePattern(query)}%`;
+    // JSON.stringify wraps the query in quotes; the stored text has the escaped interior only.
+    const jsonPattern = `%${escapeLikePattern(JSON.stringify(query).slice(1, -1))}%`;
+    for (let i = 0; i < 8; i += 1) params.push(pattern);
+    for (let i = 0; i < 4; i += 1) params.push(jsonPattern);
+  }
+  return { sql: `${range.sql.length ? range.sql : '1=1'}${scope.sql}${kindSql}${sourceSql}${querySql}`, params };
+}
+
+function memoriesStatsQuery(input: NormalizedAdminMemories): ActivityQuery {
+  const where = memoriesWhere(
+    memoriesPlainRange(input.fromSql, input.toSql),
+    activityScope(input.project, input.agent),
+    '',
+    memoriesSourceSql(input.source),
+    input.query,
+  );
+  return {
+    name: 'stats',
+    sql: `SELECT
+        COALESCE(SUM(CASE WHEN ${memoriesKindCase(input.kind)} THEN 1 ELSE 0 END), 0) AS total,
+        COALESCE(${ACTIVITY_OUTCOME}, 0) AS outcome,
+        COALESCE(${ACTIVITY_CONTEXT}, 0) AS context,
+        COALESCE(${ACTIVITY_LEGACY}, 0) AS legacy,
+        COALESCE(${ACTIVITY_FALLBACK}, 0) AS fallback
+      ${ACTIVITY_JOINS}
+      WHERE ${where.sql}`,
+    params: where.params,
+  };
+}
+
+// Grouped with COLLATE NOCASE (the same ASCII folding as LOWER()) rather than LOWER(project_path): grouping by the
+// indexed expression makes the planner walk idx_observations_project_dt and fetch every row out of order, which is
+// several times slower than driving from observation_work_metadata or one sequential scan.
+function memoriesTopProjectsQuery(input: NormalizedAdminMemories): ActivityQuery {
+  const typedOnly = !input.kind.includes('legacy');
+  const where = memoriesWhere(
+    memoriesPlainRange(input.fromSql, input.toSql),
+    activityScope(undefined, input.agent),
+    memoriesKindSql(input.kind),
+    memoriesSourceSql(input.source),
+    input.query,
+  );
+  // Outcome/context-only or a source filter needs a metadata row, so an inner join lets the planner start from it.
+  const join = typedOnly || input.source ? 'JOIN' : 'LEFT JOIN';
+  return {
+    name: 'top_projects',
+    sql: `SELECT MIN(o.project_path) AS project_path, COUNT(*) AS count
+      FROM observations o ${join} observation_work_metadata m ON m.observation_id=o.id
+      WHERE ${where.sql}
+      GROUP BY o.project_path COLLATE NOCASE
+      ORDER BY count DESC, LOWER(MIN(o.project_path))
+      LIMIT 5`,
+    params: where.params,
+  };
+}
+
+// With a search every row is read anyway, so total, kinds and top projects come from one grouped scan instead of
+// two full LIKE scans. Filters exclude kind and project; each group says whether it is the selected project.
+function memoriesGroupedStatsQuery(input: NormalizedAdminMemories): ActivityQuery {
+  const where = memoriesWhere(
+    memoriesPlainRange(input.fromSql, input.toSql),
+    activityScope(undefined, input.agent),
+    '',
+    memoriesSourceSql(input.source),
+    input.query,
+  );
+  return {
+    name: 'grouped_stats',
+    sql: `SELECT MIN(o.project_path) AS project_path,
+        LOWER(MIN(o.project_path)) = LOWER(?) AS selected,
+        COALESCE(${ACTIVITY_OUTCOME}, 0) AS outcome,
+        COALESCE(${ACTIVITY_CONTEXT}, 0) AS context,
+        COALESCE(${ACTIVITY_LEGACY}, 0) AS legacy,
+        COALESCE(${ACTIVITY_FALLBACK}, 0) AS fallback
+      ${ACTIVITY_JOINS}
+      WHERE ${where.sql}
+      GROUP BY o.project_path COLLATE NOCASE`,
+    params: [input.project ?? '', ...where.params],
+  };
+}
+
+function memoriesCardsQuery(input: NormalizedAdminMemories, notIndexed: boolean): ActivityQuery {
+  const where = memoriesWhere(
+    memoriesCursorRange(input),
+    activityScope(input.project, input.agent),
+    memoriesKindSql(input.kind),
+    memoriesSourceSql(input.source),
+    input.query,
+  );
+  return {
+    name: 'cards',
+    sql: `SELECT ${ADMIN_CARD_COLUMNS},
+        substr(o.narrative,1,140) AS preview_raw, length(o.narrative) > 140 AS preview_truncated
+      ${notIndexed ? MEMORIES_JOINS_SCAN : ACTIVITY_JOINS}
+      WHERE ${where.sql}
+      ORDER BY datetime(o.created_at) DESC, o.rowid DESC
+      LIMIT ?`,
+    params: [input.shift, ...where.params, input.limit + 1],
+  };
+}
+
+function memoriesDaysQuery(input: NormalizedAdminMemories, range: { start: string; end: string }): ActivityQuery {
+  const where = memoriesWhere(
+    { sql: 'datetime(o.created_at) >= ? AND datetime(o.created_at) < ?', params: [range.start, range.end] },
+    activityScope(input.project, input.agent),
+    memoriesKindSql(input.kind),
+    memoriesSourceSql(input.source),
+    input.query,
+  );
+  return {
+    name: 'days',
+    sql: `SELECT date(datetime(o.created_at), ?) AS day, COUNT(*) AS count
+      ${ACTIVITY_JOINS}
+      WHERE ${where.sql}
+      GROUP BY day
+      ORDER BY day DESC`,
+    params: [input.shift, ...where.params],
+  };
+}
+
+function buildAdminMemoriesQueries(input: NormalizedAdminMemories, choice: MemoriesQueryChoice): ActivityQuery[] {
+  const queries: ActivityQuery[] = [];
+  if (choice.stats && input.query) {
+    queries.push(memoriesGroupedStatsQuery(input));
+  } else if (choice.stats) {
+    queries.push(memoriesStatsQuery(input));
+    queries.push(memoriesTopProjectsQuery(input));
+  }
+  if (choice.cards !== 'skip') queries.push(memoriesCardsQuery(input, choice.cards === 'scan'));
+  if (choice.dayRange) queries.push(memoriesDaysQuery(input, choice.dayRange));
+  return queries;
+}
+
+function memoriesQueryByName(queries: ActivityQuery[], name: string): ActivityQuery {
+  const found = queries.find((query) => query.name === name);
+  if (!found) throw new Error(`Missing memories query: ${name}`);
+  return found;
+}
+
+function memoriesCardMode(input: NormalizedAdminMemories, total: number | null): MemoriesCardMode {
+  if (input.cursor || total === null) return 'index';
+  if (total === 0) return 'skip';
+  if (input.query && total <= input.limit) return 'scan';
+  return 'index';
+}
+
+function memoriesSqlClock(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function memoriesPageDayRange(items: Array<{ day: string }>, input: NormalizedAdminMemories): { start: string; end: string } | null {
+  if (!items.length) return null;
+  const newest = items[0].day;
+  const oldest = items[items.length - 1].day;
+  const shiftMs = input.offset * 60000;
+  let start = memoriesSqlClock(Date.parse(`${oldest}T00:00:00.000Z`) - shiftMs);
+  let end = memoriesSqlClock(Date.parse(`${newest}T00:00:00.000Z`) + 86400000 - shiftMs);
+  if (input.fromSql !== null && start < input.fromSql) start = input.fromSql;
+  if (input.toSql !== null && input.toSql < end) end = input.toSql;
+  if (start >= end) return null;
+  return { start, end };
+}
+
+function memoriesItem(row: any) {
+  return {
+    ...activityCard(row),
+    preview: String(row.preview_raw ?? '').replace(/\s+/g, ' ').trim(),
+    preview_truncated: Number(row.preview_truncated) === 1,
+  };
+}
+
+function cloneMemoriesStats(stats: AdminMemoriesStats, cached: boolean): AdminMemoriesStats {
+  return {
+    total: stats.total,
+    kinds: {
+      outcome: stats.kinds.outcome,
+      context: stats.kinds.context,
+      legacy: stats.kinds.legacy,
+      fallback: stats.kinds.fallback,
+    },
+    top_projects: stats.top_projects.map((row) => ({ project_path: row.project_path, count: row.count })),
+    cached,
+  };
 }
 
 /** Task rows for one memory. getAdminMemoryDetail and its EXPLAIN test share this text. */
@@ -781,6 +1279,7 @@ function boundedJsonText(text: unknown): unknown {
 export class DatabaseManager {
   private dbPath: string;
   private db: any = null;
+  private memoriesStatsCache = new Map<string, MemoriesStatsCacheEntry>();
 
   constructor() {
     const customPath = process.env.AGENTMEM_DB_PATH;
@@ -2371,7 +2870,8 @@ export class DatabaseManager {
     // Quick-skip only when the stored schema revision is current AND every table and index exists. Any change to the
     // block below must bump TASK_SCHEMA_REVISION, so a database from an older revision always runs the (idempotent) upgrade.
     const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open', 'idx_task_results_task',
-      'idx_task_results_observation', 'idx_observation_content_hash', 'idx_review_runs_interval', 'idx_observations_created_dt'];
+      'idx_task_results_observation', 'idx_observation_content_hash', 'idx_review_runs_interval', 'idx_observations_created_dt',
+      'idx_observations_project_dt'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type IN ('table','index') AND name IN (${[...wanted, ...indexes].map(() => '?').join(',')})`,
       [...wanted, ...indexes]);
     const revision = this.columnsOf('task_schema_meta').size
@@ -2437,6 +2937,8 @@ export class DatabaseManager {
       // Admin Home aggregates filter and sort by datetime(created_at) (mixed stored formats), so index that expression.
       // Additive only: a missing index alone triggers this idempotent block, and older releases simply ignore it.
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_observations_created_dt ON observations(datetime(created_at))`);
+      // Memory lists and Activity with a project filter walk LOWER(project_path), then datetime(created_at).
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_observations_project_dt ON observations(LOWER(project_path), datetime(created_at))`);
       this.db.run(`CREATE TABLE IF NOT EXISTS legacy_compaction_links (
         legacy_observation_id TEXT PRIMARY KEY, task_result_id TEXT NOT NULL)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS task_schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
@@ -2693,6 +3195,168 @@ export class DatabaseManager {
       name: query.name,
       plan: this.db.all(`EXPLAIN QUERY PLAN ${query.sql}`, query.params).map((row: any) => row.detail).join('\n'),
     }));
+  }
+
+  /**
+   * Read-only Memory list. Cards share Activity's column list. Stats are the first page only
+   * and are cached per process until the observation or task_results rowid moves.
+   */
+  public async getAdminMemories(options: AdminMemoriesOptions = {}) {
+    if (!this.db) throw new Error('Database not initialized');
+    const normalized = normalizeAdminMemories(options);
+    const wantStats = !normalized.cursor && normalized.stats;
+    const stats = wantStats ? this.loadAdminMemoriesStats(normalized) : null;
+    const cards = memoriesCardMode(normalized, stats ? stats.total : null);
+    let items: any[] = [];
+    let nextCursor: string | null = null;
+    if (cards !== 'skip') {
+      const cardQuery = memoriesQueryByName(
+        buildAdminMemoriesQueries(normalized, { stats: false, cards, dayRange: null }),
+        'cards',
+      );
+      const fetched = this.db.all(cardQuery.sql, cardQuery.params);
+      const page = fetched.length > normalized.limit ? fetched.slice(0, normalized.limit) : fetched;
+      items = page.map(memoriesItem);
+      if (fetched.length > normalized.limit && page.length) {
+        const last = page[page.length - 1];
+        nextCursor = Buffer.from(JSON.stringify({
+          t: last.cursor_time,
+          r: Number(last.cursor_rowid),
+          f: normalized.filterHash,
+        })).toString('base64url');
+      }
+    }
+    let days: Array<{ day: string; count: number }> = [];
+    if (items.length && !normalized.cursor && !nextCursor) {
+      // The first page holds every match, so its own items are the whole-day counts; skip the range query.
+      const counts = new Map<string, number>();
+      for (const item of items) counts.set(item.day, (counts.get(item.day) || 0) + 1);
+      days = [...counts].map(([day, count]) => ({ day, count })).sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0));
+    } else if (items.length) {
+      const dayRange = memoriesPageDayRange(items, normalized);
+      if (dayRange) {
+        const dayQuery = memoriesQueryByName(
+          buildAdminMemoriesQueries(normalized, { stats: false, cards: 'skip', dayRange }),
+          'days',
+        );
+        days = this.db.all(dayQuery.sql, dayQuery.params).map((row: any) => ({
+          day: row.day,
+          count: Number(row.count) || 0,
+        }));
+      }
+    }
+    return {
+      status: 'ok' as const,
+      disabled: false,
+      generated_at: new Date().toISOString(),
+      filters: {
+        query: normalized.query,
+        project: normalized.project ?? null,
+        agent: normalized.agent ?? null,
+        kind: normalized.kind,
+        source: normalized.source,
+        from: normalized.fromIso,
+        to: normalized.toIso,
+        tz_offset_minutes: normalized.offset,
+      },
+      items,
+      next_cursor: nextCursor,
+      days,
+      stats,
+    };
+  }
+
+  /** EXPLAIN QUERY PLAN of the SQL getAdminMemories would run, including the card-plan choice. */
+  public explainAdminMemories(options: AdminMemoriesOptions = {}): { name: string; plan: string }[] {
+    if (!this.db) throw new Error('Database not initialized');
+    const normalized = normalizeAdminMemories(options);
+    const wantStats = !normalized.cursor && normalized.stats;
+    const total = wantStats ? this.computeAdminMemoriesStats(normalized).total : null;
+    const queries = buildAdminMemoriesQueries(normalized, {
+      stats: wantStats,
+      cards: memoriesCardMode(normalized, wantStats ? total : null),
+      dayRange: null,
+    });
+    return queries.map((query) => ({
+      name: query.name,
+      plan: this.db.all(`EXPLAIN QUERY PLAN ${query.sql}`, query.params).map((row: any) => row.detail).join('\n'),
+    }));
+  }
+
+  private loadAdminMemoriesStats(input: NormalizedAdminMemories): AdminMemoriesStats {
+    const obsMax = this.db.get(`SELECT MAX(rowid) AS n FROM observations`)?.n ?? null;
+    const taskMax = this.db.get(`SELECT MAX(rowid) AS n FROM task_results`)?.n ?? null;
+    const key = `${input.filterHash}:${obsMax}:${taskMax}`;
+    const cached = this.takeMemoriesStats(key);
+    if (cached) return cached;
+    const stats = this.computeAdminMemoriesStats(input);
+    this.storeMemoriesStats(key, stats);
+    return cloneMemoriesStats(stats, false);
+  }
+
+  private computeAdminMemoriesStats(input: NormalizedAdminMemories): AdminMemoriesStats {
+    const queries = buildAdminMemoriesQueries(input, { stats: true, cards: 'skip', dayRange: null });
+    if (input.query) {
+      const groupedQuery = memoriesQueryByName(queries, 'grouped_stats');
+      const grouped = this.db.all(groupedQuery.sql, groupedQuery.params);
+      const kinds = { outcome: 0, context: 0, legacy: 0, fallback: 0 };
+      const projects: Array<{ project_path: string; count: number }> = [];
+      const chosen = (row: any) => input.kind.reduce((n, kind) => n + (Number(row[kind]) || 0), 0);
+      let total = 0;
+      for (const row of grouped) {
+        if (!input.project || Number(row.selected) === 1) {
+          kinds.outcome += Number(row.outcome) || 0;
+          kinds.context += Number(row.context) || 0;
+          kinds.legacy += Number(row.legacy) || 0;
+          kinds.fallback += Number(row.fallback) || 0;
+          total += chosen(row);
+        }
+        const count = chosen(row);
+        if (count > 0) projects.push({ project_path: row.project_path, count });
+      }
+      projects.sort((a, b) => b.count - a.count
+        || (a.project_path.toLowerCase() < b.project_path.toLowerCase() ? -1 : a.project_path.toLowerCase() > b.project_path.toLowerCase() ? 1 : 0));
+      return { total, kinds, top_projects: projects.slice(0, 5), cached: false };
+    }
+    const totals = memoriesQueryByName(queries, 'stats');
+    const projects = memoriesQueryByName(queries, 'top_projects');
+    const row = this.db.get(totals.sql, totals.params) || {};
+    return {
+      total: Number(row.total) || 0,
+      kinds: {
+        outcome: Number(row.outcome) || 0,
+        context: Number(row.context) || 0,
+        legacy: Number(row.legacy) || 0,
+        fallback: Number(row.fallback) || 0,
+      },
+      top_projects: this.db.all(projects.sql, projects.params).map((item: any) => ({
+        project_path: item.project_path,
+        count: Number(item.count) || 0,
+      })),
+      cached: false,
+    };
+  }
+
+  private takeMemoriesStats(key: string): AdminMemoriesStats | null {
+    const entry = this.memoriesStatsCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.at >= MEMORIES_STATS_CACHE_TTL_MS) {
+      this.memoriesStatsCache.delete(key);
+      return null;
+    }
+    this.memoriesStatsCache.delete(key);
+    this.memoriesStatsCache.set(key, entry);
+    return cloneMemoriesStats(entry.value, true);
+  }
+
+  private storeMemoriesStats(key: string, stats: AdminMemoriesStats): void {
+    if (this.memoriesStatsCache.has(key)) this.memoriesStatsCache.delete(key);
+    this.memoriesStatsCache.set(key, { at: Date.now(), value: stats });
+    while (this.memoriesStatsCache.size > MEMORIES_STATS_CACHE_MAX) {
+      const oldest = this.memoriesStatsCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.memoriesStatsCache.delete(oldest);
+    }
   }
 
   /**
@@ -3160,7 +3824,7 @@ export class DatabaseManager {
   }
 
   private escapeLike(input: string): string {
-    return input.replace(/[\\%_]/g, '\\$&');
+    return escapeLikePattern(input);
   }
 }
 

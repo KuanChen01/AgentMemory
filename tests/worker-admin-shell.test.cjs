@@ -571,6 +571,341 @@ test('every Activity i18n key exists in en and zh-CN', () => {
   }
 });
 
+test('activity board, Earlier panel and drawer handle a reads-disabled payload', () => {
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  assert.equal(en['activity.readsDisabledTitle'], 'Memory reads are turned off');
+  assert.equal(zh['activity.readsDisabledTitle'], '记忆读取已关闭');
+  assert.equal(en['activity.readsDisabledLead'], 'Activity is hidden while reads are disabled. Turn reads back on in Settings to see memories here.');
+  assert.equal(zh['activity.readsDisabledLead'], '读取关闭期间不显示活动。到设置里重新打开读取后，这里会恢复显示。');
+  assert.equal(en['activity.drawerReadsDisabled'], 'Memory details are hidden while reads are disabled.');
+  assert.equal(zh['activity.drawerReadsDisabled'], '读取关闭期间不显示记忆详情。');
+
+  const load = extractClientFunction(script, 'loadActivity');
+  assert.match(load, /if \(payload\.disabled\) \{[\s\S]*act\.cards = \[\]/);
+  assert.match(load, /act\.readsDisabled = true/);
+  assert.match(load, /act\.message = payload\.message/);
+  assert.match(load, /act\.readsDisabled = false/);
+
+  const board = extractClientFunction(script, 'renderActivityBoard');
+  assert.ok(board.indexOf('act.readsDisabled') < board.indexOf('activity.errorTitle'));
+  assert.match(board, /activity\.readsDisabledTitle/);
+  assert.match(board, /activity\.readsDisabledLead/);
+
+  const earlierLoad = extractClientFunction(script, 'loadActivityEarlier');
+  assert.match(earlierLoad, /if \(payload\.disabled\) \{[\s\S]*early\.payload = null/);
+  assert.match(earlierLoad, /early\.loadedAt = 0/);
+  assert.match(earlierLoad, /early\.readsDisabled = true/);
+  assert.match(earlierLoad, /early\.readsDisabled = false/);
+
+  const earlier = extractClientFunction(script, 'renderActivityEarlier');
+  assert.match(earlier, /early\.readsDisabled/);
+  assert.ok(earlier.indexOf('activity.readsDisabledTitle') < earlier.indexOf('activity.earlierError'));
+  assert.match(earlier, /activity\.readsDisabledLead/);
+
+  const open = extractClientFunction(script, 'openMemoryDrawer');
+  assert.match(open, /if \(payload\.disabled\) \{[\s\S]*drawer\.readsDisabled = true/);
+  assert.match(open, /drawer\.missing = false/);
+  assert.match(open, /drawer\.readsDisabled = false/);
+
+  const drawer = extractClientFunction(script, 'renderMemoryDrawer');
+  assert.match(drawer, /drawer\.readsDisabled/);
+  assert.match(drawer, /activity\.drawerReadsDisabled/);
+  assert.ok(drawer.indexOf('activity.drawerReadsDisabled') < drawer.indexOf('activity.drawerMissing'));
+});
+
+test('Memory view replaces the placeholder with the toolbar, summary, top projects, list and notice', () => {
+  const start = html.indexOf('id="memoryView"');
+  const memory = html.slice(start, html.indexOf('id="pipelineView"'));
+  assert.match(elementTag('memoryView'), /class="appView memoryView"/);
+  assert.doesNotMatch(memory, /placeholderCard|shell\.comingSoon/);
+  for (const id of ['memoryLead', 'memoryToolbar', 'memorySearchInput', 'memorySearchClear', 'memoryProjectButton', 'memoryProjectValue',
+    'memoryAgentButton', 'memoryKindButton', 'memorySourceButton', 'memoryRangeControl', 'memoryRangeAny', 'memoryRange7d',
+    'memoryRange30d', 'memoryRangeCustom', 'memorySummary', 'memorySumTotal', 'memorySumOutcome', 'memorySumContext', 'memorySumLegacy',
+    'memoryUpdated', 'memoryTopProjects', 'memoryTopBar', 'memoryListHead', 'memoryList', 'memoryNotice', 'memoryNoticeAction',
+    'memoryLoadMore', 'memoryProjectPopover', 'memoryAgentPopover', 'memoryKindPopover', 'memorySourcePopover', 'memoryCustomPopover',
+    'memoryCustomFrom', 'memoryCustomTo', 'memoryCustomApply', 'memoryCustomCancel', 'memoryCustomError']) {
+    assert.ok(memory.includes(`id="${id}"`), `#${id} lives in the Memory view`);
+  }
+  assert.match(elementTag('memorySearchInput'), /maxlength="200"/);
+  assert.deepEqual([...memory.matchAll(/data-memory-range="([^"]+)"/g)].map((match) => match[1]), ['any', '7d', '30d', 'custom']);
+  assert.match(elementTag('memoryRangeAny'), /aria-pressed="true"/);
+  // Popovers sit outside the blurred toolbar, and the list is filled by the client.
+  const toolbar = memory.slice(memory.indexOf('id="memoryToolbar"'), memory.indexOf('id="memorySummary"'));
+  assert.doesNotMatch(toolbar, /class="actPopover/);
+  assert.match(memory, /id="memoryList"[^>]*><\/div>/);
+  // Home "View all" and the Activity search button open Memory.
+  assert.match(elementTag('homeRecentViewAll'), /data-nav-target="memoryView"/);
+  assert.doesNotMatch(elementTag('homeRecentViewAll'), /data-requires-dev-tools/);
+  assert.match(elementTag('activitySearchButton'), /data-nav-target="memoryView"/);
+  assert.match(elementTag('activitySearchButton'), /data-focus-target="memorySearchInput"/);
+  assert.doesNotMatch(elementTag('activitySearchButton'), /aria-disabled/);
+});
+
+test('Memory client reads /admin/api/memories, debounces search and polls only the plain list', () => {
+  assert.match(script, /"\/admin\/api\/memories\?"/);
+  assert.match(script, /MEMORY_SEARCH_DELAY_MS = 300/);
+  const load = extractClientFunction(script, 'loadMemories');
+  assert.match(load, /if \(seq !== mem\.seq\) return;/);
+  assert.match(load, /error\.status === 400/);
+  assert.match(load, /mem\.readsDisabled = true/);
+  assert.match(extractClientFunction(script, 'memoryUrl'), /stats: cursor \? "0" : "1"/);
+  const poll = extractClientFunction(script, 'memoryCanPoll');
+  assert.match(poll, /!isMemoryFiltered\(\)/);
+  assert.match(poll, /!mem\.searchTimer/);
+  assert.match(poll, /!isMemoryDrawerOpen\(\)/);
+  assert.match(poll, /lastScrollAt/);
+  const filtered = extractClientFunction(script, 'isMemoryFiltered');
+  for (const guard of [/mem\.query/, /mem\.project/, /mem\.agent/, /mem\.kind !== "default"/, /mem\.source/, /mem\.range !== "any"/]) {
+    assert.match(filtered, guard);
+  }
+  assert.match(extractClientFunction(script, 'pollVisibleView'), /memoryCanPoll\(\)/);
+  assert.match(extractClientFunction(script, 'usesActivityBackdrop'), /state\.activeView === "memoryView"/);
+  const merged = vm.runInNewContext(`
+    ${extractClientFunction(script, 'mergeMemoryDays')}
+    mergeMemoryDays([{ day: '2026-10-16', count: 4 }, { day: '2026-10-15', count: 9 }], [{ day: '2026-10-15', count: 9 }, { day: '2026-10-14', count: 2 }]);
+  `);
+  assert.deepEqual(JSON.parse(JSON.stringify(merged)), [{ day: '2026-10-16', count: 4 }, { day: '2026-10-15', count: 9 }, { day: '2026-10-14', count: 2 }]);
+  // One drawer for both views: Memory moves Activity's drawer node in rather than copying it.
+  assert.equal((html.match(/class="actDrawer"/g) || []).length, 1);
+  assert.match(extractClientFunction(script, 'mountMemoryDrawer'), /view\.appendChild\(drawerEl\)/);
+});
+
+test('every Memory i18n key exists in en and zh-CN', () => {
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  const memoryKeys = (dict) => Object.keys(dict).filter((key) => key.startsWith('memory.')).sort();
+  assert.ok(memoryKeys(en).length > 60);
+  assert.deepEqual(memoryKeys(zh), memoryKeys(en));
+  for (const key of memoryKeys(en)) {
+    assert.ok(String(en[key]).trim() && String(zh[key]).trim(), `${key} must not be empty`);
+  }
+  const source = html.replace(/const UI_DICTIONARY = .*\n/, '');
+  const used = new Set([...source.matchAll(/"(memory\.[A-Za-z0-9.]+)"/g)].map((match) => match[1]));
+  assert.ok(used.size > 40);
+  for (const key of used) {
+    assert.ok(Object.prototype.hasOwnProperty.call(en, key), `en is missing ${key}`);
+    assert.ok(Object.prototype.hasOwnProperty.call(zh, key), `zh-CN is missing ${key}`);
+  }
+});
+
+test('Memory drawer reserves list space when open and keeps reads-disabled copy local', () => {
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  assert.equal(en['memory.readsDisabledTitle'], 'Memory reads are turned off');
+  assert.equal(zh['memory.readsDisabledTitle'], '记忆读取已关闭');
+  assert.equal(en['memory.readsDisabledLead'], 'Memories are hidden while reads are disabled. Turn reads back on in Settings to browse them here.');
+  assert.equal(zh['memory.readsDisabledLead'], '读取关闭期间不显示记忆。到设置里重新打开读取后，就能在这里浏览。');
+  assert.equal(en['activity.drawerReadsDisabled'], 'Memory details are hidden while reads are disabled.');
+
+  const open = extractClientFunction(script, 'openMemoryDrawer');
+  assert.match(open, /\/admin\/api\/memory-detail\?id=/);
+  const openDisabled = open.slice(open.indexOf('if (payload.disabled)'), open.indexOf('} else {'));
+  assert.match(openDisabled, /drawer\.readsDisabled = true/);
+  assert.match(openDisabled, /drawer\.payload = null/);
+  assert.doesNotMatch(openDisabled, /payload\.message/);
+
+  const drawer = extractClientFunction(script, 'renderMemoryDrawer');
+  assert.match(drawer, /drawer\.readsDisabled/);
+  assert.match(drawer, /activity\.drawerReadsDisabled/);
+  assert.ok(drawer.indexOf('activity.drawerReadsDisabled') < drawer.indexOf('renderMemoryDrawerBody(drawer.payload)'));
+  assert.doesNotMatch(drawer, /payload\.message/);
+  assert.match(drawer, /classList\.toggle\("is-drawer-open", open && drawer\.host === "memoryView"\)/);
+  assert.match(drawer, /classList\.toggle\("has-drawer", open && drawer\.host === "activityView"\)/);
+  assert.doesNotMatch(drawer, /activityView\.classList\.toggle\("is-drawer-open"/);
+
+  const load = extractClientFunction(script, 'loadMemories');
+  const loadDisabled = load.slice(load.indexOf('if (payload.disabled)'), load.indexOf('} else {'));
+  assert.match(loadDisabled, /mem\.readsDisabled = true/);
+  assert.doesNotMatch(loadDisabled, /payload\.message/);
+
+  const notice = extractClientFunction(script, 'renderMemoryNotice');
+  const noticeDisabled = notice.slice(notice.indexOf('if (mem.readsDisabled)'), notice.indexOf('} else if'));
+  assert.match(noticeDisabled, /memory\.readsDisabledTitle/);
+  assert.match(noticeDisabled, /memory\.readsDisabledLead/);
+  assert.doesNotMatch(noticeDisabled, /message/);
+
+  const reserveAt = html.indexOf('.memoryView.is-drawer-open .memSummary');
+  const queryAt = html.lastIndexOf('@media (min-width: 1440px)', reserveAt);
+  assert.ok(queryAt >= 0 && queryAt < reserveAt, 'wide-viewport reserve lives in min-width: 1440px');
+  const reserve = html.slice(reserveAt, html.indexOf('margin-right:', reserveAt) + 80);
+  assert.match(reserve, /\.memoryView\.is-drawer-open \.memSummary/);
+  assert.match(reserve, /\.memoryView\.is-drawer-open \.memTop/);
+  assert.match(reserve, /\.memoryView\.is-drawer-open \.memHead/);
+  assert.match(reserve, /\.memoryView\.is-drawer-open \.memGroup/);
+  assert.match(reserve, /\.memoryView\.is-drawer-open \.memMoreRow/);
+  assert.doesNotMatch(reserve, /\.memToolbar|\.activityView/);
+  assert.match(reserve, /margin-right: calc\(min\(456px, calc\(100vw - 32px\)\) \+ 16px\)/);
+
+  const memory = html.slice(html.indexOf('id="memoryView"'), html.indexOf('id="pipelineView"'));
+  assert.doesNotMatch(memory, /placeholderCard|shell\.comingSoon/);
+  const markup = html.replace(/<script>[\s\S]*<\/script>/, '');
+  const ids = [...markup.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(ids.filter((id, index) => ids.indexOf(id) !== index), []);
+});
+
+test('Memory drawer docks only when matchMedia 1440 matches and is a modal sheet otherwise', () => {
+  const dock = extractClientFunction(script, 'memoryDrawerIsDocked');
+  assert.match(dock, /host === "memoryView"/);
+  assert.match(dock, /window\.matchMedia\("\(min-width: 1440px\)"\)/);
+  assert.match(dock, /query && query\.matches/);
+
+  const mount = extractClientFunction(script, 'mountMemoryDrawer');
+  assert.match(mount, /const docked = memoryDrawerIsDocked\(host\)/);
+  assert.match(mount, /setAttr\(drawerEl, "aria-modal", docked \? "false" : "true"\)/);
+  assert.match(mount, /classList\.toggle\("is-docked", docked\)/);
+
+  const drawer = extractClientFunction(script, 'renderMemoryDrawer');
+  assert.match(drawer, /setHidden\(els\.activityDrawerScrim, !open \|\| memoryDrawerIsDocked\(drawer\.host\)\)/);
+  assert.match(drawer, /classList\.toggle\("is-drawer-open", open && drawer\.host === "memoryView"\)/);
+
+  const open = extractClientFunction(script, 'openMemoryDrawer');
+  assert.match(open, /if \(!memoryDrawerIsDocked\(nextHost\) && els\.activityDrawerClose\) els\.activityDrawerClose\.focus\(\)/);
+
+  const bind = extractClientFunction(script, 'bindMemoryDrawerEvents');
+  assert.match(bind, /els\.activityDrawerScrim\.addEventListener\("click", \(\) => closeMemoryDrawer\(true\)\)/);
+  assert.match(bind, /window\.matchMedia\("\(min-width: 1440px\)"\)/);
+  assert.match(bind, /addEventListener\("change"/);
+  assert.equal((bind.match(/addEventListener\("change"/g) || []).length, 1);
+  assert.match(bind, /if \(!isMemoryDrawerOpen\(\) \|\| state\.drawer\.host !== "memoryView"\) return;/);
+  assert.match(bind, /mountMemoryDrawer\(state\.drawer\.host\)/);
+  assert.match(bind, /event\.key === "Tab" && !memoryDrawerIsDocked\(state\.drawer\.host\)/);
+  assert.match(bind, /event\.key === "Escape"/);
+  assert.match(bind, /#activityDrawerClose/);
+});
+
+test('Earlier panel hides its lead and note while reads are disabled', () => {
+  elementTag('activityEarlierLead');
+  elementTag('activityEarlierNote');
+  assert.match(elementTag('activityEarlierLead'), /data-i18n="activity\.earlierLead"/);
+  assert.match(elementTag('activityEarlierNote'), /data-i18n="activity\.earlierNote"/);
+  const earlier = extractClientFunction(script, 'renderActivityEarlier');
+  assert.match(earlier, /setHidden\(els\.activityEarlierTitle, !!early\.readsDisabled\)/);
+  assert.match(earlier, /setHidden\(els\.activityEarlierLead, !!early\.readsDisabled\)/);
+  assert.match(earlier, /setHidden\(els\.activityEarlierNote, !!early\.readsDisabled\)/);
+  assert.ok(earlier.indexOf('setHidden(els.activityEarlierLead') < earlier.indexOf('activity.readsDisabledTitle'));
+});
+
+test('Memory clears loaded rows as soon as a disabled page comes back', () => {
+  const load = extractClientFunction(script, 'loadMemories');
+  assert.match(load, /if \(mem\.readsDisabled\) mode = "reset"/);
+  const disabled = load.slice(load.indexOf('if (payload.disabled)'), load.indexOf('} else {'));
+  assert.match(disabled, /mem\.items = \[\]/);
+  assert.match(disabled, /mem\.days = \[\]/);
+  assert.match(disabled, /mem\.stats = null/);
+  assert.match(disabled, /mem\.nextCursor = null/);
+  assert.match(disabled, /mem\.rowNodes\.clear\(\)/);
+  assert.match(disabled, /memoryList\.innerHTML = ""/);
+  assert.doesNotMatch(disabled, /mode === "more"|mode === "refresh"|mode === "reset"/);
+  const resumed = load.slice(load.indexOf('} else {'), load.indexOf('const incoming'));
+  assert.match(resumed, /if \(mem\.readsDisabled\) mode = "reset"/);
+  const list = extractClientFunction(script, 'renderMemoryList');
+  assert.match(list, /if \(mem\.readsDisabled && list\) \{[\s\S]*list\.innerHTML = ""/);
+  assert.match(list, /mem\.rowNodes\.clear\(\)/);
+  assert.ok(list.indexOf('list.innerHTML = ""') < list.indexOf('if (noticed) return'));
+});
+
+test('shared drawer hides the copy button while reads are disabled', () => {
+  elementTag('memoryDrawerCopy');
+  const drawer = extractClientFunction(script, 'renderMemoryDrawer');
+  assert.match(drawer, /setHidden\(els\.memoryDrawerCopy, !!drawer\.readsDisabled\)/);
+  assert.ok(drawer.indexOf('memoryDrawerCopy') < drawer.indexOf('activity.drawerReadsDisabled'));
+});
+
+test('escapeHtml neutralises hostile memory text', () => {
+  // extractClientFunction treats the quote inside /"/ as a string, so slice to the next function.
+  const start = script.indexOf('function escapeHtml(');
+  const end = script.indexOf('function summarize(', start);
+  assert.ok(start >= 0 && end > start);
+  const escaped = vm.runInNewContext(`
+    ${script.slice(start, end)}
+    ({
+      img: escapeHtml('<img src=x onerror=alert(1)>'),
+      script: escapeHtml('"><script>'),
+    });
+  `);
+  assert.equal(escaped.img, '&lt;img src=x onerror=alert(1)&gt;');
+  assert.equal(escaped.script, '&quot;&gt;&lt;script&gt;');
+  assert.equal(escaped.img.includes('<'), false);
+  assert.equal(escaped.script.includes('<'), false);
+});
+
+test('memoryCanPoll is false for a 7 day range and a pending search', () => {
+  const result = vm.runInNewContext(`
+    const MEMORY_SCROLL_IDLE_MS = 1500;
+    const state = {
+      activeView: "memoryView",
+      memory: {
+        query: "", project: "", agent: "", kind: "default", source: "", range: "any",
+        loaded: true, readsDisabled: false, searchTimer: 0, openPopover: "", lastScrollAt: 0,
+      },
+      drawer: { id: "" },
+    };
+    const document = { hidden: false };
+    ${extractClientFunction(script, 'isMemoryDrawerOpen')}
+    ${extractClientFunction(script, 'isMemoryFiltered')}
+    ${extractClientFunction(script, 'memoryCanPoll')}
+    const plain = memoryCanPoll();
+    state.memory.range = "7d";
+    const ranged = memoryCanPoll();
+    state.memory.range = "any";
+    state.memory.searchTimer = 41;
+    const pending = memoryCanPoll();
+    state.memory.searchTimer = 0;
+    state.drawer.id = "mem-1";
+    const open = memoryCanPoll();
+    ({ plain, ranged, pending, open });
+  `);
+  assert.equal(result.plain, true);
+  assert.equal(result.ranged, false);
+  assert.equal(result.pending, false);
+  assert.equal(result.open, false);
+});
+
+test('read policy clears Memory and Earlier without waiting for the next poll', () => {
+  const apply = extractClientFunction(script, 'applyReadPolicyToViews');
+  assert.match(apply, /mem\.items = \[\]/);
+  assert.match(apply, /mem\.days = \[\]/);
+  assert.match(apply, /mem\.stats = null/);
+  assert.match(apply, /mem\.nextCursor = null/);
+  assert.match(apply, /mem\.groupNodes\.clear\(\)/);
+  assert.match(apply, /mem\.rowNodes\.clear\(\)/);
+  assert.match(apply, /mem\.readsDisabled = true/);
+  assert.match(apply, /mem\.readsDisabled = false/);
+  assert.match(apply, /mem\.seq \+= 1/);
+  assert.match(apply, /drawer\.payload = null/);
+  assert.match(apply, /drawer\.seq \+= 1/);
+  assert.match(apply, /drawer\.readsDisabled = true/);
+  assert.match(apply, /renderMemoryDrawer\(\)/);
+  assert.match(apply, /early\.payload = null/);
+  assert.match(apply, /early\.loadedAt = 0/);
+  assert.match(apply, /early\.key = ""/);
+  assert.match(apply, /early\.seq \+= 1/);
+  assert.match(apply, /early\.readsDisabled = false/);
+  assert.match(apply, /early\.message = ""/);
+  assert.match(apply, /loadMemories\("reset"\)/);
+  assert.match(apply, /loadActivityEarlier\(true\)/);
+
+  const save = extractClientFunction(script, 'savePolicy');
+  const saved = save.slice(save.indexOf('state.overview.policy = payload.policy'), save.indexOf('} catch'));
+  assert.match(saved, /applyReadPolicyToViews\(payload\.policy\)/);
+  assert.ok(saved.indexOf('payload.policy') < saved.indexOf('renderOverview()'));
+
+  const overview = extractClientFunction(script, 'loadOverview');
+  const refreshed = overview.slice(overview.indexOf('state.overview = nextOverview'), overview.indexOf('renderOverview()'));
+  assert.match(refreshed, /applyReadPolicyToViews\(nextOverview\.policy\)/);
+
+  const load = extractClientFunction(script, 'loadMemories');
+  const disabled = load.slice(load.indexOf('if (payload.disabled)'), load.indexOf('} else {'));
+  assert.match(disabled, /applyReadPolicyToViews\(\{ readEnabled: false \}\)/);
+  const detail = extractClientFunction(script, 'openMemoryDrawer');
+  const detailDisabled = detail.slice(detail.indexOf('if (payload.disabled)'), detail.indexOf('} else {'));
+  assert.match(detailDisabled, /applyReadPolicyToViews\(\{ readEnabled: false \}\)/);
+  const earlier = extractClientFunction(script, 'loadActivityEarlier');
+  const earlierDisabled = earlier.slice(earlier.indexOf('if (payload.disabled)'), earlier.indexOf('} else {'));
+  assert.match(earlierDisabled, /applyReadPolicyToViews\(\{ readEnabled: false \}\)/);
+});
+
 function extractClientFunction(source, name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing function ${name}`);
