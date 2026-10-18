@@ -2641,14 +2641,14 @@ ${WALLPAPER_CSS}
   .activityView,
   .memoryView {
     position: relative;
-    --a-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.40));
+    --a-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.62 * var(--glass-scale))), rgba(255, 255, 255, calc(0.40 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.05), 0 18px 40px -22px rgba(70, 80, 180, 0.38);
-    --a-card-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.12));
+    --a-card-fill: linear-gradient(180deg, rgba(255, 255, 255, calc(0.26 * var(--glass-scale))), rgba(255, 255, 255, calc(0.12 * var(--glass-scale))));
     --a-card-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.04), 0 12px 26px -16px rgba(70, 80, 180, 0.28);
     --a-card-hover-shadow: var(--glass-edge), 0 2px 4px rgba(60, 70, 150, 0.05), 0 18px 34px -16px rgba(70, 80, 180, 0.38);
-    --a-control-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.42));
+    --a-control-fill: linear-gradient(180deg, rgba(255, 255, 255, calc(0.62 * var(--glass-scale))), rgba(255, 255, 255, calc(0.42 * var(--glass-scale))));
     --a-control-shadow: var(--glass-edge), 0 6px 16px -12px rgba(60, 70, 160, 0.40);
-    --a-track-fill: rgba(236, 238, 250, 0.46);
+    --a-track-fill: rgba(236, 238, 250, calc(0.46 * var(--glass-scale)));
     --a-seg-on-fill: linear-gradient(180deg, #ffffff, rgba(244, 248, 255, 0.94));
     --a-seg-on-border: transparent;
     --a-seg-on-ink: var(--glass-text);
@@ -2700,14 +2700,14 @@ ${WALLPAPER_CSS}
   html[data-glass="dark"] .activityView,
   html[data-glass="dark"] .memoryView {
     --a-well-blur: blur(22px) saturate(160%);
-    --a-glass: linear-gradient(180deg, rgba(30, 42, 88, 0.50), rgba(12, 18, 46, 0.46));
+    --a-glass: linear-gradient(180deg, rgba(30, 42, 88, calc(0.50 * var(--glass-scale))), rgba(12, 18, 46, calc(0.46 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 22px 48px -20px rgba(0, 0, 0, 0.70);
-    --a-card-fill: linear-gradient(180deg, rgba(30, 42, 88, 0.62), rgba(14, 20, 50, 0.58));
+    --a-card-fill: linear-gradient(180deg, rgba(30, 42, 88, calc(0.62 * var(--glass-scale))), rgba(14, 20, 50, calc(0.58 * var(--glass-scale))));
     --a-card-shadow: var(--glass-edge), 0 16px 30px -18px rgba(0, 0, 0, 0.80);
     --a-card-hover-shadow: var(--glass-edge), 0 0 0 1px rgba(110, 160, 255, 0.18), 0 20px 36px -18px rgba(0, 0, 0, 0.85);
-    --a-control-fill: linear-gradient(180deg, rgba(40, 52, 100, 0.55), rgba(20, 28, 64, 0.45));
+    --a-control-fill: linear-gradient(180deg, rgba(40, 52, 100, calc(0.55 * var(--glass-scale))), rgba(20, 28, 64, calc(0.45 * var(--glass-scale))));
     --a-control-shadow: var(--glass-edge);
-    --a-track-fill: rgba(8, 12, 32, 0.42);
+    --a-track-fill: rgba(8, 12, 32, calc(0.42 * var(--glass-scale)));
     --a-seg-on-fill: linear-gradient(180deg, #3586ff, #1556dc);
     --a-seg-on-border: rgba(140, 190, 255, 0.55);
     --a-seg-on-ink: #ffffff;
@@ -4721,14 +4721,14 @@ ${WALLPAPER_CSS}
     --m-legacy-dot: #f5a524;
     --a-legacy-fill: var(--m-legacy-fill);
     --a-legacy-ink: var(--m-legacy-ink);
-    --m-group-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.50), rgba(255, 255, 255, 0.30));
+    --m-group-fill: linear-gradient(180deg, rgba(255, 255, 255, calc(0.50 * var(--glass-scale))), rgba(255, 255, 255, calc(0.30 * var(--glass-scale))));
     --m-group-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.04), 0 16px 34px -22px rgba(70, 80, 180, 0.40);
     --m-row-line: rgba(40, 50, 110, 0.07);
     --m-row-hover: rgba(255, 255, 255, 0.46);
     --m-row-on-fill: linear-gradient(180deg, rgba(226, 238, 255, 0.92), rgba(208, 226, 255, 0.70));
     --m-row-on-rim: linear-gradient(180deg, rgba(60, 140, 255, 0.55), rgba(60, 140, 255, 0.30));
     --m-row-on-shadow: 0 8px 20px -12px rgba(30, 100, 230, 0.45);
-    --m-well-fill: rgba(232, 236, 250, 0.42);
+    --m-well-fill: rgba(232, 236, 250, calc(0.42 * var(--glass-scale)));
     --m-rank-0: linear-gradient(180deg, #6aa8ff, #2f7cf6);
     --m-rank-1: linear-gradient(180deg, #c3a8ff, #9a78f2);
     --m-rank-2: linear-gradient(180deg, #8fdcae, #4fbf86);
@@ -4746,14 +4746,14 @@ ${WALLPAPER_CSS}
     --m-legacy-fill: rgba(255, 176, 50, 0.20);
     --m-legacy-ink: #ffc76a;
     --m-legacy-dot: #ffb340;
-    --m-group-fill: linear-gradient(180deg, rgba(28, 40, 86, 0.56), rgba(12, 18, 46, 0.50));
+    --m-group-fill: linear-gradient(180deg, rgba(28, 40, 86, calc(0.56 * var(--glass-scale))), rgba(12, 18, 46, calc(0.50 * var(--glass-scale))));
     --m-group-shadow: var(--glass-edge), 0 20px 40px -22px rgba(0, 0, 0, 0.80);
     --m-row-line: rgba(255, 255, 255, 0.07);
     --m-row-hover: rgba(255, 255, 255, 0.05);
     --m-row-on-fill: linear-gradient(180deg, rgba(40, 92, 210, 0.36), rgba(22, 58, 160, 0.26));
     --m-row-on-rim: linear-gradient(180deg, rgba(120, 175, 255, 0.95), rgba(70, 130, 255, 0.60));
     --m-row-on-shadow: 0 0 22px -6px rgba(50, 120, 255, 0.70);
-    --m-well-fill: rgba(6, 10, 30, 0.40);
+    --m-well-fill: rgba(6, 10, 30, calc(0.40 * var(--glass-scale)));
     --m-rank-0: linear-gradient(180deg, #5d9bff, #2c6cf0);
     --m-rank-1: linear-gradient(180deg, #b49aff, #8462ea);
     --m-rank-2: linear-gradient(180deg, #7fdca2, #3fae74);

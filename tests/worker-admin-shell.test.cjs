@@ -651,8 +651,13 @@ test('Memory client reads /admin/api/memories, debounces search and polls only t
   assert.match(load, /mem\.readsDisabled = true/);
   assert.match(extractClientFunction(script, 'memoryUrl'), /stats: cursor \? "0" : "1"/);
   const poll = extractClientFunction(script, 'memoryCanPoll');
-  for (const guard of [/!mem\.query/, /!mem\.project/, /!mem\.agent/, /mem\.kind === "default"/, /!mem\.source/, /!isMemoryDrawerOpen\(\)/, /lastScrollAt/]) {
-    assert.match(poll, guard);
+  assert.match(poll, /!isMemoryFiltered\(\)/);
+  assert.match(poll, /!mem\.searchTimer/);
+  assert.match(poll, /!isMemoryDrawerOpen\(\)/);
+  assert.match(poll, /lastScrollAt/);
+  const filtered = extractClientFunction(script, 'isMemoryFiltered');
+  for (const guard of [/mem\.query/, /mem\.project/, /mem\.agent/, /mem\.kind !== "default"/, /mem\.source/, /mem\.range !== "any"/]) {
+    assert.match(filtered, guard);
   }
   assert.match(extractClientFunction(script, 'pollVisibleView'), /memoryCanPoll\(\)/);
   assert.match(extractClientFunction(script, 'usesActivityBackdrop'), /state\.activeView === "memoryView"/);
@@ -805,6 +810,100 @@ test('shared drawer hides the copy button while reads are disabled', () => {
   const drawer = extractClientFunction(script, 'renderMemoryDrawer');
   assert.match(drawer, /setHidden\(els\.memoryDrawerCopy, !!drawer\.readsDisabled\)/);
   assert.ok(drawer.indexOf('memoryDrawerCopy') < drawer.indexOf('activity.drawerReadsDisabled'));
+});
+
+test('escapeHtml neutralises hostile memory text', () => {
+  // extractClientFunction treats the quote inside /"/ as a string, so slice to the next function.
+  const start = script.indexOf('function escapeHtml(');
+  const end = script.indexOf('function summarize(', start);
+  assert.ok(start >= 0 && end > start);
+  const escaped = vm.runInNewContext(`
+    ${script.slice(start, end)}
+    ({
+      img: escapeHtml('<img src=x onerror=alert(1)>'),
+      script: escapeHtml('"><script>'),
+    });
+  `);
+  assert.equal(escaped.img, '&lt;img src=x onerror=alert(1)&gt;');
+  assert.equal(escaped.script, '&quot;&gt;&lt;script&gt;');
+  assert.equal(escaped.img.includes('<'), false);
+  assert.equal(escaped.script.includes('<'), false);
+});
+
+test('memoryCanPoll is false for a 7 day range and a pending search', () => {
+  const result = vm.runInNewContext(`
+    const MEMORY_SCROLL_IDLE_MS = 1500;
+    const state = {
+      activeView: "memoryView",
+      memory: {
+        query: "", project: "", agent: "", kind: "default", source: "", range: "any",
+        loaded: true, readsDisabled: false, searchTimer: 0, openPopover: "", lastScrollAt: 0,
+      },
+      drawer: { id: "" },
+    };
+    const document = { hidden: false };
+    ${extractClientFunction(script, 'isMemoryDrawerOpen')}
+    ${extractClientFunction(script, 'isMemoryFiltered')}
+    ${extractClientFunction(script, 'memoryCanPoll')}
+    const plain = memoryCanPoll();
+    state.memory.range = "7d";
+    const ranged = memoryCanPoll();
+    state.memory.range = "any";
+    state.memory.searchTimer = 41;
+    const pending = memoryCanPoll();
+    state.memory.searchTimer = 0;
+    state.drawer.id = "mem-1";
+    const open = memoryCanPoll();
+    ({ plain, ranged, pending, open });
+  `);
+  assert.equal(result.plain, true);
+  assert.equal(result.ranged, false);
+  assert.equal(result.pending, false);
+  assert.equal(result.open, false);
+});
+
+test('read policy clears Memory and Earlier without waiting for the next poll', () => {
+  const apply = extractClientFunction(script, 'applyReadPolicyToViews');
+  assert.match(apply, /mem\.items = \[\]/);
+  assert.match(apply, /mem\.days = \[\]/);
+  assert.match(apply, /mem\.stats = null/);
+  assert.match(apply, /mem\.nextCursor = null/);
+  assert.match(apply, /mem\.groupNodes\.clear\(\)/);
+  assert.match(apply, /mem\.rowNodes\.clear\(\)/);
+  assert.match(apply, /mem\.readsDisabled = true/);
+  assert.match(apply, /mem\.readsDisabled = false/);
+  assert.match(apply, /mem\.seq \+= 1/);
+  assert.match(apply, /drawer\.payload = null/);
+  assert.match(apply, /drawer\.seq \+= 1/);
+  assert.match(apply, /drawer\.readsDisabled = true/);
+  assert.match(apply, /renderMemoryDrawer\(\)/);
+  assert.match(apply, /early\.payload = null/);
+  assert.match(apply, /early\.loadedAt = 0/);
+  assert.match(apply, /early\.key = ""/);
+  assert.match(apply, /early\.seq \+= 1/);
+  assert.match(apply, /early\.readsDisabled = false/);
+  assert.match(apply, /early\.message = ""/);
+  assert.match(apply, /loadMemories\("reset"\)/);
+  assert.match(apply, /loadActivityEarlier\(true\)/);
+
+  const save = extractClientFunction(script, 'savePolicy');
+  const saved = save.slice(save.indexOf('state.overview.policy = payload.policy'), save.indexOf('} catch'));
+  assert.match(saved, /applyReadPolicyToViews\(payload\.policy\)/);
+  assert.ok(saved.indexOf('payload.policy') < saved.indexOf('renderOverview()'));
+
+  const overview = extractClientFunction(script, 'loadOverview');
+  const refreshed = overview.slice(overview.indexOf('state.overview = nextOverview'), overview.indexOf('renderOverview()'));
+  assert.match(refreshed, /applyReadPolicyToViews\(nextOverview\.policy\)/);
+
+  const load = extractClientFunction(script, 'loadMemories');
+  const disabled = load.slice(load.indexOf('if (payload.disabled)'), load.indexOf('} else {'));
+  assert.match(disabled, /applyReadPolicyToViews\(\{ readEnabled: false \}\)/);
+  const detail = extractClientFunction(script, 'openMemoryDrawer');
+  const detailDisabled = detail.slice(detail.indexOf('if (payload.disabled)'), detail.indexOf('} else {'));
+  assert.match(detailDisabled, /applyReadPolicyToViews\(\{ readEnabled: false \}\)/);
+  const earlier = extractClientFunction(script, 'loadActivityEarlier');
+  const earlierDisabled = earlier.slice(earlier.indexOf('if (payload.disabled)'), earlier.indexOf('} else {'));
+  assert.match(earlierDisabled, /applyReadPolicyToViews\(\{ readEnabled: false \}\)/);
 });
 
 function extractClientFunction(source, name) {

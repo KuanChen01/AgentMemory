@@ -2529,6 +2529,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     state.overviewError = false;
     state.overview = nextOverview;
     state.overviewAt = Date.now();
+    applyReadPolicyToViews(nextOverview.policy);
     renderOverview();
   }
 
@@ -3153,6 +3154,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         early.readsDisabled = true;
         early.message = payload.message || "";
         early.error = "";
+        applyReadPolicyToViews({ readEnabled: false });
       } else {
         early.payload = payload;
         early.loadedAt = Date.now();
@@ -3387,6 +3389,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         drawer.payload = null;
         drawer.error = "";
         drawer.missing = false;
+        applyReadPolicyToViews({ readEnabled: false });
       } else {
         drawer.payload = payload;
         drawer.readsDisabled = false;
@@ -4127,11 +4130,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return !!(mem.query || mem.project || mem.agent || mem.kind !== "default" || mem.source || mem.range !== "any");
   }
 
-  // The 5 s poll only refreshes the plain list: no search or filter, no open drawer or menu, and the user not scrolling.
+  // The 5 s poll only refreshes the plain list. isMemoryFiltered covers search text, project, agent, kind,
+  // source and range; a debounce that has not fired yet still sits in searchTimer.
   function memoryCanPoll() {
     const mem = state.memory;
     return state.activeView === "memoryView" && !document.hidden && (mem.loaded || mem.readsDisabled) &&
-      !mem.query && !mem.project && !mem.agent && mem.kind === "default" && !mem.source &&
+      !isMemoryFiltered() && !mem.searchTimer &&
       !isMemoryDrawerOpen() && !mem.openPopover && Date.now() - mem.lastScrollAt > MEMORY_SCROLL_IDLE_MS;
   }
 
@@ -4185,6 +4189,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         mem.groupNodes.clear();
         mem.rowNodes.clear();
         if (els.memoryList) els.memoryList.innerHTML = "";
+        applyReadPolicyToViews({ readEnabled: false });
       } else {
         // Reads came back on this response: do not merge onto pages from before the gap.
         if (mem.readsDisabled) mode = "reset";
@@ -5410,6 +5415,65 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setStoredStatusLine("searchDiagnostics", els.searchDiagnosticsStatus, "search.readyStatus", {}, "");
   }
 
+  // The Memory poll does not run while a filter, a pending search or the drawer is open, so a read
+  // switch has to clear those views itself. Bumping the seqs drops an in-flight list or detail response.
+  function applyReadPolicyToViews(policy) {
+    if (!policy) return;
+    const mem = state.memory;
+    const early = state.activity.earlier;
+    const drawer = state.drawer;
+    if (policy.readEnabled) {
+      if (!mem.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
+      mem.readsDisabled = false;
+      early.readsDisabled = false;
+      early.message = "";
+      early.payload = null;
+      early.loadedAt = 0;
+      early.key = "";
+      early.loading = false;
+      early.seq += 1;
+      const refreshDrawer = !!drawer.id && drawer.readsDisabled;
+      drawer.readsDisabled = false;
+      if (state.activeView === "memoryView") void loadMemories("reset");
+      if (state.activeView === "activityView") void loadActivityEarlier(true);
+      if (refreshDrawer) void openMemoryDrawer(drawer.id, null, drawer.host);
+      return;
+    }
+    if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && !drawer.payload && (!drawer.id || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
+    mem.items = [];
+    mem.days = [];
+    mem.stats = null;
+    mem.nextCursor = null;
+    mem.loaded = false;
+    mem.error = "";
+    mem.refreshFailed = false;
+    mem.stale = false;
+    mem.readsDisabled = true;
+    mem.groupNodes.clear();
+    mem.rowNodes.clear();
+    mem.busySeq = 0;
+    mem.moreSeq = 0;
+    mem.seq += 1;
+    if (els.memoryList) els.memoryList.innerHTML = "";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.copied = false;
+    drawer.signature = "";
+    drawer.seq += 1;
+    if (drawer.id) drawer.readsDisabled = true;
+    early.payload = null;
+    early.loadedAt = 0;
+    early.key = "";
+    early.loading = false;
+    early.error = "";
+    early.readsDisabled = true;
+    early.seq += 1;
+    renderMemory();
+    renderActivityEarlier();
+    if (drawer.id) renderMemoryDrawer();
+  }
+
   async function savePolicy() {
     if (!state.overview || state.isSavingPolicy) return;
     const previousPolicy = {
@@ -5434,6 +5498,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       state.overview.policy = payload.policy;
       state.pendingPolicy = null;
       state.isSavingPolicy = false;
+      applyReadPolicyToViews(payload.policy);
       renderOverview();
     } catch (error) {
       state.pendingPolicy = null;
