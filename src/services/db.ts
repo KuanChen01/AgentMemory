@@ -1017,7 +1017,11 @@ function memoriesStatsQuery(input: NormalizedAdminMemories): ActivityQuery {
   };
 }
 
+// Grouped with COLLATE NOCASE (the same ASCII folding as LOWER()) rather than LOWER(project_path): grouping by the
+// indexed expression makes the planner walk idx_observations_project_dt and fetch every row out of order, which is
+// several times slower than driving from observation_work_metadata or one sequential scan.
 function memoriesTopProjectsQuery(input: NormalizedAdminMemories): ActivityQuery {
+  const typedOnly = !input.kind.includes('legacy');
   const where = memoriesWhere(
     memoriesPlainRange(input.fromSql, input.toSql),
     activityScope(undefined, input.agent),
@@ -1025,15 +1029,42 @@ function memoriesTopProjectsQuery(input: NormalizedAdminMemories): ActivityQuery
     memoriesSourceSql(input.source),
     input.query,
   );
+  // Outcome/context-only or a source filter needs a metadata row, so an inner join lets the planner start from it.
+  const join = typedOnly || input.source ? 'JOIN' : 'LEFT JOIN';
   return {
     name: 'top_projects',
     sql: `SELECT MIN(o.project_path) AS project_path, COUNT(*) AS count
-      ${ACTIVITY_JOINS}
+      FROM observations o ${join} observation_work_metadata m ON m.observation_id=o.id
       WHERE ${where.sql}
-      GROUP BY LOWER(o.project_path)
-      ORDER BY count DESC, LOWER(o.project_path)
+      GROUP BY o.project_path COLLATE NOCASE
+      ORDER BY count DESC, LOWER(MIN(o.project_path))
       LIMIT 5`,
     params: where.params,
+  };
+}
+
+// With a search every row is read anyway, so total, kinds and top projects come from one grouped scan instead of
+// two full LIKE scans. Filters exclude kind and project; each group says whether it is the selected project.
+function memoriesGroupedStatsQuery(input: NormalizedAdminMemories): ActivityQuery {
+  const where = memoriesWhere(
+    memoriesPlainRange(input.fromSql, input.toSql),
+    activityScope(undefined, input.agent),
+    '',
+    memoriesSourceSql(input.source),
+    input.query,
+  );
+  return {
+    name: 'grouped_stats',
+    sql: `SELECT MIN(o.project_path) AS project_path,
+        LOWER(MIN(o.project_path)) = LOWER(?) AS selected,
+        COALESCE(${ACTIVITY_OUTCOME}, 0) AS outcome,
+        COALESCE(${ACTIVITY_CONTEXT}, 0) AS context,
+        COALESCE(${ACTIVITY_LEGACY}, 0) AS legacy,
+        COALESCE(${ACTIVITY_FALLBACK}, 0) AS fallback
+      ${ACTIVITY_JOINS}
+      WHERE ${where.sql}
+      GROUP BY o.project_path COLLATE NOCASE`,
+    params: [input.project ?? '', ...where.params],
   };
 }
 
@@ -1078,7 +1109,9 @@ function memoriesDaysQuery(input: NormalizedAdminMemories, range: { start: strin
 
 function buildAdminMemoriesQueries(input: NormalizedAdminMemories, choice: MemoriesQueryChoice): ActivityQuery[] {
   const queries: ActivityQuery[] = [];
-  if (choice.stats) {
+  if (choice.stats && input.query) {
+    queries.push(memoriesGroupedStatsQuery(input));
+  } else if (choice.stats) {
     queries.push(memoriesStatsQuery(input));
     queries.push(memoriesTopProjectsQuery(input));
   }
@@ -3185,7 +3218,12 @@ export class DatabaseManager {
       }
     }
     let days: Array<{ day: string; count: number }> = [];
-    if (items.length) {
+    if (items.length && !normalized.cursor && !nextCursor) {
+      // The first page holds every match, so its own items are the whole-day counts; skip the range query.
+      const counts = new Map<string, number>();
+      for (const item of items) counts.set(item.day, (counts.get(item.day) || 0) + 1);
+      days = [...counts].map(([day, count]) => ({ day, count })).sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0));
+    } else if (items.length) {
       const dayRange = memoriesPageDayRange(items, normalized);
       if (dayRange) {
         const dayQuery = memoriesQueryByName(
@@ -3224,14 +3262,7 @@ export class DatabaseManager {
     if (!this.db) throw new Error('Database not initialized');
     const normalized = normalizeAdminMemories(options);
     const wantStats = !normalized.cursor && normalized.stats;
-    let total: number | null = null;
-    if (wantStats) {
-      const statsQuery = memoriesQueryByName(
-        buildAdminMemoriesQueries(normalized, { stats: true, cards: 'skip', dayRange: null }),
-        'stats',
-      );
-      total = Number(this.db.get(statsQuery.sql, statsQuery.params)?.total) || 0;
-    }
+    const total = wantStats ? this.computeAdminMemoriesStats(normalized).total : null;
     const queries = buildAdminMemoriesQueries(normalized, {
       stats: wantStats,
       cards: memoriesCardMode(normalized, wantStats ? total : null),
@@ -3249,11 +3280,39 @@ export class DatabaseManager {
     const key = `${input.filterHash}:${obsMax}:${taskMax}`;
     const cached = this.takeMemoriesStats(key);
     if (cached) return cached;
+    const stats = this.computeAdminMemoriesStats(input);
+    this.storeMemoriesStats(key, stats);
+    return cloneMemoriesStats(stats, false);
+  }
+
+  private computeAdminMemoriesStats(input: NormalizedAdminMemories): AdminMemoriesStats {
     const queries = buildAdminMemoriesQueries(input, { stats: true, cards: 'skip', dayRange: null });
+    if (input.query) {
+      const groupedQuery = memoriesQueryByName(queries, 'grouped_stats');
+      const grouped = this.db.all(groupedQuery.sql, groupedQuery.params);
+      const kinds = { outcome: 0, context: 0, legacy: 0, fallback: 0 };
+      const projects: Array<{ project_path: string; count: number }> = [];
+      const chosen = (row: any) => input.kind.reduce((n, kind) => n + (Number(row[kind]) || 0), 0);
+      let total = 0;
+      for (const row of grouped) {
+        if (!input.project || Number(row.selected) === 1) {
+          kinds.outcome += Number(row.outcome) || 0;
+          kinds.context += Number(row.context) || 0;
+          kinds.legacy += Number(row.legacy) || 0;
+          kinds.fallback += Number(row.fallback) || 0;
+          total += chosen(row);
+        }
+        const count = chosen(row);
+        if (count > 0) projects.push({ project_path: row.project_path, count });
+      }
+      projects.sort((a, b) => b.count - a.count
+        || (a.project_path.toLowerCase() < b.project_path.toLowerCase() ? -1 : a.project_path.toLowerCase() > b.project_path.toLowerCase() ? 1 : 0));
+      return { total, kinds, top_projects: projects.slice(0, 5), cached: false };
+    }
     const totals = memoriesQueryByName(queries, 'stats');
     const projects = memoriesQueryByName(queries, 'top_projects');
     const row = this.db.get(totals.sql, totals.params) || {};
-    const stats: AdminMemoriesStats = {
+    return {
       total: Number(row.total) || 0,
       kinds: {
         outcome: Number(row.outcome) || 0,
@@ -3267,8 +3326,6 @@ export class DatabaseManager {
       })),
       cached: false,
     };
-    this.storeMemoriesStats(key, stats);
-    return cloneMemoriesStats(stats, false);
   }
 
   private takeMemoriesStats(key: string): AdminMemoriesStats | null {

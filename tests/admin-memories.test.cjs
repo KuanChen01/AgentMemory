@@ -484,7 +484,9 @@ test('memories skips the card query at total 0 and picks the scan or index from 
   assert.equal(emptyBody.stats.total, 0);
   const emptyPlan = db.explainAdminMemories({ query: 'no-such-token-zz' });
   assert.equal(emptyPlan.find((query) => query.name === 'cards'), undefined);
-  assert.ok(emptyPlan.some((query) => query.name === 'stats'));
+  // A search computes total, kinds and top projects in one grouped scan.
+  assert.deepEqual(emptyPlan.map((query) => query.name), ['grouped_stats']);
+  assert.deepEqual(db.explainAdminMemories({}).map((query) => query.name), ['stats', 'top_projects', 'cards']);
 
   const defaults = db.explainAdminMemories({});
   const defaultCards = defaults.find((query) => query.name === 'cards');
@@ -623,4 +625,44 @@ test('memories items match activity cards for the same memory', withDb(async (db
     'id', 'created_at', 'day', 'kind', 'source', 'fallback', 'title', 'project_path', 'agent_id',
     'files_count', 'files_modified_count', 'facts_count', 'task_count', 'has_review', 'preview', 'preview_truncated',
   ]);
+}));
+
+test('memories search stats come from one grouped scan with the same semantics', withDb(async (db) => {
+  const rows = [
+    ['s1', '/work/DemoAlpha', 'outcome', 'needle one'],
+    ['s2', '/WORK/demoalpha', 'context', 'needle two'],
+    ['s3', '/work/DemoAlpha', null, 'needle legacy'],
+    ['s4', '/work/SampleBeta', 'outcome', 'needle beta'],
+    ['s5', '/work/SampleBeta', 'outcome', 'haystack only'],
+    ['s6', '/work/GammaThree', 'outcome', 'needle gamma'],
+  ];
+  let minute = 10;
+  for (const [id, project_path, record_kind, narrative] of rows) {
+    await save(db, { id, project_path, narrative, created_at: `2026-10-17 01:${minute++}:00`, ...(record_kind ? { record_kind } : {}) });
+  }
+  await taskRow(db, { id: 's4', observationId: 's4', status: 'fallback', createdAt: '2026-10-17 01:13:00', project: '/work/SampleBeta' });
+
+  const plain = await db.getAdminMemories({ query: 'needle', limit: 20 });
+  assert.equal(plain.stats.total, 4);
+  assert.deepEqual(plain.stats.kinds, { outcome: 3, context: 1, legacy: 1, fallback: 1 });
+  assert.deepEqual(plain.stats.top_projects, [
+    { project_path: '/WORK/demoalpha', count: 2 },
+    { project_path: '/work/GammaThree', count: 1 },
+    { project_path: '/work/SampleBeta', count: 1 },
+  ]);
+  assert.equal(plain.items.length, 4);
+
+  const scoped = await db.getAdminMemories({ query: 'needle', project: '/work/demoALPHA', kind: 'outcome,legacy', limit: 20 });
+  assert.equal(scoped.stats.total, 2);
+  assert.deepEqual(scoped.stats.kinds, { outcome: 1, context: 1, legacy: 1, fallback: 0 });
+  assert.deepEqual(scoped.stats.top_projects, [
+    { project_path: '/WORK/demoalpha', count: 2 },
+    { project_path: '/work/GammaThree', count: 1 },
+    { project_path: '/work/SampleBeta', count: 1 },
+  ]);
+  assert.deepEqual(scoped.items.map((item) => item.id).sort(), ['s1', 's3']);
+
+  const sourced = await db.getAdminMemories({ query: 'needle', source: 'task', limit: 20 });
+  assert.equal(sourced.stats.kinds.legacy, 0);
+  assert.equal(sourced.stats.total, 4);
 }));
