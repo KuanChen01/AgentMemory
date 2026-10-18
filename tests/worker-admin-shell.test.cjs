@@ -441,27 +441,6 @@ test('Earlier legacy and mixed days include compacted memories in the count', ()
 });
 
 test('Today and Yesterday reload when the local date changes', () => {
-  const source = `
-    ${extractClientFunction(script, 'localDayKey')}
-    ${extractClientFunction(script, 'activityWindowStale')}
-    const state = { activity: { localDay: '2000-01-01', range: 'yesterday' } };
-    const yesterday = activityWindowStale();
-    state.activity.localDay = '2000-01-01';
-    state.activity.range = 'today';
-    const today = activityWindowStale();
-    state.activity.localDay = '2000-01-01';
-    state.activity.range = 'custom';
-    const custom = activityWindowStale();
-    state.activity.localDay = localDayKey(new Date());
-    state.activity.range = 'today';
-    const same = activityWindowStale();
-    ({ yesterday, today, custom, same });
-  `;
-  const result = vm.runInNewContext(source);
-  assert.equal(result.yesterday, true);
-  assert.equal(result.today, true);
-  assert.equal(result.custom, false);
-  assert.equal(result.same, false);
   const poll = extractClientFunction(script, 'pollVisibleView');
   assert.match(poll, /activityWindowStale\(\)/);
   assert.match(poll, /reloadActivityWindow\(\)/);
@@ -470,6 +449,63 @@ test('Today and Yesterday reload when the local date changes', () => {
   assert.match(reload, /anchorActivityEarlier\(\)/);
   assert.match(reload, /loadActivity\("reset"\)/);
   assert.match(reload, /loadActivityEarlier\(true\)/);
+  // The loaded window key is what the poll compares. The check itself must not invent a day.
+  assert.match(extractClientFunction(script, 'loadActivity'), /act\.windowKey = key/);
+  assert.match(extractClientFunction(script, 'activityWindowStale'), /act\.windowKey/);
+  assert.doesNotMatch(extractClientFunction(script, 'activityWindowStale'), /localDay/);
+});
+
+test('the first poll after midnight reloads a Today or Yesterday window loaded before it', () => {
+  const source = `
+    const ACTIVITY_DAY_MS = 86400000;
+    const ACTIVITY_MAX_DAYS = 120;
+    ${extractClientFunction(script, 'localDayKey')}
+    ${extractClientFunction(script, 'shiftDays')}
+    ${extractClientFunction(script, 'parseLocalDay')}
+    ${extractClientFunction(script, 'getActivityWindow')}
+    ${extractClientFunction(script, 'activityKey')}
+    ${extractClientFunction(script, 'activityWindowStale')}
+    const state = { activity: { range: 'yesterday', project: '', agent: '', kind: 'typed', customFrom: '', customTo: '', windowKey: '', localDay: '' } };
+    const RealDate = Date;
+    function at(iso, run) {
+      const instant = new RealDate(iso).getTime();
+      function Clock(...args) {
+        if (!new.target) return new RealDate(instant).toString();
+        return args.length ? new RealDate(...args) : new RealDate(instant);
+      }
+      Clock.now = () => instant;
+      Clock.parse = RealDate.parse;
+      Clock.UTC = RealDate.UTC;
+      Clock.prototype = RealDate.prototype;
+      globalThis.Date = Clock;
+      try { return run(); }
+      finally { globalThis.Date = RealDate; }
+    }
+    // Opened before midnight. localDay is still empty, which used to make this first later poll a no-op.
+    state.activity.windowKey = at('2000-01-01T22:00:00', () => activityKey(getActivityWindow()));
+    const yesterday = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = 'today';
+    state.activity.windowKey = at('2000-01-01T22:00:00', () => activityKey(getActivityWindow()));
+    const today = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.windowKey = at('2000-01-02T00:00:05', () => activityKey(getActivityWindow()));
+    const same = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = 'custom';
+    const custom = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = '7d';
+    const week = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = 'yesterday';
+    state.activity.windowKey = '';
+    const unloaded = at('2000-01-02T00:00:05', () => activityWindowStale());
+    ({ yesterday, today, same, custom, week, unloaded, localDay: state.activity.localDay });
+  `;
+  const result = vm.runInNewContext(source);
+  assert.equal(result.yesterday, true);
+  assert.equal(result.today, true);
+  assert.equal(result.same, false);
+  assert.equal(result.custom, false);
+  assert.equal(result.week, false);
+  assert.equal(result.unloaded, false);
+  assert.equal(result.localDay, '');
 });
 
 test('Activity default backdrop uses the light and dark artwork', () => {

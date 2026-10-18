@@ -185,8 +185,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       payload: null,
       cards: [],
       nextCursor: null,
+      // from|to|project|agent|kind of the window last fetched. The poll compares it so Today and Yesterday move at midnight.
       windowKey: "",
-      localDay: "",
       loadedAt: 0,
       error: "",
       refreshFailed: false,
@@ -2535,14 +2535,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return win.from.getTime() <= now && now < win.to.getTime();
   }
 
-  // Today and Yesterday are relative to the local date. The 5 s poll must notice midnight, because
-  // Yesterday's window never contains "now" and would otherwise keep showing the previous day.
+  // Today and Yesterday are relative to the local date. Compare the fetched window with the one those
+  // presets name now: the key is stored when the window loads, so the first poll after midnight still sees
+  // the change. Yesterday never contains "now", and the includes-today refresh would leave it in place.
   function activityWindowStale() {
     const act = state.activity;
-    const todayKey = localDayKey(new Date());
-    const previous = act.localDay;
-    act.localDay = todayKey;
-    return !!previous && previous !== todayKey && (act.range === "today" || act.range === "yesterday");
+    if ((act.range !== "today" && act.range !== "yesterday") || !act.windowKey) return false;
+    return activityKey(getActivityWindow()) !== act.windowKey;
   }
 
   function activityKey(win) {
