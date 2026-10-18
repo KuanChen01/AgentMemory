@@ -693,6 +693,8 @@ const MEMORIES_KINDS: MemoryKind[] = ['outcome', 'context', 'legacy'];
 const MEMORIES_SOURCES: MemorySource[] = ['task', 'tool', 'explicit', 'legacy_compacted'];
 const MEMORIES_STATS_CACHE_MAX = 32;
 const MEMORIES_STATS_CACHE_TTL_MS = 60000;
+// Title, narrative, project and agent match the raw text. facts, concepts, files_read and
+// files_modified are JSON, so those four are matched again against the JSON-escaped query.
 const MEMORIES_LIKE_SQL = `(
         o.title LIKE ? ESCAPE '\\'
         OR o.narrative LIKE ? ESCAPE '\\'
@@ -702,6 +704,10 @@ const MEMORIES_LIKE_SQL = `(
         OR o.files_modified LIKE ? ESCAPE '\\'
         OR o.project_path LIKE ? ESCAPE '\\'
         OR o.agent_id LIKE ? ESCAPE '\\'
+        OR o.facts LIKE ? ESCAPE '\\'
+        OR o.concepts LIKE ? ESCAPE '\\'
+        OR o.files_read LIKE ? ESCAPE '\\'
+        OR o.files_modified LIKE ? ESCAPE '\\'
       )`;
 const MEMORIES_JOINS_SCAN = `FROM observations o NOT INDEXED
     LEFT JOIN observation_work_metadata m ON m.observation_id=o.id
@@ -990,7 +996,10 @@ function memoriesWhere(
   if (query) {
     querySql = ` AND ${MEMORIES_LIKE_SQL}`;
     const pattern = `%${escapeLikePattern(query)}%`;
+    // JSON.stringify wraps the query in quotes; the stored text has the escaped interior only.
+    const jsonPattern = `%${escapeLikePattern(JSON.stringify(query).slice(1, -1))}%`;
     for (let i = 0; i < 8; i += 1) params.push(pattern);
+    for (let i = 0; i < 4; i += 1) params.push(jsonPattern);
   }
   return { sql: `${range.sql.length ? range.sql : '1=1'}${scope.sql}${kindSql}${sourceSql}${querySql}`, params };
 }

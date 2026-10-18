@@ -301,6 +301,43 @@ test('memories query matches each of the eight columns and escapes like wildcard
   assert.deepEqual(trimmed.items.map((item) => item.id), ['zh']);
 }));
 
+test('memories query matches JSON-escaped backslashes and quotes', withDb(async (db) => {
+  await save(db, {
+    id: 'win-path',
+    created_at: '2026-10-17 13:00:00',
+    record_kind: 'outcome',
+    project_path: '/work/acme-notes',
+    title: 'panel notes',
+    narrative: 'stored the windows path in files',
+    facts: ['ship the "quoted" label'],
+    files_modified: ['src\\widgets\\panel.ts'],
+  });
+  await save(db, {
+    id: 'posix-decoy',
+    created_at: '2026-10-17 13:30:00',
+    record_kind: 'outcome',
+    project_path: '/work/demo-shop',
+    title: 'posix panel',
+    narrative: 'forward slashes only',
+    files_modified: ['src/widgets/panel.ts'],
+  });
+
+  const byPath = await db.getAdminMemories({ query: 'src\\widgets\\panel.ts', limit: 20 });
+  assert.deepEqual(byPath.items.map((item) => item.id), ['win-path']);
+  assert.equal(byPath.stats.total, 1);
+
+  const byQuote = await db.getAdminMemories({ query: '"quoted"', limit: 20 });
+  assert.deepEqual(byQuote.items.map((item) => item.id), ['win-path']);
+  assert.equal(byQuote.stats.total, 1);
+
+  const percent = await db.getAdminMemories({ query: '%', limit: 20 });
+  assert.deepEqual(percent.items.map((item) => item.id), []);
+  assert.equal(percent.stats.total, 0);
+  const underscore = await db.getAdminMemories({ query: '_', limit: 20 });
+  assert.deepEqual(underscore.items.map((item) => item.id), []);
+  assert.equal(underscore.stats.total, 0);
+}));
+
 test('memories cursor pages identical timestamps and mixed stored formats', withDb(async (db) => {
   const rows = [
     ['before', '2026-10-16 23:00:00'],
