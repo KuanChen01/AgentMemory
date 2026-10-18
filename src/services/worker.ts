@@ -462,6 +462,70 @@ app.get('/admin/api/home-summary', adminOnlyGuard, async (req, res) => {
   }
 });
 
+app.get('/admin/api/activity', adminOnlyGuard, async (req, res) => {
+  try {
+    const readQuery = (key: string): string | undefined => {
+      const value = req.query[key];
+      if (Array.isArray(value)) throw new Error('Invalid activity request: repeated query parameter');
+      if (value === undefined) return undefined;
+      if (typeof value !== 'string') throw new Error('Invalid activity request: query parameter');
+      return value;
+    };
+    const given = (value: string | undefined) => (value === undefined || value === '' ? undefined : value);
+    const tz = given(readQuery('tz_offset_minutes'));
+    const limit = given(readQuery('limit'));
+    const kind = given(readQuery('kind'));
+    const cursor = given(readQuery('cursor'));
+    res.json(await dbManager.getAdminActivity({
+      from: readQuery('from') ?? '',
+      to: readQuery('to') ?? '',
+      tzOffsetMinutes: tz === undefined ? undefined : Number(tz),
+      project: given(readQuery('project')),
+      agent: given(readQuery('agent')),
+      kind: kind as 'typed' | 'legacy' | 'all' | undefined,
+      limit: limit === undefined ? undefined : Number(limit),
+      cursor: cursor ?? null,
+    }));
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid activity request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin activity:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/memory-detail', adminOnlyGuard, async (req, res) => {
+  try {
+    const id = req.query.id;
+    if (Array.isArray(id)) throw new Error('Invalid memory-detail request: repeated id');
+    if (typeof id !== 'string' || id.length === 0 || id.length > 512) {
+      throw new Error('Invalid memory-detail request: id');
+    }
+    const includeRaw = req.query.include_trace;
+    if (Array.isArray(includeRaw) || (includeRaw !== undefined && typeof includeRaw !== 'string')) {
+      throw new Error('Invalid memory-detail request: include_trace');
+    }
+    if (includeRaw !== undefined && includeRaw !== '0' && includeRaw !== '1') {
+      throw new Error('Invalid memory-detail request: include_trace');
+    }
+    const detail = await dbManager.getAdminMemoryDetail(id, { includeTrace: includeRaw === '1' });
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown memory ID' });
+      return;
+    }
+    res.json(detail);
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid memory-detail request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin memory detail:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/admin/api/release-check', adminOnlyGuard, async (_req, res) => {
   try {
     res.json(await checkLatestRelease());

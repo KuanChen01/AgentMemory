@@ -11,6 +11,7 @@ const { renderAdminPageHtml } = require('../dist/services/admin-ui.js');
 const { ADMIN_UI_TRANSLATIONS } = require('../dist/services/admin-ui-copy.js');
 const { ADMIN_UI_NAV_ITEMS, ADMIN_UI_DEV_PANELS, ADMIN_UI_HEALTH_CHECKS } = require('../dist/services/admin-ui-markup.js');
 const { ADMIN_UI_THEME, ADMIN_UI_WALLPAPERS } = require('../dist/services/admin-ui-theme.js');
+const { ACTIVITY_BG_DARK_WEBP, ACTIVITY_BG_LIGHT_WEBP } = require('../dist/services/admin-ui-bg-assets.js');
 const {
   ADMIN_UI_BACKGROUND_STORAGE_KEY,
   ADMIN_UI_BACKGROUND_DEFAULTS,
@@ -240,6 +241,414 @@ test('sidebar Background row opens a labelled popover with presets, upload, tone
   assert.match(script, /URL\.createObjectURL\(/);
 });
 
+test('Activity view exposes the summary, toolbar, chips, day columns and the Earlier slot', () => {
+  const activity = html.slice(html.indexOf('id="activityView"'), html.indexOf('id="memoryView"'));
+  assert.match(elementTag('activityView'), /class="appView activityView"/);
+  assert.doesNotMatch(activity, /placeholderCard|shell\.comingSoon/);
+  for (const id of ['activitySummary', 'activitySumMemories', 'activitySumOutcome', 'activitySumContext', 'activitySumLegacy',
+    'activitySparkline', 'activityToolbar', 'activityRangeControl', 'activityProjectButton', 'activityProjectValue',
+    'activityAgentButton', 'activityAgentValue', 'activityRangeLabel', 'activityUpdated', 'activitySearchButton', 'activityChips',
+    'activityBoard', 'activityColumns', 'activityNotice', 'activityEarlierPanel', 'activityEarlierTitle', 'activityEarlierBody',
+    'activityProjectPopover', 'activityAgentPopover', 'activityCustomPopover', 'activityCustomFrom', 'activityCustomTo',
+    'activityCustomApply', 'activityCustomCancel', 'activityCustomError']) {
+    assert.ok(activity.includes(`id="${id}"`), `#${id} lives in the Activity view`);
+  }
+  for (const index of [0, 1]) {
+    for (const suffix of ['', 'Heading', 'Title', 'Date', 'Outcome', 'Context', 'Legacy', 'Body', 'Cards', 'Empty', 'More']) {
+      elementTag(`activityColumn${index}${suffix}`);
+    }
+  }
+  const ranges = [...activity.matchAll(/data-activity-range="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(ranges, ['today', 'yesterday', '7d', 'custom']);
+  assert.match(elementTag('activityRange7d'), /aria-pressed="true"/);
+  assert.match(elementTag('activityRangeCustom'), /aria-controls="activityCustomPopover"/);
+  assert.match(elementTag('activityEarlierPanel'), /glassBlur/);
+  // Popovers are not inside the blurred toolbar; the Earlier body is filled by the client.
+  const toolbar = activity.slice(activity.indexOf('id="activityToolbar"'), activity.indexOf('id="activityChips"'));
+  assert.ok(toolbar.includes('id="activityProjectButton"'));
+  assert.doesNotMatch(toolbar, /class="actPopover/);
+  assert.match(activity, /id="activityEarlierBody"[^>]*><\/div>/);
+  // Cards are keyed by memory id. The only stats-only (limit=0) request is the Earlier panel's, and the 5 s poll
+  // never makes it.
+  assert.match(script, /setAttribute\("data-memory-id", card\.id\)/);
+  assert.match(script, /\/admin\/api\/activity\?/);
+  assert.match(script, /activityIncludesToday\(getActivityWindow\(\)\)/);
+  assert.equal([...script.matchAll(/limit:\s*"0"/g)].length, 1);
+  assert.match(extractClientFunction(script, 'loadActivityEarlier'), /limit:\s*"0"/);
+  assert.doesNotMatch(extractClientFunction(script, 'pollVisibleView'), /loadActivityEarlier/);
+});
+
+test('Activity Earlier panel and memory drawer expose stable ids and wire to memory-detail', () => {
+  const activity = html.slice(html.indexOf('id="activityView"'), html.indexOf('id="memoryView"'));
+  for (const id of ['activityEarlierLead', 'activityEarlierBody', 'activityEarlierNote', 'activityDrawer', 'activityDrawerScrim',
+    'activityDrawerMeta', 'activityDrawerTitle', 'activityDrawerSub', 'activityDrawerBody', 'activityDrawerClose']) {
+    assert.ok(activity.includes(`id="${id}"`), `#${id} lives in the Activity view`);
+  }
+  const drawer = elementTag('activityDrawer');
+  assert.match(drawer, /role="dialog"/);
+  assert.match(drawer, /aria-modal="true"/);
+  assert.match(drawer, /aria-labelledby="activityDrawerTitle"/);
+  assert.match(drawer, /\bhidden\b/);
+  assert.match(elementTag('activityDrawerClose'), /data-i18n-aria-label="activity\.drawerClose"/);
+  // The memory id goes in the query string (ids may contain ':'), and a card opens the drawer by click or key.
+  assert.match(script, /"\/admin\/api\/memory-detail\?id=" \+ encodeURIComponent\(id\)/);
+  assert.match(script, /node\.setAttribute\("tabindex", "0"\)/);
+  assert.match(script, /data-earlier-day=/);
+  assert.match(script, /data-earlier-toggle=/);
+});
+
+test('Activity drawer clamps long summaries, the Earlier panel stays in the viewport, and Background is a switch', () => {
+  const titleAt = ADMIN_UI_THEME.indexOf('.actDrawerTitle {');
+  const titleCss = ADMIN_UI_THEME.slice(titleAt, ADMIN_UI_THEME.indexOf('}', titleAt));
+  assert.match(titleCss, /line-clamp:\s*2/);
+  assert.doesNotMatch(titleCss, /line-clamp:\s*4/);
+  const railCss = ADMIN_UI_THEME.slice(ADMIN_UI_THEME.indexOf('.activityView .actRail {'), ADMIN_UI_THEME.indexOf('.actRailTitle,'));
+  assert.match(railCss, /max-height:\s*calc\(100vh - 40px\)/);
+  assert.match(script, /rail\.style\.maxHeight = next/);
+  assert.match(ADMIN_UI_THEME, /\.actRailBody\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(script, /function fitActivityEarlierPanel\(/);
+  assert.match(script, /activityEarlierPanel: document\.getElementById\("activityEarlierPanel"\)/);
+  assert.match(script, /data-narrative-toggle/);
+  // The client script is a template string, so the shipped page must still escape the character class.
+  assert.match(script, /trimmed\.match\(\/\[\{\}\\\[\\\]\]\/g\)/);
+  const swatchCss = ADMIN_UI_THEME.slice(ADMIN_UI_THEME.indexOf('.bgSwatch {'), ADMIN_UI_THEME.indexOf('.bgSwatch::after'));
+  assert.doesNotMatch(swatchCss, /wallpaper-swatch/);
+  assert.match(swatchCss, /border-radius:\s*999px/);
+  assert.equal(ADMIN_UI_TRANSLATIONS.en['activity.drawerShowMore'], 'Show more');
+  assert.equal(ADMIN_UI_TRANSLATIONS.en['activity.drawerShowLess'], 'Show less');
+  assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['activity.drawerShowMore'], '显示更多');
+  assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['activity.drawerShowLess'], '收起');
+  const result = vm.runInNewContext(`
+    ${extractClientFunction(script, 'narrativeLooksRaw')}
+    ${extractClientFunction(script, 'narrativeNeedsToggle')}
+    ({
+      short: narrativeNeedsToggle('Saved the release notes.'),
+      long: narrativeNeedsToggle(${JSON.stringify('x'.repeat(400))}),
+      lines: narrativeNeedsToggle('one\\ntwo\\nthree\\nfour\\nfive\\nsix'),
+      raw: narrativeLooksRaw('{"tool":"bash","input":{"cmd":"ls"}}'),
+      prose: narrativeLooksRaw('The install trial verified Node v24.'),
+    });
+  `);
+  assert.equal(result.short, false);
+  assert.equal(result.long, true);
+  assert.equal(result.lines, true);
+  assert.equal(result.raw, true);
+  assert.equal(result.prose, false);
+});
+
+test('Activity drawer clamps a long Facts list and wraps tool names at separators', () => {
+  assert.match(script, /data-facts-toggle/);
+  assert.match(script, /factsOpen/);
+  assert.match(script, /,<wbr> /);
+  assert.doesNotMatch(script, /\$&<wbr>/);
+  const factsLi = ADMIN_UI_THEME.slice(ADMIN_UI_THEME.indexOf('\n  .actFacts li {'), ADMIN_UI_THEME.indexOf('.actFacts li::before'));
+  assert.match(factsLi, /overflow-wrap:\s*break-word/);
+  assert.match(factsLi, /min-width:\s*0/);
+  assert.doesNotMatch(factsLi, /anywhere/);
+  const clampAt = ADMIN_UI_THEME.indexOf('.actNarrativeClamp:not(.is-open) .actFacts li {');
+  const clampCss = ADMIN_UI_THEME.slice(clampAt, ADMIN_UI_THEME.indexOf('}', clampAt));
+  assert.match(clampCss, /line-clamp:\s*5/);
+  const result = vm.runInNewContext(`
+    ${extractClientFunction(script, 'factsNeedToggle')}
+    ({
+      short: factsNeedToggle(['Saved the release notes.', 'Node v24 is current.']),
+      many: factsNeedToggle(['a', 'b', 'c', 'd', 'e', 'f']),
+      tools: factsNeedToggle(['12 tool calls (' + ${JSON.stringify('mcp__codex_apps__github__search_issues, '.repeat(12))} + ')']),
+    });
+  `);
+  assert.equal(result.short, false);
+  assert.equal(result.many, true);
+  assert.equal(result.tools, true);
+});
+
+test('Activity day pills hide at zero, headings read "Fri, Oct 16" and zh-CN ranges keep the dash tight', () => {
+  const column = extractClientFunction(script, 'renderActivityColumn');
+  assert.match(column, /setHidden\(pill, !act\.payload \|\| count === 0/);
+  assert.match(column, /weekday: "short", month: "short", day: "numeric"/);
+  for (const index of [0, 1]) {
+    for (const kind of ['Outcome', 'Context', 'Legacy']) assert.match(elementTag(`activityColumn${index}${kind}`), /\bhidden\b/);
+  }
+  assert.match(extractClientFunction(script, 'renderActivityToolbar'), /state\.locale === "zh-CN" \? "–" : " – "/);
+});
+
+test('Activity gives every visible project its own dot colour until the palette runs out', () => {
+  const source = `
+    const ACTIVITY_HUES = 10;
+    const state = { activity: { hues: new Map() } };
+    ${extractClientFunction(script, 'projectHue')}
+    ${extractClientFunction(script, 'assignActivityHues')}
+    const rows = ['E:/demo/DemoAlpha', 'E:/demo/SampleBeta', 'E:/demo/SampleBeta_2', 'E:/demo/ExampleGamma',
+      'E:/demo/FixtureDelta', 'E:/demo/MockEcho', 'E:/demo/TrialFoxtrot', 'E:/demo/PlaceholderGolf', 'E:/demo/SyntheticHotel', 'E:/demo/x']
+      .map((project_path) => ({ project_path }));
+    assignActivityHues(rows);
+    const first = rows.map((row) => projectHue(row.project_path));
+    state.activity.hues.clear();
+    assignActivityHues(rows.slice().reverse());
+    ({ first, again: rows.map((row) => projectHue(row.project_path)), empty: projectHue(''), upper: projectHue('E:/DEMO/SAMPLEBETA') });
+  `;
+  const result = vm.runInNewContext(source);
+  assert.equal(new Set(result.first).size, 10, 'ten projects take ten distinct slots');
+  assert.deepEqual([...result.again], [...result.first], 'slots do not depend on render order');
+  assert.equal(result.empty, 'none');
+  assert.equal(result.upper, result.first[1], 'paths match case-insensitively');
+});
+
+test('Activity shows its own default backdrop until the user picks a background', () => {
+  assert.match(ADMIN_UI_THEME, /html\[data-act-bg="light"\] \{\s*--wallpaper:/);
+  assert.match(ADMIN_UI_THEME, /html\[data-act-bg="dark"\] \{\s*--wallpaper:/);
+  const uses = extractClientFunction(script, 'usesActivityBackdrop');
+  assert.match(uses, /state\.activeView === "activityView"/);
+  assert.match(uses, /!settings\.pinned/);
+  assert.match(uses, /settings\.tone === "auto"/);
+  assert.match(extractClientFunction(script, 'applyBackdrop'), /prefers-color-scheme: dark/);
+  // Picking a preset or uploading pins the choice; Reset returns to the default.
+  assert.match(script, /updateBackground\(\{ preset, pinned: true \}, true\)/);
+  assert.match(script, /pinned: false \}, true\)/);
+  const boot = renderAdminBackgroundBootScript();
+  assert.match(boot, /pinned: !!\(raw && typeof raw === "object"\) && source\.pinned !== false/);
+  const pinnedFor = (stored) => {
+    const context = {
+      document: { documentElement: { setAttribute() {}, style: { setProperty() {}, removeProperty() {} } } },
+      localStorage: { getItem() { return stored; } },
+    };
+    context.window = context;
+    vm.runInNewContext(boot, context);
+    return context.window.__amBackground.read().pinned;
+  };
+  assert.equal(pinnedFor(null), false);
+  assert.equal(pinnedFor(JSON.stringify({ preset: 'night', blur: 8 })), true);
+  assert.equal(pinnedFor(JSON.stringify({ preset: 'aurora', pinned: false })), false);
+  assert.equal(pinnedFor(JSON.stringify({ preset: 'sunset', pinned: true })), true);
+});
+
+test('Earlier legacy and mixed days include compacted memories in the count', () => {
+  const source = `
+    ${extractClientFunction(script, 'earlierTyped')}
+    ${extractClientFunction(script, 'earlierShownCount')}
+    ({
+      compacted: earlierShownCount({ era: 'legacy', legacy: 0, outcome: 3, context: 1 }),
+      raw: earlierShownCount({ era: 'legacy', legacy: 40, outcome: 0, context: 0 }),
+      mixed: earlierShownCount({ era: 'mixed', legacy: 10, outcome: 2, context: 1 }),
+      current: earlierShownCount({ era: 'v2.1', legacy: 9, outcome: 5, context: 1 }),
+    });
+  `;
+  const result = vm.runInNewContext(source);
+  assert.equal(result.compacted, 4);
+  assert.equal(result.raw, 40);
+  assert.equal(result.mixed, 13);
+  assert.equal(result.current, 6);
+  assert.match(extractClientFunction(script, 'renderActivityEarlier'), /earlierShownCount/);
+});
+
+test('Today and Yesterday reload when the local date changes', () => {
+  const poll = extractClientFunction(script, 'pollVisibleView');
+  assert.match(poll, /activityWindowStale\(\)/);
+  assert.match(poll, /reloadActivityWindow\(\)/);
+  assert.doesNotMatch(poll, /loadActivityEarlier/);
+  const reload = extractClientFunction(script, 'reloadActivityWindow');
+  assert.match(reload, /anchorActivityEarlier\(\)/);
+  assert.match(reload, /loadActivity\("reset"\)/);
+  assert.match(reload, /loadActivityEarlier\(true\)/);
+  // The loaded window key is what the poll compares. The check itself must not invent a day.
+  assert.match(extractClientFunction(script, 'loadActivity'), /act\.windowKey = key/);
+  assert.match(extractClientFunction(script, 'activityWindowStale'), /act\.windowKey/);
+  assert.doesNotMatch(extractClientFunction(script, 'activityWindowStale'), /localDay/);
+});
+
+test('the first poll after midnight reloads a Today or Yesterday window loaded before it', () => {
+  const source = `
+    const ACTIVITY_DAY_MS = 86400000;
+    const ACTIVITY_MAX_DAYS = 120;
+    ${extractClientFunction(script, 'localDayKey')}
+    ${extractClientFunction(script, 'shiftDays')}
+    ${extractClientFunction(script, 'parseLocalDay')}
+    ${extractClientFunction(script, 'getActivityWindow')}
+    ${extractClientFunction(script, 'activityKey')}
+    ${extractClientFunction(script, 'activityWindowStale')}
+    const state = { activity: { range: 'yesterday', project: '', agent: '', kind: 'typed', customFrom: '', customTo: '', windowKey: '', localDay: '' } };
+    const RealDate = Date;
+    function at(iso, run) {
+      const instant = new RealDate(iso).getTime();
+      function Clock(...args) {
+        if (!new.target) return new RealDate(instant).toString();
+        return args.length ? new RealDate(...args) : new RealDate(instant);
+      }
+      Clock.now = () => instant;
+      Clock.parse = RealDate.parse;
+      Clock.UTC = RealDate.UTC;
+      Clock.prototype = RealDate.prototype;
+      globalThis.Date = Clock;
+      try { return run(); }
+      finally { globalThis.Date = RealDate; }
+    }
+    // Opened before midnight. localDay is still empty, which used to make this first later poll a no-op.
+    state.activity.windowKey = at('2000-01-01T22:00:00', () => activityKey(getActivityWindow()));
+    const yesterday = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = 'today';
+    state.activity.windowKey = at('2000-01-01T22:00:00', () => activityKey(getActivityWindow()));
+    const today = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.windowKey = at('2000-01-02T00:00:05', () => activityKey(getActivityWindow()));
+    const same = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = 'custom';
+    const custom = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = '7d';
+    const week = at('2000-01-02T00:00:05', () => activityWindowStale());
+    state.activity.range = 'yesterday';
+    state.activity.windowKey = '';
+    const unloaded = at('2000-01-02T00:00:05', () => activityWindowStale());
+    ({ yesterday, today, same, custom, week, unloaded, localDay: state.activity.localDay });
+  `;
+  const result = vm.runInNewContext(source);
+  assert.equal(result.yesterday, true);
+  assert.equal(result.today, true);
+  assert.equal(result.same, false);
+  assert.equal(result.custom, false);
+  assert.equal(result.week, false);
+  assert.equal(result.unloaded, false);
+  assert.equal(result.localDay, '');
+});
+
+test('Activity default backdrop uses the light and dark artwork', () => {
+  function actWallpaper(scheme) {
+    const start = ADMIN_UI_THEME.indexOf(`html[data-act-bg="${scheme}"] {`);
+    assert.ok(start >= 0, scheme);
+    return ADMIN_UI_THEME.slice(start, ADMIN_UI_THEME.indexOf('}', start));
+  }
+  const light = actWallpaper('light');
+  const dark = actWallpaper('dark');
+  assert.ok(light.includes(ACTIVITY_BG_LIGHT_WEBP));
+  assert.ok(dark.includes(ACTIVITY_BG_DARK_WEBP));
+  assert.equal(light.includes(ACTIVITY_BG_DARK_WEBP), false);
+  assert.equal(dark.includes(ACTIVITY_BG_LIGHT_WEBP), false);
+  assert.match(light, /center \/ cover no-repeat, #e7eefb/);
+  assert.match(dark, /center \/ cover no-repeat, #0b1226/);
+  assert.match(light, /--wallpaper-base:\s*#e7eefb/);
+  assert.match(dark, /--wallpaper-base:\s*#0b1226/);
+  assert.doesNotMatch(light, /radial-gradient/);
+  assert.doesNotMatch(dark, /radial-gradient/);
+});
+
+test('top bar keeps Read and Write in one compact pill and the language in a menu', () => {
+  const group = html.slice(html.indexOf('id="policyGroup"'), html.indexOf('id="localeToggle"'));
+  assert.ok(group.includes('id="readPolicyCard"') && group.includes('id="writePolicyCard"'));
+  assert.match(elementTag('policyGroup'), /role="group"/);
+  assert.doesNotMatch(elementTag('readPolicyCard'), /glassPill/);
+  const trigger = elementTag('localeMenuButton');
+  assert.match(trigger, /aria-haspopup="listbox"/);
+  assert.doesNotMatch(trigger, /aria-haspopup="true"/);
+  assert.doesNotMatch(trigger, /aria-label=/);
+  assert.match(trigger, /aria-controls="localeMenuList"/);
+  const menu = html.slice(html.indexOf('id="localeMenuButton"'), html.indexOf('id="localeMenuList"'));
+  assert.match(menu, /data-i18n="locale\.label"/);
+  assert.match(menu, /id="localeMenuValue"/);
+  const listTag = elementTag('localeMenuList');
+  assert.match(listTag, /role="listbox"/);
+  assert.match(listTag, /\bhidden\b/);
+  const listAt = html.indexOf('id="localeMenuList"');
+  const list = html.slice(listAt, html.indexOf('</header>', listAt));
+  assert.match(list, /role="option"/);
+  assert.match(list, /data-locale-choice="en"/);
+  assert.match(list, /data-locale-choice="zh-CN"/);
+});
+
+test('every Activity i18n key exists in en and zh-CN', () => {
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  const activityKeys = (dict) => Object.keys(dict).filter((key) => key.startsWith('activity.')).sort();
+  assert.ok(activityKeys(en).length > 40);
+  assert.deepEqual(activityKeys(zh), activityKeys(en));
+  for (const key of activityKeys(en)) {
+    assert.ok(String(en[key]).trim() && String(zh[key]).trim(), `${key} must not be empty`);
+  }
+  const used = new Set();
+  // Markup plus client code, without the inlined dictionary itself.
+  const source = html.replace(/const UI_DICTIONARY = .*\n/, '');
+  for (const match of source.matchAll(/"(activity\.[A-Za-z0-9.]+)"/g)) used.add(match[1]);
+  assert.ok(used.size > 30);
+  for (const key of used) {
+    assert.ok(Object.prototype.hasOwnProperty.call(en, key), `en is missing ${key}`);
+    assert.ok(Object.prototype.hasOwnProperty.call(zh, key), `zh-CN is missing ${key}`);
+  }
+});
+
+function extractClientFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `missing function ${name}`);
+  let depth = 0;
+  let seen = false;
+  let quote = '';
+  let escape = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (escape) escape = false;
+      else if (char === '\\') escape = true;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+    // A slash escaped by a backslash is a regex such as /^image\//, not a line comment.
+    if (char === '/' && source[index + 1] === '/' && source[index - 1] !== '\\') {
+      const newline = source.indexOf('\n', index);
+      if (newline < 0) break;
+      index = newline;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+      seen = true;
+    } else if (char === '}') {
+      depth -= 1;
+      if (seen && depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  assert.fail(`unclosed function ${name}`);
+}
+
+test('custom wallpaper rejects files over 10 MB before decode and keeps transparent pixels', () => {
+  assert.match(script, /BG_MAX_UPLOAD_BYTES = 10 \* 1024 \* 1024/);
+  const upload = extractClientFunction(script, 'handleWallpaperUpload');
+  const sizeAt = upload.search(/file\.size\s*>\s*BG_MAX_UPLOAD_BYTES/);
+  const prepareAt = upload.indexOf('prepareWallpaper(');
+  const busyAt = upload.indexOf('bg.busy = true');
+  assert.ok(sizeAt >= 0, 'size check inside handleWallpaperUpload');
+  assert.ok(prepareAt >= 0, 'prepareWallpaper call inside handleWallpaperUpload');
+  assert.ok(sizeAt < prepareAt, 'size check runs before decode');
+  assert.ok(busyAt > sizeAt, 'oversized files return before bg.busy is set');
+  assert.match(upload, /setBackgroundStatus\("bg\.uploadTooLarge", true\)/);
+  assert.equal(ADMIN_UI_TRANSLATIONS.en['bg.uploadTooLarge'], 'That image is larger than 10 MB. Pick a smaller one.');
+  assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['bg.uploadTooLarge'], '图片超过 10 MB，请换一张小一点的。');
+
+  const width = 8;
+  const height = 8;
+  const result = vm.runInNewContext(`
+    ${extractClientFunction(script, 'canvasHasAlpha')}
+    ${extractClientFunction(script, 'wallpaperEncodeTypes')}
+    const opaque = new Uint8ClampedArray(${width * height * 4});
+    opaque.fill(255);
+    const sampled = new Uint8ClampedArray(opaque);
+    sampled[((4 * ${width}) + 4) * 4 + 3] = 254;
+    const offRow = new Uint8ClampedArray(opaque);
+    offRow[((1 * ${width}) + 4) * 4 + 3] = 0;
+    ({
+      opaque: canvasHasAlpha(opaque, ${width}, ${height}, 4),
+      sampled: canvasHasAlpha(sampled, ${width}, ${height}, 4),
+      offRow: canvasHasAlpha(offRow, ${width}, ${height}, 4),
+      alphaTypes: wallpaperEncodeTypes(true),
+      opaqueTypes: wallpaperEncodeTypes(false),
+    });
+  `);
+  assert.equal(result.opaque, false);
+  assert.equal(result.sampled, true);
+  assert.equal(result.offRow, false);
+  // Arrays created inside the vm have that realm's Array prototype, so copy them before deepEqual.
+  assert.deepEqual([...result.alphaTypes], ['image/webp', 'image/png']);
+  assert.deepEqual([...result.opaqueTypes], ['image/jpeg']);
+});
+
 test('background settings persist under am.bg and apply in <head> before first paint', () => {
   assert.equal(ADMIN_UI_BACKGROUND_STORAGE_KEY, 'am.bg');
   assert.deepEqual(ADMIN_UI_BACKGROUND_DEFAULTS, { preset: 'aurora', tone: 'auto', blur: 12, dim: 0, opacity: 30 });
@@ -295,6 +704,20 @@ test('glass surfaces are driven by :root variables and the wallpaper is one stat
   // No external images or fonts.
   assert.doesNotMatch(css, /url\((?!["']?data:|#|var\()/);
   assert.doesNotMatch(css, /@import|@font-face/);
+});
+
+test('glass surfaces share one gradient rim and thickness shadow instead of flat borders', () => {
+  const css = ADMIN_UI_THEME.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(css, /--glass-border:\s*radial-gradient\(/);
+  assert.match(css, /--glass-edge:\s*inset /);
+  const rim = css.match(/([^{}]+)\{[^{}]*background: var\(--glass-border\);[^{}]*mask-composite: exclude;/);
+  assert.ok(rim, 'one rule paints the masked rim');
+  for (const sel of ['.glassCard::after', '.glassSurface::after', '.glassPill::after', '.actCard::after', '.actChip::after', '.actPopup::after', '.actDrawer::after']) {
+    assert.ok(rim[1].includes(sel), `${sel} gets the rim`);
+  }
+  // The old flat borders are gone; their 1px stays transparent so nothing moves.
+  assert.doesNotMatch(css, /var\(--(?:a-glass|a-card|a-control|a-drawer|a-section|a-track|pill)-border\)/);
+  assert.doesNotMatch(css, /border: 1px solid var\(--glass-border\)/);
 });
 
 test('Home blurs nine static surfaces: the sidebar, five health cards and three content cards', () => {
@@ -520,3 +943,22 @@ test('home summary route rejects non-loopback requests with 403', async (t) => {
     assert.match((await response.json()).error, /loopback/);
   });
 });
+
+test('activity and memory-detail queries use the task_results observation index, and existing databases gain it on startup', withDb(async (db) => {
+  const plan = (sql, values = []) => db.sqlAll(`EXPLAIN QUERY PLAN ${sql}`, values).map(row => row.detail).join(' | ');
+  assert.match(plan(`SELECT COUNT(*) FROM task_results WHERE observation_id=?`, ['obs']), /idx_task_results_observation/);
+  assert.match(plan(`SELECT id FROM task_results WHERE observation_id=? ORDER BY rowid`, ['obs']), /idx_task_results_observation/);
+  // A database from the previous release has no such index: the next initialize adds it without a schema bump.
+  await db.sqlWrite((tx) => tx.run(`DROP INDEX idx_task_results_observation`));
+  const dbPath = process.env.AGENTMEM_DB_PATH;
+  db.close();
+  const reopened = new DatabaseManager();
+  try {
+    await reopened.initialize();
+    assert.equal(reopened.sqlAll(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_task_results_observation'`).length, 1);
+    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+  } finally {
+    reopened.close();
+  }
+  assert.equal(process.env.AGENTMEM_DB_PATH, dbPath);
+}));
