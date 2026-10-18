@@ -582,6 +582,23 @@ const ACTIVITY_NATIVE = `SUM(CASE WHEN m.record_kind IN ('outcome','context') AN
 const ACTIVITY_OLD = `SUM(CASE WHEN m.record_kind IN ('outcome','context') AND IFNULL(m.source_kind,'')!='legacy_compacted' THEN 0 ELSE 1 END)`;
 const ACTIVITY_FILES_READ = `CASE WHEN json_valid(o.files_read) AND json_type(o.files_read)='array' THEN o.files_read ELSE '[]' END`;
 const ACTIVITY_FILES_MOD = `CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN o.files_modified ELSE '[]' END`;
+// Shared card columns. The day's `?` is the tz shift and stays the first bound parameter.
+const ADMIN_CARD_COLUMNS = `o.id, o.created_at, o.rowid AS cursor_rowid, datetime(o.created_at) AS cursor_time,
+        date(datetime(o.created_at), ?) AS day,
+        CASE WHEN m.record_kind IN ('outcome','context') THEN m.record_kind ELSE 'legacy' END AS kind,
+        m.source_kind AS source,
+        CASE WHEN m.record_kind IN ('outcome','context') AND r.status='fallback' THEN 1 ELSE 0 END AS fallback,
+        substr(o.title, 1, 200) AS title,
+        o.project_path, o.agent_id,
+        (SELECT COUNT(DISTINCT value) FROM (
+          SELECT value FROM json_each(${ACTIVITY_FILES_READ})
+          UNION ALL
+          SELECT value FROM json_each(${ACTIVITY_FILES_MOD})
+        )) AS files_count,
+        CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN json_array_length(o.files_modified) ELSE 0 END AS files_modified_count,
+        CASE WHEN json_valid(o.facts) AND json_type(o.facts)='array' THEN json_array_length(o.facts) ELSE 0 END AS facts_count,
+        (SELECT COUNT(*) FROM task_results t WHERE t.observation_id=o.id) AS task_count,
+        EXISTS(SELECT 1 FROM post_task_reviews p WHERE p.source_observation_id=o.id) AS has_review`;
 
 function activityScope(project?: string, agent?: string): { sql: string; params: any[] } {
   const params: any[] = [];
@@ -658,22 +675,7 @@ function buildAdminActivityQueries(input: NormalizedAdminActivity): ActivityQuer
   // plans as a sorter and reports USE TEMP B-TREE FOR ORDER BY on the cards query.
   queries.push({
     name: 'cards',
-    sql: `SELECT o.id, o.created_at, o.rowid AS cursor_rowid, datetime(o.created_at) AS cursor_time,
-        date(datetime(o.created_at), ?) AS day,
-        CASE WHEN m.record_kind IN ('outcome','context') THEN m.record_kind ELSE 'legacy' END AS kind,
-        m.source_kind AS source,
-        CASE WHEN m.record_kind IN ('outcome','context') AND r.status='fallback' THEN 1 ELSE 0 END AS fallback,
-        substr(o.title, 1, 200) AS title,
-        o.project_path, o.agent_id,
-        (SELECT COUNT(DISTINCT value) FROM (
-          SELECT value FROM json_each(${ACTIVITY_FILES_READ})
-          UNION ALL
-          SELECT value FROM json_each(${ACTIVITY_FILES_MOD})
-        )) AS files_count,
-        CASE WHEN json_valid(o.files_modified) AND json_type(o.files_modified)='array' THEN json_array_length(o.files_modified) ELSE 0 END AS files_modified_count,
-        CASE WHEN json_valid(o.facts) AND json_type(o.facts)='array' THEN json_array_length(o.facts) ELSE 0 END AS facts_count,
-        (SELECT COUNT(*) FROM task_results t WHERE t.observation_id=o.id) AS task_count,
-        EXISTS(SELECT 1 FROM post_task_reviews p WHERE p.source_observation_id=o.id) AS has_review
+    sql: `SELECT ${ADMIN_CARD_COLUMNS}
       ${ACTIVITY_JOINS}
       WHERE ${cardsWindowSql}${cursorSql}${scope.sql}${activityKindSql(input.kind)}
       ORDER BY datetime(o.created_at) DESC, o.rowid DESC
