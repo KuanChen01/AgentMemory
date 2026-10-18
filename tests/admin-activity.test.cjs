@@ -450,7 +450,10 @@ test('activity queries use idx_observations_created_dt and the task observation 
     for (const cursorValue of [null, cursor]) {
       const plans = db.explainAdminActivity({ ...base, kind, cursor: cursorValue });
       assert.deepEqual(plans.map((query) => query.name), ['breakdown', 'days', 'cards']);
-      for (const query of plans) assert.match(query.plan, /idx_observations_created_dt/, `${kind} ${query.name}`);
+      // breakdown has no project filter and walks the datetime index; days and cards filter by project, so the
+      // planner may take idx_observations_project_dt (project equality, then the same datetime range).
+      assert.match(plans[0].plan, /idx_observations_created_dt/, `${kind} breakdown`);
+      for (const query of plans.slice(1)) assert.match(query.plan, /idx_observations_(created|project)_dt/, `${kind} ${query.name}`);
       const cards = plans.find((query) => query.name === 'cards');
       assert.doesNotMatch(cards.plan, /USE TEMP B-TREE FOR ORDER BY/);
       assert.match(cards.plan, /idx_task_results_observation/);
@@ -458,5 +461,5 @@ test('activity queries use idx_observations_created_dt and the task observation 
   }
   const statsOnly = db.explainAdminActivity({ ...base, limit: 0 });
   assert.deepEqual(statsOnly.map((query) => query.name), ['breakdown', 'days']);
-  for (const query of statsOnly) assert.match(query.plan, /idx_observations_created_dt/);
+  for (const query of statsOnly) assert.match(query.plan, /idx_observations_(created|project)_dt/);
 }));
