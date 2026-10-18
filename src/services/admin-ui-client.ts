@@ -189,6 +189,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       windowKey: "",
       loadedAt: 0,
       error: "",
+      readsDisabled: false,
+      message: "",
       refreshFailed: false,
       stale: false,
       seq: 0,
@@ -201,8 +203,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       hues: new Map(),
       // Earlier: one stats-only request for the 120 days before the window ends. anchor is the oldest column day
       // when the window was last set from the toolbar; opening a day from the list keeps it, so the list stays put.
-      earlier: { key: "", payload: null, loading: false, error: "", seq: 0, loadedAt: 0, anchor: "", showAllV21: false, showAllLegacy: false },
-      drawer: { id: "", payload: null, error: "", missing: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false },
+      earlier: { key: "", payload: null, loading: false, error: "", readsDisabled: false, message: "", seq: 0, loadedAt: 0, anchor: "", showAllV21: false, showAllLegacy: false },
+      drawer: { id: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false },
     },
   };
 
@@ -2626,35 +2628,51 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     try {
       const payload = await fetchJson(activityUrl(win, limit, mode === "more" ? act.nextCursor : null));
       if (seq !== act.seq) return;
-      const incoming = Array.isArray(payload.cards) ? payload.cards : [];
-      if (mode === "more") {
-        const seen = new Set(act.cards.map((card) => card.id));
-        act.cards = act.cards.concat(incoming.filter((card) => !seen.has(card.id)));
-        act.nextCursor = payload.next_cursor || null;
-      } else if (mode === "refresh" && loaded + ACTIVITY_REFRESH_HEADROOM > ACTIVITY_MAX_PAGE && incoming.length) {
-        // More cards are loaded than one request returns: keep the older pages behind the refreshed head.
-        const lastId = incoming[incoming.length - 1].id;
-        const index = act.cards.findIndex((card) => card.id === lastId);
-        if (index >= 0) {
-          act.cards = incoming.concat(act.cards.slice(index + 1));
+      // 200 with disabled: true is the read switch, not a failed load. Drop cards so null lists never render.
+      if (payload.disabled) {
+        act.cards = [];
+        act.nextCursor = null;
+        act.payload = null;
+        act.readsDisabled = true;
+        act.message = payload.message || "";
+        act.error = "";
+        act.refreshFailed = false;
+        act.loadedAt = Date.now();
+      } else {
+        act.readsDisabled = false;
+        act.message = "";
+        const incoming = Array.isArray(payload.cards) ? payload.cards : [];
+        if (mode === "more") {
+          const seen = new Set(act.cards.map((card) => card.id));
+          act.cards = act.cards.concat(incoming.filter((card) => !seen.has(card.id)));
+          act.nextCursor = payload.next_cursor || null;
+        } else if (mode === "refresh" && loaded + ACTIVITY_REFRESH_HEADROOM > ACTIVITY_MAX_PAGE && incoming.length) {
+          // More cards are loaded than one request returns: keep the older pages behind the refreshed head.
+          const lastId = incoming[incoming.length - 1].id;
+          const index = act.cards.findIndex((card) => card.id === lastId);
+          if (index >= 0) {
+            act.cards = incoming.concat(act.cards.slice(index + 1));
+          } else {
+            act.cards = incoming;
+            act.nextCursor = payload.next_cursor || null;
+          }
         } else {
           act.cards = incoming;
           act.nextCursor = payload.next_cursor || null;
         }
-      } else {
-        act.cards = incoming;
-        act.nextCursor = payload.next_cursor || null;
+        act.payload = payload;
+        act.loadedAt = Date.now();
+        act.refreshFailed = false;
+        act.error = "";
       }
-      act.payload = payload;
-      act.loadedAt = Date.now();
-      act.refreshFailed = false;
-      act.error = "";
     } catch (error) {
       if (seq !== act.seq) return;
       if (mode === "reset") {
         act.payload = null;
         act.cards = [];
         act.nextCursor = null;
+        act.readsDisabled = false;
+        act.message = "";
         act.error = (error && error.message) || t("activity.errorTitle");
       } else {
         act.refreshFailed = true;
@@ -2951,7 +2969,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (win.firstDay !== win.lastDay) days.push(localDayKey(shiftDays(parseLocalDay(win.lastDay), -1)));
 
     let notice = null;
-    if (!payload && act.error) {
+    if (act.readsDisabled) {
+      notice = {
+        error: false,
+        title: t("activity.readsDisabledTitle"),
+        lead: t("activity.readsDisabledLead"),
+        action: null,
+        secondary: null,
+      };
+    } else if (!payload && act.error) {
       notice = { error: true, title: t("activity.errorTitle"), lead: act.error, action: ["retry", t("activity.retry")] };
     } else if (payload && activityMeasure(payload.totals) === 0) {
       const legacy = Number(payload.totals && payload.totals.legacy || 0);
@@ -3043,10 +3069,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     try {
       const payload = await fetchJson("/admin/api/activity?" + params.toString());
       if (seq !== early.seq) return;
-      early.payload = payload;
-      early.loadedAt = Date.now();
+      // A disabled payload is not a fresh cache: loadedAt stays 0 so the next open refetches.
+      if (payload.disabled) {
+        early.payload = null;
+        early.loadedAt = 0;
+        early.readsDisabled = true;
+        early.message = payload.message || "";
+        early.error = "";
+      } else {
+        early.payload = payload;
+        early.loadedAt = Date.now();
+        early.readsDisabled = false;
+        early.message = "";
+      }
     } catch (error) {
       if (seq !== early.seq) return;
+      early.readsDisabled = false;
+      early.message = "";
       early.error = (error && error.message) || t("activity.earlierError");
     } finally {
       if (seq === early.seq) {
@@ -3139,7 +3178,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const early = act.earlier;
     const selectedDay = act.range === "custom" && act.customFrom && act.customFrom === act.customTo ? act.customFrom : "";
     const days = early.payload && Array.isArray(early.payload.days) ? early.payload.days : [];
-    const signature = [state.locale, early.loading, early.error, early.anchor, early.showAllV21, early.showAllLegacy, selectedDay, JSON.stringify(days)].join("|");
+    const signature = [state.locale, early.loading, early.error, early.readsDisabled, early.anchor, early.showAllV21, early.showAllLegacy, selectedDay, JSON.stringify(days)].join("|");
     if (act.signatures.earlier === signature) {
       fitActivityEarlierPanel();
       return;
@@ -3148,7 +3187,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     body.classList.toggle("is-expanded", early.showAllLegacy || early.showAllV21);
 
     if (!early.payload) {
-      if (early.error) {
+      if (early.readsDisabled && !early.loading) {
+        body.innerHTML = '<p class="actEarlierState">' + escapeHtml(t("activity.readsDisabledTitle")) + '</p>' +
+          '<p class="actEarlierState">' + escapeHtml(t("activity.readsDisabledLead")) + '</p>';
+      } else if (early.error) {
         body.innerHTML = '<p class="actEarlierState is-error">' + escapeHtml(t("activity.earlierError")) + '</p>' +
           '<button class="actRailLink" type="button" data-earlier-action="retry">' + escapeHtml(t("activity.retry")) + '</button>';
       } else {
@@ -3210,6 +3252,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.payload = null;
     drawer.error = "";
     drawer.missing = false;
+    drawer.readsDisabled = false;
     if (!wasOpen) drawer.returnFocus = trigger || document.activeElement;
     const seq = drawer.seq + 1;
     drawer.seq = seq;
@@ -3220,9 +3263,18 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     try {
       const payload = await fetchJson("/admin/api/memory-detail?id=" + encodeURIComponent(id));
       if (seq !== drawer.seq) return;
-      drawer.payload = payload;
+      if (payload.disabled) {
+        drawer.readsDisabled = true;
+        drawer.payload = null;
+        drawer.error = "";
+        drawer.missing = false;
+      } else {
+        drawer.payload = payload;
+        drawer.readsDisabled = false;
+      }
     } catch (error) {
       if (seq !== drawer.seq) return;
+      drawer.readsDisabled = false;
       drawer.missing = !!(error && error.message === "Unknown memory ID");
       drawer.error = (error && error.message) || t("activity.drawerError");
     } finally {
@@ -3237,6 +3289,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.id = "";
     drawer.payload = null;
     drawer.error = "";
+    drawer.missing = false;
+    drawer.readsDisabled = false;
     drawer.seq += 1;
     drawer.returnFocus = null;
     renderActivityDrawer();
@@ -3414,7 +3468,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(drawerEl, !open);
     setHidden(els.activityDrawerScrim, !open);
     els.activityView.classList.toggle("has-drawer", open);
-    const signature = [state.locale, drawer.id, drawer.error, JSON.stringify(drawer.payload)].join("|");
+    const signature = [state.locale, drawer.id, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload)].join("|");
     if (act.signatures.drawer === signature) return;
     act.signatures.drawer = signature;
     if (!open) {
@@ -3425,7 +3479,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
     // Until the detail arrives, the card already on screen supplies the header.
-    const card = act.cards.find((item) => item.id === drawer.id) || null;
+    const card = drawer.readsDisabled ? null : (act.cards.find((item) => item.id === drawer.id) || null);
     const memory = drawer.payload && drawer.payload.memory ? drawer.payload.memory : card;
     if (memory) {
       const created = parseTimestamp(memory.created_at);
@@ -3445,10 +3499,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     } else {
       els.activityDrawerMeta.innerHTML = "";
       els.activityDrawerSub.innerHTML = "";
-      setText(els.activityDrawerTitle, drawer.error ? t("activity.drawerError") : t("activity.drawerLoading"));
+      setText(els.activityDrawerTitle, drawer.readsDisabled ? t("activity.readsDisabledTitle") : (drawer.error ? t("activity.drawerError") : t("activity.drawerLoading")));
       setAttr(els.activityDrawerTitle, "title", "");
     }
-    if (drawer.payload) {
+    if (drawer.readsDisabled) {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState"><p>' + escapeHtml(t("activity.drawerReadsDisabled")) + '</p></div>';
+    } else if (drawer.payload) {
       els.activityDrawerBody.innerHTML = renderActivityDrawerBody(drawer.payload);
     } else if (drawer.error) {
       els.activityDrawerBody.innerHTML = '<div class="actDrawerState is-error"><p>' + escapeHtml(drawer.missing ? t("activity.drawerMissing") : drawer.error) + '</p>' +

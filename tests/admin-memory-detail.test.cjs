@@ -205,7 +205,23 @@ test('memory-detail route validates id and include_trace, including ids that con
     const exact = await getJson(base, `/admin/api/memory-detail?id=${id512}`);
     assert.equal(exact.status, 200);
     assert.equal(exact.body.memory.id, id512);
+  });
+});
 
+const MEMORY_DETAIL_DISABLED_FIELDS = ['memory', 'tasks', 'duplicate_flags', 'review', 'compacted_into', 'evidence_available'];
+
+function assertReadsDisabled(body, fields) {
+  assert.equal(typeof body.message, 'string');
+  assert.ok(body.message.length > 0);
+  const rest = { ...body };
+  delete rest.message;
+  const expected = { status: 'reads_disabled', disabled: true };
+  for (const field of fields) expected[field] = null;
+  assert.deepEqual(rest, expected);
+}
+
+test('memory-detail route returns reads_disabled before validating id when reads are off', async () => {
+  await withWorker(async ({ base }) => {
     const disabled = await fetch(`${base}/admin/api/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -213,10 +229,25 @@ test('memory-detail route validates id and include_trace, including ids that con
       signal: AbortSignal.timeout(15000),
     });
     assert.equal(disabled.status, 200);
-    const still = await getJson(base, `/admin/api/memory-detail?id=${encodeURIComponent(colonId)}`);
-    assert.equal(still.status, 200);
-    assert.equal(still.body.memory.id, colonId);
-    assert.equal(still.body.memory.fallback, false);
+
+    const missing = await getJson(base, '/admin/api/memory-detail');
+    assert.equal(missing.status, 200);
+    assertReadsDisabled(missing.body, MEMORY_DETAIL_DISABLED_FIELDS);
+
+    const unknown = await getJson(base, '/admin/api/memory-detail?id=does-not-exist');
+    assert.equal(unknown.status, 200);
+    assertReadsDisabled(unknown.body, MEMORY_DETAIL_DISABLED_FIELDS);
+
+    const enabled = await fetch(`${base}/admin/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ readEnabled: true }),
+      signal: AbortSignal.timeout(15000),
+    });
+    assert.equal(enabled.status, 200);
+    const restored = await getJson(base, '/admin/api/memory-detail?id=does-not-exist');
+    assert.equal(restored.status, 404);
+    assert.deepEqual(restored.body, { error: 'Unknown memory ID' });
   });
 });
 

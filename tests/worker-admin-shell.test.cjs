@@ -571,6 +571,49 @@ test('every Activity i18n key exists in en and zh-CN', () => {
   }
 });
 
+test('activity board, Earlier panel and drawer handle a reads-disabled payload', () => {
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  assert.equal(en['activity.readsDisabledTitle'], 'Memory reads are turned off');
+  assert.equal(zh['activity.readsDisabledTitle'], '记忆读取已关闭');
+  assert.equal(en['activity.readsDisabledLead'], 'Activity is hidden while reads are disabled. Turn reads back on in Settings to see memories here.');
+  assert.equal(zh['activity.readsDisabledLead'], '读取关闭期间不显示活动。到设置里重新打开读取后，这里会恢复显示。');
+  assert.equal(en['activity.drawerReadsDisabled'], 'Memory details are hidden while reads are disabled.');
+  assert.equal(zh['activity.drawerReadsDisabled'], '读取关闭期间不显示记忆详情。');
+
+  const load = extractClientFunction(script, 'loadActivity');
+  assert.match(load, /if \(payload\.disabled\) \{[\s\S]*act\.cards = \[\]/);
+  assert.match(load, /act\.readsDisabled = true/);
+  assert.match(load, /act\.message = payload\.message/);
+  assert.match(load, /act\.readsDisabled = false/);
+
+  const board = extractClientFunction(script, 'renderActivityBoard');
+  assert.ok(board.indexOf('act.readsDisabled') < board.indexOf('activity.errorTitle'));
+  assert.match(board, /activity\.readsDisabledTitle/);
+  assert.match(board, /activity\.readsDisabledLead/);
+
+  const earlierLoad = extractClientFunction(script, 'loadActivityEarlier');
+  assert.match(earlierLoad, /if \(payload\.disabled\) \{[\s\S]*early\.payload = null/);
+  assert.match(earlierLoad, /early\.loadedAt = 0/);
+  assert.match(earlierLoad, /early\.readsDisabled = true/);
+  assert.match(earlierLoad, /early\.readsDisabled = false/);
+
+  const earlier = extractClientFunction(script, 'renderActivityEarlier');
+  assert.match(earlier, /early\.readsDisabled/);
+  assert.ok(earlier.indexOf('activity.readsDisabledTitle') < earlier.indexOf('activity.earlierError'));
+  assert.match(earlier, /activity\.readsDisabledLead/);
+
+  const open = extractClientFunction(script, 'openActivityDrawer');
+  assert.match(open, /if \(payload\.disabled\) \{[\s\S]*drawer\.readsDisabled = true/);
+  assert.match(open, /drawer\.missing = false/);
+  assert.match(open, /drawer\.readsDisabled = false/);
+
+  const drawer = extractClientFunction(script, 'renderActivityDrawer');
+  assert.match(drawer, /drawer\.readsDisabled/);
+  assert.match(drawer, /activity\.drawerReadsDisabled/);
+  assert.ok(drawer.indexOf('activity.drawerReadsDisabled') < drawer.indexOf('activity.drawerMissing'));
+});
+
 function extractClientFunction(source, name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing function ${name}`);

@@ -231,6 +231,20 @@ function sendReadDisabled(res: Response, key: string) {
   });
 }
 
+const ADMIN_ACTIVITY_DISABLED_FIELDS = ['from', 'to', 'tz_offset_minutes', 'totals', 'breakdown', 'days', 'cards', 'next_cursor'] as const;
+
+const ADMIN_MEMORY_DETAIL_DISABLED_FIELDS = ['memory', 'tasks', 'duplicate_flags', 'review', 'compacted_into', 'evidence_available'] as const;
+
+function sendAdminReadsDisabled(res: Response, fields: readonly string[]) {
+  const body: { [key: string]: unknown } = {
+    status: 'reads_disabled',
+    disabled: true,
+    message: READ_DISABLED_MESSAGE,
+  };
+  for (const field of fields) body[field] = null;
+  res.json(body);
+}
+
 function sendWriteDisabled(res: Response) {
   res.json({
     success: false,
@@ -464,6 +478,10 @@ app.get('/admin/api/home-summary', adminOnlyGuard, async (req, res) => {
 
 app.get('/admin/api/activity', adminOnlyGuard, async (req, res) => {
   try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_ACTIVITY_DISABLED_FIELDS);
+      return;
+    }
     const readQuery = (key: string): string | undefined => {
       const value = req.query[key];
       if (Array.isArray(value)) throw new Error('Invalid activity request: repeated query parameter');
@@ -498,6 +516,10 @@ app.get('/admin/api/activity', adminOnlyGuard, async (req, res) => {
 
 app.get('/admin/api/memory-detail', adminOnlyGuard, async (req, res) => {
   try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_MEMORY_DETAIL_DISABLED_FIELDS);
+      return;
+    }
     const id = req.query.id;
     if (Array.isArray(id)) throw new Error('Invalid memory-detail request: repeated id');
     if (typeof id !== 'string' || id.length === 0 || id.length > 512) {

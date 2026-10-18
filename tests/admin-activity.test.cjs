@@ -79,7 +79,7 @@ test('activity route rejects non-loopback requests with 403', async (t) => {
   });
 });
 
-test('activity route returns 400 for invalid queries and still serves statistics when read is off', async () => {
+test('activity route returns 400 for invalid queries and serves statistics', async () => {
   await withWorker(async ({ base, dbPath }) => {
     const from = '2026-01-01T00:00:00.000Z';
     const day = 24 * 60 * 60 * 1000;
@@ -144,7 +144,23 @@ test('activity route returns 400 for invalid queries and still serves statistics
     assert.equal(stats.body.totals.outcome, 1);
     assert.equal(stats.body.days.length, 1);
     assert.equal(stats.body.days[0].outcome, 1);
+  });
+});
 
+const ACTIVITY_DISABLED_FIELDS = ['from', 'to', 'tz_offset_minutes', 'totals', 'breakdown', 'days', 'cards', 'next_cursor'];
+
+function assertReadsDisabled(body, fields) {
+  assert.equal(typeof body.message, 'string');
+  assert.ok(body.message.length > 0);
+  const rest = { ...body };
+  delete rest.message;
+  const expected = { status: 'reads_disabled', disabled: true };
+  for (const field of fields) expected[field] = null;
+  assert.deepEqual(rest, expected);
+}
+
+test('activity route returns reads_disabled before validation when reads are off', async () => {
+  await withWorker(async ({ base }) => {
     const disabled = await fetch(`${base}/admin/api/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -152,11 +168,25 @@ test('activity route returns 400 for invalid queries and still serves statistics
       signal: AbortSignal.timeout(15000),
     });
     assert.equal(disabled.status, 200);
-    const still = await getJson(base, '/admin/api/activity?from=2026-10-17T00:00:00.000Z&to=2026-10-18T00:00:00.000Z&limit=1');
-    assert.equal(still.status, 200);
-    assert.equal(still.body.cards.length, 1);
-    assert.equal(still.body.cards[0].id, 'seed-1');
-    assert.equal(still.body.next_cursor, null);
+
+    const valid = await getJson(base, '/admin/api/activity?from=2026-10-17T00:00:00.000Z&to=2026-10-18T00:00:00.000Z');
+    assert.equal(valid.status, 200);
+    assertReadsDisabled(valid.body, ACTIVITY_DISABLED_FIELDS);
+
+    const invalid = await getJson(base, '/admin/api/activity?from=bad');
+    assert.equal(invalid.status, 200);
+    assertReadsDisabled(invalid.body, ACTIVITY_DISABLED_FIELDS);
+
+    const enabled = await fetch(`${base}/admin/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ readEnabled: true }),
+      signal: AbortSignal.timeout(15000),
+    });
+    assert.equal(enabled.status, 200);
+    const restored = await getJson(base, '/admin/api/activity?from=2026-10-17T00:00:00.000Z&to=2026-10-18T00:00:00.000Z');
+    assert.equal(restored.status, 200);
+    assert.equal(Array.isArray(restored.body.days), true);
   });
 });
 
