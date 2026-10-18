@@ -1244,7 +1244,10 @@ ${WALLPAPER_CSS}
   .actSegment,
   .actSegmented,
   .actDrawerClose,
-  .actSection {
+  .actPane,
+  .memGroup,
+  .memSearch,
+  .memMore {
     position: relative;
   }
 
@@ -1259,7 +1262,11 @@ ${WALLPAPER_CSS}
   .actSegmented::after,
   .actDrawer::after,
   .actDrawerClose::after,
-  .actSection::after {
+  .actPane::after,
+  .memGroup::after,
+  .memSearch::after,
+  .memMore::after,
+  .memRow.is-open::after {
     content: "";
     position: absolute;
     inset: -1px;
@@ -1273,13 +1280,14 @@ ${WALLPAPER_CSS}
     mask-composite: exclude;
   }
 
-  .actSegmented::after {
+  .actSegmented::after,
+  .memSearch::after {
     background: var(--glass-border-well);
   }
 
-  /* Drawer sections are panes inside the drawer's own glass: same rim, half the light. */
-  .actSection::after {
-    opacity: 0.5;
+  /* Drawer panes sit inside the drawer's own glass: same rim, a little less light. */
+  .actPane::after {
+    opacity: 0.75;
   }
 
   .appShell {
@@ -2629,8 +2637,9 @@ ${WALLPAPER_CSS}
 
   /* Activity tokens. Light glass is milky white with a faint periwinkle shadow; dark glass is deep navy with a
      cool rim. The shell's own tokens (--text, --shell-hover, ...) still drive ink, so a user background keeps
-     working; these only shape Activity's surfaces. */
-  .activityView {
+     working; these only shape Activity's surfaces. Memory shares them. */
+  .activityView,
+  .memoryView {
     position: relative;
     --a-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.40));
     --a-glass-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.05), 0 18px 40px -22px rgba(70, 80, 180, 0.38);
@@ -2688,7 +2697,8 @@ ${WALLPAPER_CSS}
     --proj-none: #a3a9b6;
   }
 
-  html[data-glass="dark"] .activityView {
+  html[data-glass="dark"] .activityView,
+  html[data-glass="dark"] .memoryView {
     --a-well-blur: blur(22px) saturate(160%);
     --a-glass: linear-gradient(180deg, rgba(30, 42, 88, 0.50), rgba(12, 18, 46, 0.46));
     --a-glass-shadow: var(--glass-edge), 0 22px 48px -20px rgba(0, 0, 0, 0.70);
@@ -3242,7 +3252,8 @@ ${WALLPAPER_CSS}
     color: var(--text-2);
   }
 
-  .activityView .kindPill {
+  .activityView .kindPill,
+  .memoryView .kindPill {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -3255,7 +3266,8 @@ ${WALLPAPER_CSS}
     line-height: 1;
   }
 
-  .activityView .kindPill::before {
+  .activityView .kindPill::before,
+  .memoryView .kindPill::before {
     content: "";
     width: 7px;
     height: 7px;
@@ -3264,11 +3276,12 @@ ${WALLPAPER_CSS}
     background: currentColor;
   }
 
-  .activityView .kindPill.kind-outcome { background: var(--a-outcome-fill); color: var(--a-outcome-ink); }
-  .activityView .kindPill.kind-context { background: var(--a-context-fill); color: var(--a-context-ink); }
-  .activityView .kindPill.kind-legacy { background: var(--a-legacy-fill); color: var(--a-legacy-ink); }
-  .activityView .kindPill.kind-outcome::before { background: var(--a-outcome-dot); }
-  .activityView .kindPill.kind-context::before { background: var(--a-context-dot); }
+  .activityView .kindPill.kind-outcome, .memoryView .kindPill.kind-outcome { background: var(--a-outcome-fill); color: var(--a-outcome-ink); }
+  .activityView .kindPill.kind-context, .memoryView .kindPill.kind-context { background: var(--a-context-fill); color: var(--a-context-ink); }
+  .activityView .kindPill.kind-legacy, .memoryView .kindPill.kind-legacy { background: var(--a-legacy-fill); color: var(--a-legacy-ink); }
+  .activityView .kindPill.kind-outcome::before, .memoryView .kindPill.kind-outcome::before { background: var(--a-outcome-dot); }
+  .activityView .kindPill.kind-context::before, .memoryView .kindPill.kind-context::before { background: var(--a-context-dot); }
+  .memoryView .kindPill.kind-legacy::before { background: var(--m-legacy-dot); }
 
   .actBadge {
     display: inline-flex;
@@ -3427,7 +3440,8 @@ ${WALLPAPER_CSS}
     text-align: center;
   }
 
-  .activityView .actNotice {
+  .activityView .actNotice,
+  .memoryView .actNotice {
     background: var(--a-glass);
     box-shadow: var(--a-glass-shadow);
   }
@@ -3675,7 +3689,8 @@ ${WALLPAPER_CSS}
   /* Memory detail drawer: a tall glass sheet from the right. Inside the view, so its blur only runs on Activity.
      A transform animation that keeps filling would make the view the containing block of the fixed drawer and
      scrim, so Activity's entry animation does not fill forwards (its end state is transform: none anyway). */
-  .activityView.is-active {
+  .activityView.is-active,
+  .memoryView.is-active {
     animation-fill-mode: none;
   }
 
@@ -4400,6 +4415,1019 @@ ${WALLPAPER_CSS}
 
     .actCard:not(.is-skeleton):hover {
       transform: none;
+    }
+  }
+
+  /* ---------- Memory detail drawer (shared by Activity and Memory) ---------- */
+
+  .activityView,
+  .memoryView {
+    --a-pane-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.46));
+    --a-pane-shadow: var(--glass-edge), 0 10px 24px -16px rgba(60, 70, 160, 0.34);
+    --a-concept-fill: rgba(10, 132, 255, 0.09);
+    --a-concept-ink: #0a63d1;
+    --a-concept-ring: rgba(10, 132, 255, 0.20);
+  }
+
+  html[data-glass="dark"] .activityView,
+  html[data-glass="dark"] .memoryView {
+    --a-pane-fill: linear-gradient(180deg, rgba(40, 54, 110, 0.46), rgba(16, 24, 60, 0.42));
+    --a-pane-shadow: var(--glass-edge), 0 14px 30px -18px rgba(0, 0, 0, 0.80);
+    --a-concept-fill: rgba(40, 110, 255, 0.20);
+    --a-concept-ink: #a9cbff;
+    --a-concept-ring: rgba(110, 165, 255, 0.34);
+  }
+
+  .actDrawer {
+    width: min(456px, calc(100vw - 32px));
+    padding: 18px 8px 0 22px;
+    border-radius: 30px;
+  }
+
+  /* Docked beside the Memory list: no scrim, the top follows the summary line (set by the client). */
+  .actDrawer.is-docked {
+    z-index: 26;
+    top: 200px;
+    animation-duration: 220ms;
+  }
+
+  .actDrawerHead {
+    align-items: flex-start;
+    padding-right: 14px;
+  }
+
+  .actDrawerMeta {
+    gap: 6px;
+    padding-top: 6px;
+    font-size: 13px;
+  }
+
+  .actDrawerMeta .kindPill {
+    min-height: 22px;
+    font-size: 12.5px;
+  }
+
+  /* Keep the drawer meta row on one line: kind, badges and the time never wrap or shrink;
+     the source / agent / project chips give way instead (the project chip carries a title tooltip). */
+  .actDrawerMeta {
+    flex-wrap: nowrap;
+  }
+
+  .actDrawerMeta > .kindPill,
+  .actDrawerMeta > .actBadge,
+  .actDrawerTime {
+    flex-shrink: 0;
+  }
+
+  .actMetaChip {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* The chips flow in the meta row itself, so they wrap one at a time rather than as a block. */
+  .actMetaChips {
+    display: contents;
+  }
+
+  .actMetaChip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 7px;
+    color: var(--text-2);
+    font-size: 12.5px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actMetaChip + .actMetaChip {
+    border-left: 1px solid var(--a-line);
+  }
+
+  .actMetaChip.is-agent {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .actMetaChipIcon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .actDrawerTools {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 8px;
+  }
+
+  .actDrawerClose {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+  }
+
+  .actDrawerClose.is-done {
+    color: var(--ring-ok-ink);
+  }
+
+  .actDrawerTitle {
+    margin: 22px 14px 0 0;
+    font-size: 26px;
+    line-height: 1.22;
+    letter-spacing: -0.02em;
+  }
+
+  .actDrawerBody {
+    margin-top: 12px;
+    padding: 0 14px 22px 0;
+  }
+
+  .actSection {
+    margin-top: 22px;
+    padding: 0;
+    background: none;
+  }
+
+  .actSection.is-lead {
+    margin-top: 0;
+  }
+
+  .actSection.is-lead .actNarrative {
+    color: var(--text-2);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .actSectionTitle {
+    margin: 0 0 10px;
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .actSectionCount {
+    min-width: 24px;
+    padding: 1px 8px;
+    text-align: center;
+  }
+
+  .actFacts li {
+    font-size: 14px;
+  }
+
+  .actTag.is-concept {
+    padding: 4px 12px;
+    background: var(--a-concept-fill);
+    box-shadow: inset 0 0 0 1px var(--a-concept-ring);
+    color: var(--a-concept-ink);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .actPanes {
+    display: grid;
+    gap: 12px;
+    margin-top: 22px;
+  }
+
+  .actPanes.is-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .actPane {
+    min-width: 0;
+    padding: 12px 14px 12px;
+    border: 1px solid transparent;
+    border-radius: 18px;
+    background: var(--a-pane-fill);
+    box-shadow: var(--a-pane-shadow);
+  }
+
+  .actPaneTitle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 0 8px;
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+
+  .actPaneIcon {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    color: var(--a-link);
+  }
+
+  .actFiles {
+    gap: 4px;
+  }
+
+  .actFiles li {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  .actFileIcon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+    color: var(--a-link);
+    opacity: 0.8;
+  }
+
+  .actFileName {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actTasks {
+    gap: 10px;
+  }
+
+  .actTask.actPane {
+    padding: 14px 16px 12px;
+  }
+
+  .actStats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, auto));
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .actStat {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .actStat + .actStat {
+    padding-left: 12px;
+    border-left: 1px solid var(--a-line);
+  }
+
+  .actStatLabel {
+    color: var(--text-2);
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  .actStatValue {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actStatusDot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border-radius: 50%;
+    background: var(--text-3);
+  }
+
+  .actStatusDot.tone-ok { background: #30c26b; box-shadow: 0 0 0 3px rgba(48, 194, 107, 0.18); }
+  .actStatusDot.tone-warn { background: #ff9f0a; box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.18); }
+  .actStatusDot.tone-err { background: #ff453a; box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.16); }
+  .actStatusWord.tone-ok { color: var(--ring-ok-ink); }
+  .actStatusWord.tone-warn { color: var(--warn-ink); }
+  .actStatusWord.tone-err { color: var(--err-ink); }
+
+  .actTask .actTaskFacts {
+    margin-top: 10px;
+    font-size: 12.5px;
+  }
+
+  .actReviewBox.actPane {
+    padding: 12px 14px;
+  }
+
+  /* ---------- Memory ---------- */
+
+  .memoryView {
+    --m-legacy-fill: rgba(255, 170, 40, 0.15);
+    --m-legacy-ink: #9a5800;
+    --m-legacy-dot: #f5a524;
+    --a-legacy-fill: var(--m-legacy-fill);
+    --a-legacy-ink: var(--m-legacy-ink);
+    --m-group-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.50), rgba(255, 255, 255, 0.30));
+    --m-group-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.04), 0 16px 34px -22px rgba(70, 80, 180, 0.40);
+    --m-row-line: rgba(40, 50, 110, 0.07);
+    --m-row-hover: rgba(255, 255, 255, 0.46);
+    --m-row-on-fill: linear-gradient(180deg, rgba(226, 238, 255, 0.92), rgba(208, 226, 255, 0.70));
+    --m-row-on-rim: linear-gradient(180deg, rgba(60, 140, 255, 0.55), rgba(60, 140, 255, 0.30));
+    --m-row-on-shadow: 0 8px 20px -12px rgba(30, 100, 230, 0.45);
+    --m-well-fill: rgba(232, 236, 250, 0.42);
+    --m-rank-0: linear-gradient(180deg, #6aa8ff, #2f7cf6);
+    --m-rank-1: linear-gradient(180deg, #c3a8ff, #9a78f2);
+    --m-rank-2: linear-gradient(180deg, #8fdcae, #4fbf86);
+    --m-rank-3: linear-gradient(180deg, #ffd27a, #f2ac3c);
+    --m-rank-4: linear-gradient(180deg, #ff9aa5, #f2697a);
+    --m-rank-other: linear-gradient(180deg, #b9c6ff, #8ea2f0);
+    --m-dot-0: #2f7cf6;
+    --m-dot-1: #9a78f2;
+    --m-dot-2: #4fbf86;
+    --m-dot-3: #f2ac3c;
+    --m-dot-4: #f2697a;
+  }
+
+  html[data-glass="dark"] .memoryView {
+    --m-legacy-fill: rgba(255, 176, 50, 0.20);
+    --m-legacy-ink: #ffc76a;
+    --m-legacy-dot: #ffb340;
+    --m-group-fill: linear-gradient(180deg, rgba(28, 40, 86, 0.56), rgba(12, 18, 46, 0.50));
+    --m-group-shadow: var(--glass-edge), 0 20px 40px -22px rgba(0, 0, 0, 0.80);
+    --m-row-line: rgba(255, 255, 255, 0.07);
+    --m-row-hover: rgba(255, 255, 255, 0.05);
+    --m-row-on-fill: linear-gradient(180deg, rgba(40, 92, 210, 0.36), rgba(22, 58, 160, 0.26));
+    --m-row-on-rim: linear-gradient(180deg, rgba(120, 175, 255, 0.95), rgba(70, 130, 255, 0.60));
+    --m-row-on-shadow: 0 0 22px -6px rgba(50, 120, 255, 0.70);
+    --m-well-fill: rgba(6, 10, 30, 0.40);
+    --m-rank-0: linear-gradient(180deg, #5d9bff, #2c6cf0);
+    --m-rank-1: linear-gradient(180deg, #b49aff, #8462ea);
+    --m-rank-2: linear-gradient(180deg, #7fdca2, #3fae74);
+    --m-rank-3: linear-gradient(180deg, #ffcb6e, #e89e2c);
+    --m-rank-4: linear-gradient(180deg, #ff8f9c, #e65a6c);
+    --m-rank-other: linear-gradient(180deg, #8ea2f0, #5f72d0);
+  }
+
+  .memLead {
+    margin: -16px 0 20px 2px;
+    color: var(--text-2);
+    font-size: 15.5px;
+  }
+
+  .policyBanner:not([hidden]) ~ .memoryView .memLead {
+    margin-top: 0;
+  }
+
+  /* Toolbar: one glass capsule with an inset search well, the four pickers and the range control. */
+  .memToolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 7px;
+    border-radius: 34px;
+    background: var(--a-glass);
+    box-shadow: var(--a-glass-shadow);
+  }
+
+  .memSearch {
+    display: flex;
+    flex: 1 1 220px;
+    align-items: center;
+    gap: 10px;
+    min-width: 200px;
+    min-height: 42px;
+    padding: 0 8px 0 16px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--m-well-fill);
+    box-shadow: inset 0 1px 3px rgba(20, 30, 80, 0.07);
+    cursor: text;
+  }
+
+  .memSearch:focus-within {
+    box-shadow: inset 0 1px 3px rgba(20, 30, 80, 0.07), 0 0 0 3px rgba(10, 132, 255, 0.22);
+  }
+
+  .memSearchIcon {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 17px;
+    color: var(--text-2);
+  }
+
+  .memSearchInput {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-size: 15px;
+  }
+
+  .memSearchInput::placeholder {
+    color: var(--text-3);
+  }
+
+  .memSearchInput:focus-visible {
+    box-shadow: none;
+  }
+
+  .memSearchInput::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .memSearchClear {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    cursor: pointer;
+  }
+
+  .memSearchClearIcon {
+    width: 13px;
+    height: 13px;
+  }
+
+  .memFilters {
+    display: flex;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .memToolbar .actPopup {
+    max-width: 200px;
+    min-height: 42px;
+    padding: 0 12px 0 15px;
+    font-size: 14.5px;
+  }
+
+  .memSegmented {
+    margin-left: auto;
+  }
+
+  .memSegmented .actSegment {
+    min-height: 38px;
+    padding: 0 18px;
+    font-size: 14.5px;
+  }
+
+  /* Summary line: total, then the three kinds as quiet toggles. */
+  .memSummary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin: 16px 0 0 4px;
+    color: var(--text-2);
+    font-size: 15.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .memSumTotal {
+    color: var(--text);
+  }
+
+  .memSumTotal strong {
+    font-size: 17px;
+    font-weight: 650;
+  }
+
+  .memSumSep {
+    color: var(--text-3);
+  }
+
+  .memSumKind {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 -6px;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out);
+  }
+
+  .memSumKind strong {
+    margin-left: 4px;
+    color: var(--text-2);
+    font-weight: 500;
+  }
+
+  .memSumKind:hover {
+    background: var(--shell-hover);
+  }
+
+  .memSumKind[aria-pressed="true"] {
+    background: var(--a-on-fill);
+    box-shadow: inset 0 0 0 1px var(--a-on-border);
+    color: var(--a-on-ink);
+  }
+
+  .memSumDot,
+  .memOptDot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border-radius: 50%;
+  }
+
+  .memSumKind.kind-outcome .memSumDot, .memOptDot.kind-outcome { background: var(--a-outcome-dot); }
+  .memSumKind.kind-context .memSumDot, .memOptDot.kind-context { background: var(--a-context-dot); }
+  .memSumKind.kind-legacy .memSumDot, .memOptDot.kind-legacy { background: var(--m-legacy-dot); }
+
+  .memUpdated {
+    margin-left: auto;
+    color: var(--text-3);
+    font-size: 13px;
+  }
+
+  .memUpdated.is-warn {
+    color: var(--warn-ink);
+    font-weight: 600;
+  }
+
+  /* Top projects: a glass strip with the five largest projects as one proportional bar. */
+  .memTop {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 12px;
+    padding: 9px 16px 9px 10px;
+    border-radius: 22px;
+    background: var(--a-glass);
+    box-shadow: var(--a-glass-shadow);
+  }
+
+  .memTopLabel {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--a-control-fill);
+    box-shadow: var(--a-control-shadow);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .memTopBar {
+    display: flex;
+    flex: 1 1 auto;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .memTopSeg {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 92px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: opacity 180ms var(--ease-out);
+  }
+
+  .memTopSeg.is-other {
+    min-width: 18px;
+    cursor: default;
+  }
+
+  .memTopSeg.is-dim {
+    opacity: 0.42;
+  }
+
+  .memTopSeg:hover {
+    opacity: 1;
+  }
+
+  .memTopFill {
+    position: relative;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--m-rank-other);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 2px 6px -2px rgba(40, 60, 160, 0.30);
+  }
+
+  .memTopSeg[data-rank="0"] .memTopFill { background: var(--m-rank-0); }
+  .memTopSeg[data-rank="1"] .memTopFill { background: var(--m-rank-1); }
+  .memTopSeg[data-rank="2"] .memTopFill { background: var(--m-rank-2); }
+  .memTopSeg[data-rank="3"] .memTopFill { background: var(--m-rank-3); }
+  .memTopSeg[data-rank="4"] .memTopFill { background: var(--m-rank-4); }
+
+  .memTopSeg[aria-pressed="true"] .memTopFill {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 0 0 2px var(--a-on-border);
+  }
+
+  .memTopLegend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding-left: 2px;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  .memTopDot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 2px;
+    background: var(--text-3);
+  }
+
+  .memTopSeg[data-rank="0"] .memTopDot { background: var(--m-dot-0); }
+  .memTopSeg[data-rank="1"] .memTopDot { background: var(--m-dot-1); }
+  .memTopSeg[data-rank="2"] .memTopDot { background: var(--m-dot-2); }
+  .memTopSeg[data-rank="3"] .memTopDot { background: var(--m-dot-3); }
+  .memTopSeg[data-rank="4"] .memTopDot { background: var(--m-dot-4); }
+
+  .memTopName {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .memTopCount {
+    flex: 0 0 auto;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* List: a header row, then one glass card per local day. Columns line up across cards. */
+  .memBoard {
+    --m-cols: 64px 108px minmax(0, 1fr) minmax(90px, 150px) minmax(64px, 96px) 54px 54px;
+    margin-top: 14px;
+  }
+
+  .memHead,
+  .memRow {
+    display: grid;
+    grid-template-columns: var(--m-cols);
+    align-items: center;
+    column-gap: 12px;
+  }
+
+  .memHead {
+    padding: 0 18px 8px;
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  /* The title track is the only flexible column, so a narrow list ellipsizes this label instead of the others. */
+  .memHead .memCol:nth-child(3) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .memCol.is-num,
+  .memNum {
+    justify-self: start;
+  }
+
+  .memList {
+    display: grid;
+    gap: 14px;
+  }
+
+  .memList.is-stale .memGroup {
+    opacity: 0.55;
+  }
+
+  .memGroup {
+    isolation: isolate;
+    min-width: 0;
+    padding: 6px 6px 6px;
+    border: 1px solid transparent;
+    border-radius: 22px;
+    background: var(--m-group-fill);
+    box-shadow: var(--m-group-shadow);
+    transition: opacity 200ms var(--ease-out);
+  }
+
+  /* Frost lives on the day cards, only while Memory is showing. */
+  .appView.is-active .memGroup {
+    -webkit-backdrop-filter: var(--a-well-blur);
+    backdrop-filter: var(--a-well-blur);
+  }
+
+  .memDayHead {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0;
+    padding: 8px 12px 6px;
+    color: var(--text);
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  .memDayDate,
+  .memDayCount {
+    color: var(--text-2);
+    font-size: 14.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+  }
+
+  .memDayCount {
+    margin-left: -4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .memRows {
+    display: grid;
+    min-width: 0;
+  }
+
+  .memRow {
+    position: relative;
+    min-width: 0;
+    min-height: 48px;
+    padding: 5px 12px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    color: var(--text);
+    cursor: pointer;
+    outline: none;
+    transition: background 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+  }
+
+  .memRow + .memRow {
+    box-shadow: 0 -1px 0 var(--m-row-line);
+  }
+
+  .memRow:hover {
+    background: var(--m-row-hover);
+  }
+
+  .memRow:focus-visible {
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.32);
+  }
+
+  .memRow.is-open {
+    background: var(--m-row-on-fill);
+    box-shadow: var(--m-row-on-shadow);
+  }
+
+  .memRow.is-open + .memRow {
+    box-shadow: none;
+  }
+
+  .memRow.is-open::after {
+    background: var(--m-row-on-rim);
+  }
+
+  .memCell {
+    min-width: 0;
+  }
+
+  .memTime {
+    color: var(--text-2);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .memKind .kindPill {
+    min-width: 88px;
+    min-height: 24px;
+    padding: 0 10px 0 9px;
+    font-size: 13px;
+  }
+
+  .memMain {
+    display: grid;
+    gap: 2px;
+  }
+
+  .memTitleLine {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .memTitle {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14.5px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .memTitleLine .actBadge {
+    flex: 0 0 auto;
+    min-height: 20px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .memPreview {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .memProject,
+  .memAgent {
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 13.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .memNum {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-2);
+    font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .memNum.is-zero {
+    opacity: 0.45;
+  }
+
+  .memNumIcon {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 15px;
+  }
+
+  .memRow.is-skeleton {
+    grid-template-columns: 64px minmax(0, 1fr);
+    cursor: default;
+  }
+
+  .memRow.is-skeleton .actSkel.is-long { width: 62%; }
+  .memGroup.is-skeleton .memDayHead .actSkel { width: 120px; height: 14px; }
+
+  .memNotice {
+    margin-top: 6px;
+  }
+
+  .memMoreRow {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
+  }
+
+  .memMore {
+    min-height: 40px;
+    padding: 0 26px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--a-control-fill);
+    box-shadow: var(--a-control-shadow);
+    color: var(--a-link);
+    font: inherit;
+    font-size: 14.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .memMore:hover {
+    background: var(--shell-hover);
+  }
+
+  .memMore[aria-busy="true"] {
+    color: var(--text-3);
+    cursor: default;
+  }
+
+  /* The docked sheet is position:fixed (width and the 16px right offset live on .actDrawer).
+     On a wide viewport the toolbar stays full width and the list area steps aside so Project, Agent,
+     Facts and Files stay on screen. The title column is minmax(0, 1fr) and takes the squeeze.
+     Below 1440px the sheet floats over the list as an overlay (scrim, full list layout). */
+  @media (min-width: 1440px) {
+    .memoryView.is-drawer-open .memSummary,
+    .memoryView.is-drawer-open .memTop,
+    .memoryView.is-drawer-open .memHead,
+    .memoryView.is-drawer-open .memGroup,
+    .memoryView.is-drawer-open .memMoreRow {
+      margin-right: calc(min(456px, calc(100vw - 32px)) + 16px);
+    }
+
+    .memoryView.is-drawer-open .memTopSeg {
+      min-width: 0;
+    }
+
+    .memoryView.is-drawer-open .memTopSeg.is-other {
+      min-width: 18px;
+    }
+  }
+
+  /* With the sheet docked (wide screens, space reserved above), drop Project and Agent so the
+     Title / Summary column gets the room. The sheet itself already shows both for the open memory. */
+  @media (min-width: 1440px) {
+    .memoryView.is-drawer-open .memBoard {
+      --m-cols: 52px 96px minmax(0, 1fr) 44px 44px;
+    }
+
+    .memoryView.is-drawer-open .memHead,
+    .memoryView.is-drawer-open .memRow {
+      column-gap: 10px;
+    }
+
+    .memoryView.is-drawer-open .memHead .memCol:nth-child(4),
+    .memoryView.is-drawer-open .memHead .memCol:nth-child(5),
+    .memoryView.is-drawer-open .memProject,
+    .memoryView.is-drawer-open .memAgent {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1199px) {
+    .memBoard {
+      --m-cols: 56px 100px minmax(0, 1fr) minmax(80px, 120px) 54px 48px;
+    }
+
+    .memHead .memCol:nth-child(5),
+    .memAgent {
+      display: none;
+    }
+
+    .memSegmented {
+      margin-left: 0;
+    }
+  }
+
+  /* Below 1440px, tighten the toolbar so search, the four pickers and the range control fit on one line at ~1280. */
+  @media (max-width: 1439px) {
+    .memToolbar {
+      column-gap: 6px;
+    }
+
+    .memSearch {
+      flex-basis: 140px;
+      min-width: 140px;
+    }
+
+    .memToolbar .actPopup {
+      padding: 0 9px 0 12px;
+    }
+
+    .memSegmented .actSegment {
+      padding: 0 11px;
+    }
+  }
+
+  @media (max-width: 860px) {
+    .memBoard {
+      --m-cols: 50px minmax(0, 1fr) 46px;
+    }
+
+    .memHead .memCol:nth-child(2),
+    .memHead .memCol:nth-child(4),
+    .memHead .memCol:nth-child(7),
+    .memKind,
+    .memProject,
+    .memNum:last-child {
+      display: none;
+    }
+
+    .memTop {
+      display: none;
+    }
+
+    .actPanes.is-pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 720px) {
+    .actDrawer,
+    .actDrawer.is-docked {
+      top: 8px;
+      right: 8px;
+      bottom: 8px;
+      width: calc(100vw - 16px);
     }
   }
 

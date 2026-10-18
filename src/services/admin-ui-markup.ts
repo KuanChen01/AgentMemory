@@ -66,7 +66,6 @@ export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: stri
 ];
 
 const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [
-  { id: 'memoryView', icon: 'memory', titleKey: 'nav.memory', title: 'Memory', leadKey: 'shell.memoryLead', lead: 'Browse and search every memory by kind, source, project, agent and date.' },
   { id: 'pipelineView', icon: 'pipeline', titleKey: 'nav.pipeline', title: 'Pipeline', leadKey: 'shell.pipelineLead', lead: 'Task capture, consolidation results, fallbacks, duplicate flags and LLM usage.' },
   { id: 'digestsView', icon: 'digests', titleKey: 'nav.digests', title: 'Digests & Reviews', leadKey: 'shell.digestsLead', lead: 'Daily digests per project, the digest scheduler and Vault review checkpoints.' },
   { id: 'projectsView', icon: 'projects', titleKey: 'nav.projects', title: 'Projects', leadKey: 'shell.projectsLead', lead: 'Every project with its startup context, state facts, digests and skills.' },
@@ -308,8 +307,7 @@ function renderHomeView(): string {
         <section class="glassCard glassBlur homeCard homeRecent" id="homeRecentCard">
           <header class="cardHead">
             <h2 class="cardTitle" data-i18n="home.recentTitle">Recent memories</h2>
-            <!-- TODO(ui): point "View all" at the Memory view once it lands in phase 2. -->
-            <button class="linkButton" id="homeRecentViewAll" type="button" data-nav-target="devToolsView" data-dev-panel="observationLedgerPanel" data-requires-dev-tools="true">
+            <button class="linkButton" id="homeRecentViewAll" type="button" data-nav-target="memoryView">
               <span data-i18n="home.viewAll">View all</span>${renderAdminIcon('arrowRight', 'linkIcon')}
             </button>
           </header>
@@ -390,7 +388,7 @@ function renderActivityView(): string {
           <span class="actToolbarSep" aria-hidden="true"></span>${renderActivityPopup('activityProject', 'activity.project', 'Project')}${renderActivityPopup('activityAgent', 'activity.agent', 'Agent')}
           <div class="actToolbarEnd">
             <span class="actRangeText"><span class="actRange" id="activityRangeLabel"></span><span class="actUpdated" id="activityUpdated"></span></span>
-            <button class="actIconButton" id="activitySearchButton" type="button" aria-disabled="true" data-i18n-title="activity.searchSoon" title="Search arrives with the Memory view" data-i18n-aria-label="activity.search" aria-label="Search">${renderAdminIcon('search', 'actIcon')}</button>
+            <button class="actIconButton" id="activitySearchButton" type="button" data-nav-target="memoryView" data-focus-target="memorySearchInput" data-i18n-title="activity.searchMemory" title="Search memories" data-i18n-aria-label="activity.search" aria-label="Search">${renderAdminIcon('search', 'actIcon')}</button>
           </div>
         </div>
 
@@ -419,12 +417,16 @@ function renderActivityView(): string {
           </aside>
         </div>
 
-        <!-- Memory detail drawer. It lives inside the view so its blur only runs while Activity is visible. -->
+        <!-- The one memory detail drawer, shared with Memory. The client moves it into whichever view opens it, so
+             its blur only runs inside the visible view. -->
         <div class="actScrim" id="activityDrawerScrim" hidden></div>
         <aside class="actDrawer" id="activityDrawer" role="dialog" aria-modal="true" aria-labelledby="activityDrawerTitle" tabindex="-1" hidden>
           <header class="actDrawerHead">
             <div class="actDrawerMeta" id="activityDrawerMeta"></div>
-            <button class="actDrawerClose" id="activityDrawerClose" type="button" data-i18n-aria-label="activity.drawerClose" aria-label="Close">${renderAdminIcon('close', 'actIcon')}</button>
+            <div class="actDrawerTools">
+              <button class="actDrawerClose" id="memoryDrawerCopy" type="button" data-i18n-title="memory.drawerCopyId" title="Copy memory ID" data-i18n-aria-label="memory.drawerCopyId" aria-label="Copy memory ID">${renderAdminIcon('copy', 'actIcon')}</button>
+              <button class="actDrawerClose" id="activityDrawerClose" type="button" data-i18n-aria-label="activity.drawerClose" aria-label="Close">${renderAdminIcon('close', 'actIcon')}</button>
+            </div>
           </header>
           <h2 class="actDrawerTitle" id="activityDrawerTitle"></h2>
           <div class="actDrawerSub" id="activityDrawerSub"></div>
@@ -445,6 +447,101 @@ function renderActivityView(): string {
           <div class="actCustomActions">
             <button class="bgButton" id="activityCustomCancel" type="button" data-i18n="activity.customCancel">Cancel</button>
             <button class="bgButton is-primary" id="activityCustomApply" type="button" data-i18n="activity.customApply">Apply</button>
+          </div>
+        </section>
+      </section>`;
+}
+
+// Time presets of the Memory toolbar; Any time is the default. 7 and 30 days end now.
+export const ADMIN_UI_MEMORY_RANGES: Array<{ id: string; range: string; key: string; label: string }> = [
+  { id: 'memoryRangeAny', range: 'any', key: 'memory.rangeAny', label: 'Any time' },
+  { id: 'memoryRange7d', range: '7d', key: 'memory.range7d', label: '7 days' },
+  { id: 'memoryRange30d', range: '30d', key: 'memory.range30d', label: '30 days' },
+  { id: 'memoryRangeCustom', range: 'custom', key: 'memory.rangeCustom', label: 'Custom' },
+];
+
+function renderMemoryPopup(id: string, labelKey: string, label: string): string {
+  return `
+          <button class="actPopup" id="${id}Button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}Popover">
+            <span class="actPopupLabel" data-i18n="${labelKey}">${label}</span>
+            <span class="actPopupValue" id="${id}Value">All</span>
+            ${renderAdminIcon('chevronUpDown', 'actPopupIcon')}
+          </button>`;
+}
+
+// Memory: one searchable, filterable list grouped by local day. The client renders the day groups inside
+// #memoryList, keyed by day and memory id; the detail drawer is the one Activity owns, moved in on open.
+function renderMemoryView(): string {
+  const segments = ADMIN_UI_MEMORY_RANGES.map((item) => `
+            <button class="actSegment" id="${item.id}" type="button" data-memory-range="${item.range}" aria-pressed="${item.range === 'any'}"${item.range === 'custom' ? ' aria-haspopup="dialog" aria-expanded="false" aria-controls="memoryCustomPopover"' : ''} data-i18n="${item.key}">${item.label}</button>`).join('');
+  const kindSum = (kind: string, suffix: string) =>
+    `<button class="memSumKind kind-${kind}" id="memorySum${suffix}" type="button" data-memory-sum-kind="${kind}" aria-pressed="false"><span class="memSumDot" aria-hidden="true"></span><span class="memSumText"></span></button>`;
+  const column = (key: string, label: string, extra: string = '') => `<span class="memCol${extra}" data-i18n="${key}">${label}</span>`;
+  const menu = (id: string, key: string, label: string) =>
+    `<div class="actPopover actMenu" id="${id}" role="listbox" data-i18n-aria-label="${key}" aria-label="${label}" hidden></div>`;
+  return `
+      <section id="memoryView" class="appView memoryView" aria-labelledby="pageTitle">
+        <p class="memLead" id="memoryLead" data-i18n="memory.lead">Search, filter, and browse saved memories across projects and agents.</p>
+
+        <div class="memToolbar glassSurface glassBlur" id="memoryToolbar" role="search" data-i18n-aria-label="memory.toolbarLabel" aria-label="Memory filters">
+          <label class="memSearch" for="memorySearchInput">
+            ${renderAdminIcon('search', 'memSearchIcon')}
+            <span class="visuallyHidden" data-i18n="memory.searchLabel">Search memories</span>
+            <input class="memSearchInput" id="memorySearchInput" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="memory.searchPlaceholder" placeholder="Search memories…" />
+            <button class="memSearchClear" id="memorySearchClear" type="button" data-i18n-aria-label="memory.searchClear" aria-label="Clear search" hidden>${renderAdminIcon('close', 'memSearchClearIcon')}</button>
+          </label>
+          <div class="memFilters">${renderMemoryPopup('memoryProject', 'memory.project', 'Project')}${renderMemoryPopup('memoryAgent', 'memory.agent', 'Agent')}${renderMemoryPopup('memoryKind', 'memory.kind', 'Kind')}${renderMemoryPopup('memorySource', 'memory.source', 'Source')}
+          </div>
+          <div class="actSegmented memSegmented" id="memoryRangeControl" role="group" data-i18n-aria-label="memory.rangeLabel" aria-label="Time range">${segments}
+          </div>
+        </div>
+
+        <div class="memSummary" id="memorySummary">
+          <span class="memSumTotal" id="memorySumTotal">—</span>
+          <span class="memSumSep" aria-hidden="true">·</span>${kindSum('outcome', 'Outcome')}
+          <span class="memSumSep" aria-hidden="true">·</span>${kindSum('context', 'Context')}
+          <span class="memSumSep" aria-hidden="true">·</span>${kindSum('legacy', 'Legacy')}
+          <span class="memUpdated" id="memoryUpdated"></span>
+        </div>
+
+        <div class="memTop glassSurface glassBlur" id="memoryTopProjects" hidden>
+          <span class="memTopLabel" id="memoryTopLabel" data-i18n="memory.topProjects">Top projects</span>
+          <div class="memTopBar" id="memoryTopBar" role="group" aria-labelledby="memoryTopLabel"></div>
+        </div>
+
+        <div class="memBoard" id="memoryBoard">
+          <div class="memHead" id="memoryListHead" aria-hidden="true">${column('memory.colTime', 'Time')}${column('memory.colKind', 'Kind')}${column('memory.colTitle', 'Title / Summary')}${column('memory.colProject', 'Project')}${column('memory.colAgent', 'Agent')}${column('memory.colFacts', 'Facts', ' is-num')}${column('memory.colFiles', 'Files', ' is-num')}
+          </div>
+          <div class="memList" id="memoryList" role="region" data-i18n-aria-label="memory.listLabel" aria-label="Memories by day" aria-busy="true"></div>
+          <div class="actNotice memNotice glassCard glassBlur" id="memoryNotice" role="status" hidden>
+            <div class="placeholderIcon" id="memoryNoticeIcon">${renderAdminIcon('memory', 'placeholderGlyph')}</div>
+            <h2 class="actNoticeTitle" id="memoryNoticeTitle"></h2>
+            <p class="actNoticeLead" id="memoryNoticeLead"></p>
+            <div class="actNoticeActions">
+              <button class="bgButton is-primary" id="memoryNoticeAction" type="button" hidden></button>
+            </div>
+          </div>
+          <div class="memMoreRow">
+            <button class="memMore" id="memoryLoadMore" type="button" hidden data-i18n="memory.loadMore">Load more</button>
+          </div>
+        </div>
+
+        <!-- Popovers sit outside the blurred toolbar so their own blur sees the page. -->
+        ${menu('memoryProjectPopover', 'memory.projectMenu', 'Filter by project')}
+        ${menu('memoryAgentPopover', 'memory.agentMenu', 'Filter by agent')}
+        ${menu('memoryKindPopover', 'memory.kindMenu', 'Filter by kind')}
+        ${menu('memorySourcePopover', 'memory.sourceMenu', 'Filter by source')}
+        <section class="actPopover actCustom" id="memoryCustomPopover" role="dialog" aria-labelledby="memoryCustomTitle" hidden>
+          <h3 class="actCustomTitle" id="memoryCustomTitle" data-i18n="memory.customTitle">Custom range</h3>
+          <div class="actCustomFields">
+            <label class="actField"><span class="actFieldLabel" data-i18n="memory.customFrom">From</span><input class="actDateInput" id="memoryCustomFrom" type="date" /></label>
+            <label class="actField"><span class="actFieldLabel" data-i18n="memory.customTo">To</span><input class="actDateInput" id="memoryCustomTo" type="date" /></label>
+          </div>
+          <p class="actCustomHint" data-i18n="memory.customHint">Both days are included.</p>
+          <p class="actCustomError" id="memoryCustomError" role="alert" hidden></p>
+          <div class="actCustomActions">
+            <button class="bgButton" id="memoryCustomCancel" type="button" data-i18n="memory.customCancel">Cancel</button>
+            <button class="bgButton is-primary" id="memoryCustomApply" type="button" data-i18n="memory.customApply">Apply</button>
           </div>
         </section>
       </section>`;
@@ -494,7 +591,7 @@ export function renderAdminWorkbenchMarkup(): string {
   return `
   <div class="appShell">${renderSidebar()}${renderBackgroundPopover()}
     <main class="mainArea" id="mainArea">
-      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderPlaceholderViews()}${renderSettingsView()}
+      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPlaceholderViews()}${renderSettingsView()}
 
       <section id="devToolsView" class="appView devToolsView" aria-labelledby="pageTitle">
     <p class="devToolsLead" data-i18n="devtools.lead">Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.</p>
