@@ -56,9 +56,10 @@ import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { initializeWithLockRetry } from './db-init-retry';
 import { classifyToolEvent } from './event-classifier';
 import {
-  bufferEvent, consolidateTask, freezeOpenTask, frozenTasks, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
+  bufferEvent, consolidateTask, freezeOpenTask, frozenTasks, inflightTaskIds, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
   stuckTaskCount, taskIdleMs, taskRetryMs, TaskTrigger,
 } from './task-consolidation';
+import { getAdminPipeline } from './pipeline-query';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -236,6 +237,8 @@ const ADMIN_ACTIVITY_DISABLED_FIELDS = ['from', 'to', 'tz_offset_minutes', 'tota
 const ADMIN_MEMORY_DETAIL_DISABLED_FIELDS = ['memory', 'tasks', 'duplicate_flags', 'review', 'compacted_into', 'evidence_available'] as const;
 
 const ADMIN_MEMORIES_DISABLED_FIELDS = ['generated_at', 'filters', 'items', 'next_cursor', 'days', 'stats'] as const;
+
+const ADMIN_PIPELINE_DISABLED_FIELDS = ['generated_at', 'filters', 'stages', 'items', 'next_cursor', 'days'] as const;
 
 function sendAdminReadsDisabled(res: Response, fields: readonly string[]) {
   const body: { [key: string]: unknown } = {
@@ -556,6 +559,51 @@ app.get('/admin/api/memories', adminOnlyGuard, async (req, res) => {
       return;
     }
     console.error('Error fetching admin memories:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/pipeline', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_PIPELINE_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = (key: string): string | undefined => {
+      const value = req.query[key];
+      if (Array.isArray(value)) throw new Error('Invalid pipeline request: repeated query parameter');
+      if (value === undefined) return undefined;
+      if (typeof value !== 'string') throw new Error('Invalid pipeline request: query parameter');
+      return value;
+    };
+    const given = (value: string | undefined) => (value === undefined || value === '' ? undefined : value);
+    const tz = given(readQuery('tz_offset_minutes'));
+    const limit = given(readQuery('limit'));
+    const statsRaw = given(readQuery('stats'));
+    if (statsRaw !== undefined && statsRaw !== '0' && statsRaw !== '1') {
+      throw new Error('Invalid pipeline request: stats');
+    }
+    const cursor = given(readQuery('cursor'));
+    res.json(await getAdminPipeline(dbManager, {
+      project: given(readQuery('project')),
+      agent: given(readQuery('agent')),
+      state: given(readQuery('state')),
+      from: given(readQuery('from')),
+      to: given(readQuery('to')),
+      tzOffsetMinutes: tz === undefined ? undefined : Number(tz),
+      limit: limit === undefined ? undefined : Number(limit),
+      cursor: cursor ?? null,
+      stats: statsRaw === undefined ? undefined : statsRaw === '1',
+    }, {
+      inflight: inflightTaskIds(),
+      consolidating: activeConsolidations,
+    }));
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid pipeline request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin pipeline:', err);
     res.status(500).json({ error: err.message });
   }
 });
