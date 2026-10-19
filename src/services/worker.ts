@@ -584,6 +584,10 @@ app.get('/admin/api/pipeline', adminOnlyGuard, async (req, res) => {
       throw new Error('Invalid pipeline request: stats');
     }
     const cursor = given(readQuery('cursor'));
+    const flaggedRaw = given(readQuery('flagged'));
+    if (flaggedRaw !== undefined && flaggedRaw !== '0' && flaggedRaw !== '1') {
+      throw new Error('Invalid pipeline request: flagged');
+    }
     res.json(await getAdminPipeline(dbManager, {
       project: given(readQuery('project')),
       agent: given(readQuery('agent')),
@@ -594,6 +598,7 @@ app.get('/admin/api/pipeline', adminOnlyGuard, async (req, res) => {
       limit: limit === undefined ? undefined : Number(limit),
       cursor: cursor ?? null,
       stats: statsRaw === undefined ? undefined : statsRaw === '1',
+      flagged: flaggedRaw === undefined ? undefined : flaggedRaw === '1',
     }, {
       inflight: inflightTaskIds(),
       consolidating: activeConsolidations,

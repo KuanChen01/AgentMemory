@@ -17,6 +17,8 @@ export interface AdminPipelineOptions {
   limit?: number;
   cursor?: string | null;
   stats?: boolean;
+  /** When true, items are tasks that have a duplicate_flags row in status needs_confirmation. Stages stay unfiltered. */
+  flagged?: boolean;
 }
 
 export interface PipelineRuntime {
@@ -42,8 +44,11 @@ interface NormalizedAdminPipeline {
   limit: number;
   cursor: PipelineCursor | null;
   stats: boolean;
+  flagged: boolean;
   filterHash: string;
 }
+
+const PIPELINE_FACET_CAP = 200;
 
 function invalidPipeline(detail: string): Error {
   return new Error(`Invalid pipeline request: ${detail}`);
@@ -99,8 +104,14 @@ function pipelineStateList(value: string | undefined): PipelineState[] {
   return PIPELINE_STATES.filter((state) => selected.has(state));
 }
 
+function pipelineFlagged(value: boolean | undefined): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw invalidPipeline('flagged');
+  return value;
+}
+
 function pipelineFilterHash(filters: {
-  project: string | null; agent: string | null; state: PipelineState[]; from: string | null; to: string | null;
+  project: string | null; agent: string | null; state: PipelineState[]; from: string | null; to: string | null; flagged: boolean;
 }): string {
   return createHash('sha1').update(JSON.stringify({
     project: filters.project,
@@ -108,6 +119,7 @@ function pipelineFilterHash(filters: {
     state: [...filters.state].sort(),
     from: filters.from,
     to: filters.to,
+    flagged: filters.flagged,
   })).digest('hex').slice(0, 12);
 }
 
@@ -139,12 +151,14 @@ function normalizeAdminPipeline(options: AdminPipelineOptions): NormalizedAdminP
   const project = pipelineExact(options.project, 'project');
   const agent = pipelineExact(options.agent, 'agent');
   const states = pipelineStateList(options.state);
+  const flagged = pipelineFlagged(options.flagged);
   const filterHash = pipelineFilterHash({
     project: project ?? null,
     agent: agent ?? null,
     state: states,
     from: fromIso,
     to: toIso,
+    flagged,
   });
   let cursor: PipelineCursor | null = null;
   if (options.cursor !== undefined && options.cursor !== null && options.cursor !== '') {
@@ -162,6 +176,7 @@ function normalizeAdminPipeline(options: AdminPipelineOptions): NormalizedAdminP
     limit: pipelineLimit(options.limit),
     cursor,
     stats: pipelineStatsFlag(options.stats),
+    flagged,
     filterHash,
   };
 }
@@ -184,6 +199,12 @@ export function sanitizeText(value: unknown): string | null {
   text = text.replace(/\b(?:bearer)\s+[A-Za-z0-9._~+/-]+=*/gi, '<redacted>');
   text = text.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '<redacted>');
   text = text.replace(/\b(?:api[_-]?key|secret|password|key|token)\s*=\s*[^\s&;,]+/gi, '<redacted>');
+  // A quoted absolute path may contain spaces ("C:\Users\Jane Roe\private.txt", '\\server\share\...', `/work/a b`).
+  // Take the whole quoted span before the unquoted rules, which stop at the first space.
+  text = text.replace(/(["'`])([^"'`]*)\1/g, (full, quote: string, inner: string) => {
+    if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/)/.test(inner)) return `${quote}<path>${quote}`;
+    return full;
+  });
   text = text.replace(/(?:\\\\|\/\/)[^\s\\/]+[\\/][^\s]*/g, '<path>');
   text = text.replace(/[A-Za-z]:[\\/][^\s]*/g, '<path>');
   text = text.replace(/(^|[\s"'`(=:<>])(\/[^\s"'`)<>]+)/g, '$1<path>');
@@ -265,11 +286,26 @@ function emptyStages(consolidating: number) {
   return { queued: 0, processing: 0, consolidating, saved: 0, skipped: 0, duplicate: 0, fallback: 0, failed: 0, stuck: 0 };
 }
 
+/** Distinct non-empty values, case-insensitive sort, capped. Exact spelling is kept. */
+function facetValues(rows: any[], field: string): string[] {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const value = row[field];
+    if (typeof value !== 'string') continue;
+    const text = value.trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })).slice(0, PIPELINE_FACET_CAP);
+}
+
 /**
  * Read-only admin task list. `runtime.inflight` is the worker's in-flight set for this instant;
  * `runtime.consolidating` is the worker's active consolidation count (global, not filtered).
- * The classifier runs ONCE per request over the project/agent/from/to scope; stages, the state filter, paging and
+ * The classifier runs over the project/agent/from/to scope; stages, the state filter, paging and
  * day counts are derived from those lean rows, and only the page rows get detail lookups.
+ * `flagged` narrows items (not stages) to tasks with a needs_confirmation duplicate_flags row.
+ * Page 1 with stats also returns `facets`: distinct project and agent values over the whole task universe.
  */
 export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOptions = {}, runtime: PipelineRuntime) {
   const normalized = normalizeAdminPipeline(options);
@@ -289,9 +325,22 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
   const stages = wantStages ? emptyStages(consolidating) : null;
   if (stages) for (const row of scoped) if (STATE_SET.has(row.state)) (stages as any)[row.state]++;
 
+  // Facets ignore every filter, including flagged and state. A second pass is only needed when the list itself is scoped.
+  let facets: { projects: string[]; agents: string[] } | undefined;
+  if (wantStages) {
+    const universe = where.length
+      ? db.sqlAll(`WITH ${built.sql} SELECT project_path, agent_id FROM pipeline_tasks`, built.params)
+      : scoped;
+    facets = { projects: facetValues(universe, 'project_path'), agents: facetValues(universe, 'agent_id') };
+  }
+
   const allStates = normalized.states.length === PIPELINE_STATES.length;
   const wanted = new Set<string>(normalized.states);
-  const matching = (allStates ? scoped : scoped.filter((row) => wanted.has(row.state))).sort(compareDesc);
+  const stateMatched = allStates ? scoped : scoped.filter((row) => wanted.has(row.state));
+  const flaggedIds = normalized.flagged
+    ? new Set(db.sqlAll(`SELECT DISTINCT task_id FROM duplicate_flags WHERE status = 'needs_confirmation'`).map((row) => String(row.task_id)))
+    : null;
+  const matching = (flaggedIds ? stateMatched.filter((row) => flaggedIds.has(String(row.task_id))) : stateMatched).sort(compareDesc);
   const cursor = normalized.cursor;
   const start = cursor ? matching.findIndex((row) => afterCursor(row, cursor)) : 0;
   const rest = start < 0 ? [] : matching.slice(start);
@@ -369,6 +418,7 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
       tz_offset_minutes: normalized.offset,
     },
     stages,
+    ...(facets ? { facets } : {}),
     items,
     next_cursor: nextCursor,
     days,
