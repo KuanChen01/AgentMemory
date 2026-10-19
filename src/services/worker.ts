@@ -60,6 +60,7 @@ import {
   stuckTaskCount, taskIdleMs, taskRetryMs, TaskTrigger,
 } from './task-consolidation';
 import { getAdminPipeline } from './pipeline-query';
+import { getAdminDigestDetail, getAdminDigestList, getAdminVaultReviews } from './digest-query';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -240,6 +241,12 @@ const ADMIN_MEMORIES_DISABLED_FIELDS = ['generated_at', 'filters', 'items', 'nex
 
 const ADMIN_PIPELINE_DISABLED_FIELDS = ['generated_at', 'filters', 'stages', 'items', 'next_cursor', 'days'] as const;
 
+const ADMIN_DIGEST_LIST_DISABLED_FIELDS = ['generated_at', 'filters', 'items', 'next_cursor', 'days', 'stats', 'facets'] as const;
+
+const ADMIN_DIGEST_DETAIL_DISABLED_FIELDS = ['digest', 'sources', 'sources_truncated'] as const;
+
+const ADMIN_VAULT_REVIEWS_DISABLED_FIELDS = ['generated_at', 'filters', 'checkpoints', 'next_cursor', 'last_checkpoint_at', 'last_checkpoint_age_ms', 'days', 'reads_total', 'runs', 'schedule'] as const;
+
 function sendAdminReadsDisabled(res: Response, fields: readonly string[]) {
   const body: { [key: string]: unknown } = {
     status: 'reads_disabled',
@@ -248,6 +255,34 @@ function sendAdminReadsDisabled(res: Response, fields: readonly string[]) {
   };
   for (const field of fields) body[field] = null;
   res.json(body);
+}
+
+function adminReadQuery(req: Request, requestName: string): (key: string) => string | undefined {
+  return (key: string): string | undefined => {
+    const value = req.query[key];
+    if (Array.isArray(value)) throw new Error(`Invalid ${requestName} request: repeated query parameter`);
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string') throw new Error(`Invalid ${requestName} request: query parameter`);
+    return value;
+  };
+}
+
+function adminGiven(value: string | undefined): string | undefined {
+  return value === undefined || value === '' ? undefined : value;
+}
+
+function adminStrictInteger(requestName: string, raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined) return undefined;
+  if (!/^-?(?:0|[1-9]\d*)$/.test(raw)) throw new Error(`Invalid ${requestName} request: ${label}`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) throw new Error(`Invalid ${requestName} request: ${label}`);
+  return value;
+}
+
+function adminStatsFlag(requestName: string, raw: string | undefined): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (raw !== '0' && raw !== '1') throw new Error(`Invalid ${requestName} request: stats`);
+  return raw === '1';
 }
 
 function sendWriteDisabled(res: Response) {
@@ -609,6 +644,90 @@ app.get('/admin/api/pipeline', adminOnlyGuard, async (req, res) => {
       return;
     }
     console.error('Error fetching admin pipeline:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/digest-list', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_DIGEST_LIST_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = adminReadQuery(req, 'digest-list');
+    const tz = adminGiven(readQuery('tz_offset_minutes'));
+    const limit = adminGiven(readQuery('limit'));
+    const cursor = adminGiven(readQuery('cursor'));
+    res.json(getAdminDigestList(dbManager, {
+      project: adminGiven(readQuery('project')),
+      agent: adminGiven(readQuery('agent')),
+      status: adminGiven(readQuery('status')),
+      from: adminGiven(readQuery('from')),
+      to: adminGiven(readQuery('to')),
+      tzOffsetMinutes: adminStrictInteger('digest-list', tz, 'tz_offset_minutes'),
+      limit: adminStrictInteger('digest-list', limit, 'limit'),
+      cursor: cursor ?? null,
+      stats: adminStatsFlag('digest-list', adminGiven(readQuery('stats'))),
+    }));
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid digest-list request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin digest list:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/digest-detail', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_DIGEST_DETAIL_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = adminReadQuery(req, 'digest-detail');
+    const detail = getAdminDigestDetail(dbManager, { id: readQuery('id') });
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown digest ID' });
+      return;
+    }
+    res.json(detail);
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid digest-detail request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin digest detail:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/vault-reviews', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_VAULT_REVIEWS_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = adminReadQuery(req, 'vault-reviews');
+    const tz = adminGiven(readQuery('tz_offset_minutes'));
+    const limit = adminGiven(readQuery('limit'));
+    const cursor = adminGiven(readQuery('cursor'));
+    res.json(getAdminVaultReviews(dbManager, {
+      from: adminGiven(readQuery('from')),
+      to: adminGiven(readQuery('to')),
+      tzOffsetMinutes: adminStrictInteger('vault-reviews', tz, 'tz_offset_minutes'),
+      limit: adminStrictInteger('vault-reviews', limit, 'limit'),
+      cursor: cursor ?? null,
+      readsFrom: adminGiven(readQuery('reads_from')),
+      readsTo: adminGiven(readQuery('reads_to')),
+      stats: adminStatsFlag('vault-reviews', adminGiven(readQuery('stats'))),
+    }));
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid vault-reviews request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin vault reviews:', err);
     res.status(500).json({ error: err.message });
   }
 });
