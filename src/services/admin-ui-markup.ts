@@ -26,6 +26,13 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   chevronDown: '<path d="m7 10 5 5 5-5"/>',
   chevronRight: '<path d="m10 7 5 5-5 5"/>',
   copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5v-2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/>',
+  warning: '<path d="M10.3 4.2 2.9 17.5a2 2 0 0 0 1.7 3h14.8a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4.5"/><circle cx="12" cy="17.2" r="0.6"/>',
+  retry: '<path d="M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M4.5 12a7.5 7.5 0 0 1 13-5.1"/><path d="M17.8 3.5v3.6h-3.6M6.2 20.5v-3.6h3.6"/>',
+  segments: '<path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.8" cy="6.5" r="1.1"/><circle cx="4.8" cy="12" r="1.1"/><circle cx="4.8" cy="17.5" r="1.1"/>',
+  evidence: '<path d="M6.5 3.5h7l4.5 4.5v11.5a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z"/><path d="m9 13.5 2 2 4-4"/>',
+  external: '<path d="M13.5 4.5h6v6"/><path d="M19.5 4.5 11 13"/><path d="M17.5 14v4a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h4"/>',
+  chevronLeft: '<path d="m14 7-5 5 5 5"/>',
+  llm: '<path d="M11 3.5 12.9 8.6 18 10.5l-5.1 1.9L11 17.5l-1.9-5.1L4 10.5l5.1-1.9z"/><path d="m18 15 .8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>',
 };
 
 export function renderAdminIcon(name: string, className: string = 'icon'): string {
@@ -66,7 +73,6 @@ export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: stri
 ];
 
 const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [
-  { id: 'pipelineView', icon: 'pipeline', titleKey: 'nav.pipeline', title: 'Pipeline', leadKey: 'shell.pipelineLead', lead: 'Task capture, consolidation results, fallbacks, duplicate flags and LLM usage.' },
   { id: 'digestsView', icon: 'digests', titleKey: 'nav.digests', title: 'Digests & Reviews', leadKey: 'shell.digestsLead', lead: 'Daily digests per project, the digest scheduler and Vault review checkpoints.' },
   { id: 'projectsView', icon: 'projects', titleKey: 'nav.projects', title: 'Projects', leadKey: 'shell.projectsLead', lead: 'Every project with its startup context, state facts, digests and skills.' },
   { id: 'skillsView', icon: 'skills', titleKey: 'nav.skills', title: 'Skills', leadKey: 'shell.skillsLead', lead: 'Procedural skills, digest candidates and how often post-task reviews matched them.' },
@@ -547,6 +553,118 @@ function renderMemoryView(): string {
       </section>`;
 }
 
+// Time presets of the Pipeline toolbar; 7 days is the default. Today, 7 and 30 days end now.
+export const ADMIN_UI_PIPELINE_RANGES: Array<{ id: string; range: string; key: string; label: string }> = [
+  { id: 'pipelineRangeToday', range: 'today', key: 'pipeline.rangeToday', label: 'Today' },
+  { id: 'pipelineRange7d', range: '7d', key: 'pipeline.range7d', label: '7 days' },
+  { id: 'pipelineRange30d', range: '30d', key: 'pipeline.range30d', label: '30 days' },
+  { id: 'pipelineRangeCustom', range: 'custom', key: 'pipeline.rangeCustom', label: 'Custom' },
+];
+
+// The flow strip, in order: the three in-flight stages (joined by chevrons), then the outcomes. Stuck has its own chip.
+// Consolidating is the worker's live count and only displays; every other stage filters the list.
+export const ADMIN_UI_PIPELINE_STAGES: Array<{ stage: string; id: string; key: string; label: string; flow: boolean }> = [
+  { stage: 'queued', id: 'pipelineStageQueued', key: 'pipeline.stateQueued', label: 'Queued', flow: true },
+  { stage: 'processing', id: 'pipelineStageProcessing', key: 'pipeline.stateProcessing', label: 'Processing', flow: true },
+  { stage: 'consolidating', id: 'pipelineStageConsolidating', key: 'pipeline.stageConsolidating', label: 'Consolidating', flow: true },
+  { stage: 'saved', id: 'pipelineStageSaved', key: 'pipeline.stateSaved', label: 'Saved', flow: false },
+  { stage: 'skipped', id: 'pipelineStageSkipped', key: 'pipeline.stateSkipped', label: 'Skipped', flow: false },
+  { stage: 'duplicate', id: 'pipelineStageDuplicate', key: 'pipeline.stateDuplicate', label: 'Duplicate', flow: false },
+  { stage: 'fallback', id: 'pipelineStageFallback', key: 'pipeline.stateFallback', label: 'Fallback', flow: false },
+  { stage: 'failed', id: 'pipelineStageFailed', key: 'pipeline.stateFailed', label: 'Failed', flow: false },
+];
+
+function renderPipelineStage(item: { stage: string; id: string; key: string; label: string }): string {
+  const inner = `<span class="pipeOrb" aria-hidden="true"><span class="pipeOrbDot"></span></span>
+              <span class="pipeStageText"><span class="pipeStageLabel" data-i18n="${item.key}">${item.label}</span><span class="pipeStageCount" id="${item.id}Count">—</span></span>`;
+  if (item.stage === 'consolidating') {
+    return `
+            <div class="pipeStage is-static stage-${item.stage}" id="${item.id}" data-i18n-title="pipeline.stageConsolidatingHint" title="Consolidations the worker is running right now">
+              ${inner}
+            </div>`;
+  }
+  return `
+            <button class="pipeStage stage-${item.stage}" id="${item.id}" type="button" data-pipeline-stage="${item.stage}" aria-pressed="false">
+              ${inner}
+            </button>`;
+}
+
+// Pipeline: the task list behind every memory, grouped by local day. The client fills #pipelineList keyed by day
+// and task id; the detail drawer is the one Activity owns, moved in on open, with a task body of its own.
+function renderPipelineView(): string {
+  const segments = ADMIN_UI_PIPELINE_RANGES.map((item) => `
+            <button class="actSegment" id="${item.id}" type="button" data-pipeline-range="${item.range}" aria-pressed="${item.range === '7d'}"${item.range === 'custom' ? ' aria-haspopup="dialog" aria-expanded="false" aria-controls="pipelineCustomPopover"' : ''} data-i18n="${item.key}">${item.label}</button>`).join('');
+  const chevron = renderAdminIcon('chevronRight', 'pipeChevron');
+  const flow = ADMIN_UI_PIPELINE_STAGES.filter((item) => item.flow).map(renderPipelineStage).join(chevron);
+  const outcomes = ADMIN_UI_PIPELINE_STAGES.filter((item) => !item.flow).map(renderPipelineStage).join('');
+  const column = (key: string, label: string, extra: string = '') => `<span class="memCol${extra}" data-i18n="${key}">${label}</span>`;
+  const menu = (id: string, key: string, label: string) =>
+    `<div class="actPopover actMenu" id="${id}" role="listbox" data-i18n-aria-label="${key}" aria-label="${label}" hidden></div>`;
+  return `
+      <section id="pipelineView" class="appView pipelineView" aria-labelledby="pageTitle">
+        <div class="pipeLeadRow">
+          <p class="memLead pipeLead" id="pipelineLead" data-i18n="pipeline.lead">Track how finished tasks become durable memories, and spot failures fast.</p>
+          <span class="memUpdated" id="pipelineUpdated"></span>
+        </div>
+
+        <div class="memToolbar pipeToolbar glassSurface glassBlur" id="pipelineToolbar" role="group" data-i18n-aria-label="pipeline.toolbarLabel" aria-label="Pipeline filters">
+          <div class="pipeFilters">${renderMemoryPopup('pipelineProject', 'pipeline.project', 'Project')}${renderMemoryPopup('pipelineAgent', 'pipeline.agent', 'Agent')}${renderMemoryPopup('pipelineState', 'pipeline.state', 'State')}
+          </div>
+          <div class="actSegmented memSegmented" id="pipelineRangeControl" role="group" data-i18n-aria-label="pipeline.rangeLabel" aria-label="Time range">${segments}
+          </div>
+        </div>
+
+        <div class="pipeFlowRow" id="pipelineFlowRow">
+          <div class="pipeFlow glassSurface glassBlur" id="pipelineFlow" role="group" data-i18n-aria-label="pipeline.flowLabel" aria-label="Tasks by stage">
+            <div class="pipeFlowGroup is-flow">${flow}
+            </div>
+            <span class="pipeFlowSep" aria-hidden="true"></span>
+            <div class="pipeFlowGroup">${outcomes}
+            </div>
+          </div>
+          <button class="pipeStuck glassSurface glassBlur" id="pipelineStuck" type="button" data-pipeline-stage="stuck" aria-pressed="false" title="Incomplete tasks whose retries are used up or that have not moved for over a day">
+            <span class="pipeStuckIcon" aria-hidden="true">${renderAdminIcon('warning', 'pipeStuckGlyph')}</span>
+            <span class="pipeStageText"><span class="pipeStageLabel" data-i18n="pipeline.stateStuck">Stuck</span><span class="pipeStageCount" id="pipelineStuckCount">—</span></span>
+          </button>
+        </div>
+
+        <div class="memBoard pipeBoard" id="pipelineBoard">
+          <div class="memHead pipeHead" id="pipelineListHead" aria-hidden="true">${column('pipeline.colTime', 'Time')}${column('pipeline.colState', 'State')}${column('pipeline.colTask', 'Task / Title')}${column('pipeline.colProject', 'Project')}${column('pipeline.colAgent', 'Agent')}${column('pipeline.colLlm', 'LLM calls', ' is-num')}${column('pipeline.colAttempts', 'Attempts', ' is-num')}
+          </div>
+          <div class="memList pipeList" id="pipelineList" role="region" data-i18n-aria-label="pipeline.listLabel" aria-label="Tasks by day" aria-busy="true"></div>
+          <div class="actNotice memNotice glassCard glassBlur" id="pipelineNotice" role="status" hidden>
+            <div class="placeholderIcon" id="pipelineNoticeIcon">${renderAdminIcon('pipeline', 'placeholderGlyph')}</div>
+            <h2 class="actNoticeTitle" id="pipelineNoticeTitle"></h2>
+            <p class="actNoticeLead" id="pipelineNoticeLead"></p>
+            <div class="actNoticeActions">
+              <button class="bgButton is-primary" id="pipelineNoticeAction" type="button" hidden></button>
+            </div>
+          </div>
+          <div class="memMoreRow">
+            <button class="memMore" id="pipelineLoadMore" type="button" hidden data-i18n="pipeline.loadMore">Load more</button>
+          </div>
+        </div>
+
+        <!-- Popovers sit outside the blurred toolbar so their own blur sees the page. -->
+        ${menu('pipelineProjectPopover', 'pipeline.projectMenu', 'Filter by project')}
+        ${menu('pipelineAgentPopover', 'pipeline.agentMenu', 'Filter by agent')}
+        ${menu('pipelineStatePopover', 'pipeline.stateMenu', 'Filter by state')}
+        <section class="actPopover actCustom" id="pipelineCustomPopover" role="dialog" aria-labelledby="pipelineCustomTitle" hidden>
+          <h3 class="actCustomTitle" id="pipelineCustomTitle" data-i18n="pipeline.customTitle">Custom range</h3>
+          <div class="actCustomFields">
+            <label class="actField"><span class="actFieldLabel" data-i18n="pipeline.customFrom">From</span><input class="actDateInput" id="pipelineCustomFrom" type="date" /></label>
+            <label class="actField"><span class="actFieldLabel" data-i18n="pipeline.customTo">To</span><input class="actDateInput" id="pipelineCustomTo" type="date" /></label>
+          </div>
+          <p class="actCustomHint" data-i18n="pipeline.customHint">Both days are included.</p>
+          <p class="actCustomError" id="pipelineCustomError" role="alert" hidden></p>
+          <div class="actCustomActions">
+            <button class="bgButton" id="pipelineCustomCancel" type="button" data-i18n="pipeline.customCancel">Cancel</button>
+            <button class="bgButton is-primary" id="pipelineCustomApply" type="button" data-i18n="pipeline.customApply">Apply</button>
+          </div>
+        </section>
+      </section>`;
+}
+
 function renderPlaceholderViews(): string {
   return PLACEHOLDER_VIEWS.map((view) => `
       <section id="${view.id}" class="appView" aria-labelledby="pageTitle">
@@ -591,7 +709,7 @@ export function renderAdminWorkbenchMarkup(): string {
   return `
   <div class="appShell">${renderSidebar()}${renderBackgroundPopover()}
     <main class="mainArea" id="mainArea">
-      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPlaceholderViews()}${renderSettingsView()}
+      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderPlaceholderViews()}${renderSettingsView()}
 
       <section id="devToolsView" class="appView devToolsView" aria-labelledby="pageTitle">
     <p class="devToolsLead" data-i18n="devtools.lead">Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.</p>

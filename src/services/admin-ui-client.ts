@@ -238,8 +238,40 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       groupNodes: new Map(),
       signatures: {},
     },
-    // The one memory detail drawer. host is the view that opened it; the drawer node moves into that view.
-    drawer: { id: "", host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
+    // Pipeline: page 1 carries the stage counts; later pages follow next_cursor, which is bound to the filters and
+    // to the from/to of the request that issued it (kept in window, since Today, 7 and 30 days end now).
+    pipeline: {
+      project: "",
+      agent: "",
+      // One state, or "" for all.
+      state: "",
+      range: "7d",
+      customFrom: "",
+      customTo: "",
+      items: [],
+      days: [],
+      stages: null,
+      nextCursor: null,
+      window: null,
+      key: "",
+      loaded: false,
+      loadedAt: 0,
+      error: "",
+      readsDisabled: false,
+      refreshFailed: false,
+      stale: false,
+      seq: 0,
+      busySeq: 0,
+      moreSeq: 0,
+      lastScrollAt: 0,
+      openPopover: "",
+      rowNodes: new Map(),
+      groupNodes: new Map(),
+      signatures: {},
+    },
+    // The one detail drawer. host is the view that opened it; the drawer node moves into that view. id is the memory
+    // on show; task is the Pipeline task it was opened from (task alone shows the task body, taskItem its last copy).
+    drawer: { id: "", task: "", taskItem: null, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
   };
 
   const els = {
@@ -506,6 +538,32 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     memoryNoticeLead: document.getElementById("memoryNoticeLead"),
     memoryNoticeAction: document.getElementById("memoryNoticeAction"),
     memoryLoadMore: document.getElementById("memoryLoadMore"),
+    pipelineView: document.getElementById("pipelineView"),
+    pipelineUpdated: document.getElementById("pipelineUpdated"),
+    pipelineToolbar: document.getElementById("pipelineToolbar"),
+    pipelineRangeButtons: Array.from(document.querySelectorAll("[data-pipeline-range]")),
+    pipelineRangeCustom: document.getElementById("pipelineRangeCustom"),
+    pipelineProjectButton: document.getElementById("pipelineProjectButton"),
+    pipelineProjectValue: document.getElementById("pipelineProjectValue"),
+    pipelineAgentButton: document.getElementById("pipelineAgentButton"),
+    pipelineAgentValue: document.getElementById("pipelineAgentValue"),
+    pipelineStateButton: document.getElementById("pipelineStateButton"),
+    pipelineStateValue: document.getElementById("pipelineStateValue"),
+    pipelineProjectPopover: document.getElementById("pipelineProjectPopover"),
+    pipelineAgentPopover: document.getElementById("pipelineAgentPopover"),
+    pipelineStatePopover: document.getElementById("pipelineStatePopover"),
+    pipelineCustomPopover: document.getElementById("pipelineCustomPopover"),
+    pipelineCustomFrom: document.getElementById("pipelineCustomFrom"),
+    pipelineCustomTo: document.getElementById("pipelineCustomTo"),
+    pipelineCustomError: document.getElementById("pipelineCustomError"),
+    pipelineFlowRow: document.getElementById("pipelineFlowRow"),
+    pipelineListHead: document.getElementById("pipelineListHead"),
+    pipelineList: document.getElementById("pipelineList"),
+    pipelineNotice: document.getElementById("pipelineNotice"),
+    pipelineNoticeTitle: document.getElementById("pipelineNoticeTitle"),
+    pipelineNoticeLead: document.getElementById("pipelineNoticeLead"),
+    pipelineNoticeAction: document.getElementById("pipelineNoticeAction"),
+    pipelineLoadMore: document.getElementById("pipelineLoadMore"),
   };
 
   // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
@@ -739,6 +797,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderHome();
     renderActivity();
     renderMemory();
+    renderPipeline();
     renderMemoryDrawer();
     renderProceduralWorkspace();
     renderLlmConfig();
@@ -2145,6 +2204,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (overview && overview.queue) {
       const stuck = Number(overview.queue.stuck_tasks || 0);
       const duplicates = Number(overview.queue.duplicate_flags || 0);
+      // The card opens Pipeline on what it warns about, or on the queue when all is well.
+      setAttr(els.homeQueueCard, "data-pipeline-state", stuck > 0 ? "stuck" : duplicates > 0 ? "duplicate" : "queued");
+      setAttr(els.homeQueueCard, "data-pipeline-range", stuck > 0 || duplicates > 0 ? "30d" : "7d");
       renderHealthCard(
         els.homeQueueCard,
         stuck > 0 || duplicates > 0 ? "warn" : "ok",
@@ -2353,15 +2415,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     const queue = overview && overview.queue || {};
     if (Number(queue.stuck_tasks || 0) > 0) {
-      items.push({ severity: "warn", text: t("home.attnStuck", { n: queue.stuck_tasks }), target: "pipelineView" });
+      items.push({ severity: "warn", text: t("home.attnStuck", { n: queue.stuck_tasks }), target: "pipelineView", pipelineState: "stuck", pipelineRange: "30d" });
     }
     if (Number(queue.duplicate_flags || 0) > 0) {
-      items.push({ severity: "warn", text: t("home.attnDuplicates", { n: queue.duplicate_flags }), target: "pipelineView" });
+      items.push({ severity: "warn", text: t("home.attnDuplicates", { n: queue.duplicate_flags }), target: "pipelineView", pipelineState: "duplicate", pipelineRange: "30d" });
     }
     if (summary) {
       const fallback = Number(summary.tasks_today && summary.tasks_today.fallback || 0);
       if (fallback > 0) {
-        items.push({ severity: "warn", text: t("home.attnFallbacks", { n: fallback }), target: "pipelineView" });
+        items.push({ severity: "warn", text: t("home.attnFallbacks", { n: fallback }), target: "pipelineView", pipelineState: "fallback", pipelineRange: "today" });
       }
       const failed = summary.digests && Array.isArray(summary.digests.failed_recent) ? summary.digests.failed_recent : [];
       failed.forEach((digest) => {
@@ -2456,6 +2518,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setClass(els.homeAttentionCount, "countBadge" + (errors > 0 ? " is-error" : ""));
     setHtmlIfChanged("attention", els.homeAttentionList, JSON.stringify(items), () => items.map((item) => (
       '<li><button class="attentionItem is-' + item.severity + '" type="button" data-nav-target="' + item.target + '"' +
+        (item.pipelineState ? ' data-pipeline-state="' + item.pipelineState + '" data-pipeline-range="' + item.pipelineRange + '"' : '') +
         (item.title ? ' title="' + escapeHtml(item.title) + '"' : '') + '>' +
         '<span class="attentionDot" aria-hidden="true"></span><span>' + escapeHtml(item.text) + '</span>' +
       '</button></li>'
@@ -3320,16 +3383,17 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   // ---------- Memory detail drawer (shared by Activity and Memory) ----------
 
+  // Open with a memory (id) or with a Pipeline task body (task alone).
   function isMemoryDrawerOpen() {
-    return !!state.drawer.id;
+    return !!(state.drawer.id || state.drawer.task);
   }
 
   // The drawer markup lives in Activity. It moves into the view that opens it, so its blur only runs inside the
-  // visible view. Activity always shows it as a modal sheet over a scrim. Memory docks it beside the list only
-  // at 1440px and wider; below that it uses the same modal sheet, scrim and focus handling as Activity.
+  // visible view. Activity always shows it as a modal sheet over a scrim. Memory and Pipeline dock it beside the
+  // list only at 1440px and wider; below that they use the same modal sheet, scrim and focus handling as Activity.
   function memoryDrawerIsDocked(host) {
     const query = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
-    return host === "memoryView" && !!(query && query.matches);
+    return (host === "memoryView" || host === "pipelineView") && !!(query && query.matches);
   }
 
   function mountMemoryDrawer(host) {
@@ -3345,14 +3409,60 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawerEl.classList.toggle("is-docked", docked);
   }
 
-  // Marks the open memory on the Activity cards and Memory rows without re-rendering either list.
+  // Marks the open memory on the Activity cards and Memory rows, and the open task on the Pipeline rows,
+  // without re-rendering any list.
   function markOpenMemory() {
     const id = state.drawer.id;
+    const task = state.drawer.task;
     state.activity.cardNodes.forEach((entry, key) => entry.node.classList.toggle("is-open", key === id));
     state.memory.rowNodes.forEach((entry, key) => {
       entry.node.classList.toggle("is-open", key === id);
       setAttr(entry.node, "aria-expanded", key === id ? "true" : "false");
     });
+    state.pipeline.rowNodes.forEach((entry, key) => {
+      entry.node.classList.toggle("is-open", key === task);
+      setAttr(entry.node, "aria-expanded", key === task ? "true" : "false");
+    });
+  }
+
+  // Pipeline has no detail call: the task body renders from the list item. "Open memory" swaps in the memory
+  // detail (openMemoryDrawer with the same host), and Back returns to the task.
+  function openPipelineTask(taskId, trigger) {
+    const drawer = state.drawer;
+    const wasOpen = isMemoryDrawerOpen();
+    drawer.task = taskId;
+    drawer.taskItem = findPipelineTask(taskId);
+    drawer.id = "";
+    drawer.host = "pipelineView";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.readsDisabled = !!state.pipeline.readsDisabled;
+    drawer.copied = false;
+    drawer.summaryOpen = false;
+    drawer.factsOpen = false;
+    if (!wasOpen || trigger) drawer.returnFocus = trigger || document.activeElement;
+    // Drops a memory detail still in flight from a previous Open memory.
+    drawer.seq += 1;
+    setPipelinePopover("");
+    mountMemoryDrawer("pipelineView");
+    renderMemoryDrawer();
+    markOpenMemory();
+    placeMemoryDrawer();
+    if (!memoryDrawerIsDocked("pipelineView") && els.activityDrawerClose) els.activityDrawerClose.focus();
+  }
+
+  function backToPipelineTask() {
+    const drawer = state.drawer;
+    if (!drawer.task) return;
+    drawer.id = "";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.copied = false;
+    drawer.seq += 1;
+    renderMemoryDrawer();
+    if (els.activityDrawerClose) els.activityDrawerClose.focus();
   }
 
   async function openMemoryDrawer(id, trigger, host) {
@@ -3362,6 +3472,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (drawer.id !== id) {
       drawer.summaryOpen = false;
       drawer.factsOpen = false;
+    }
+    // Only a memory opened from a Pipeline task keeps the way back to it.
+    if (nextHost !== "pipelineView") {
+      drawer.task = "";
+      drawer.taskItem = null;
     }
     drawer.id = id;
     drawer.host = nextHost;
@@ -3406,9 +3521,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function closeMemoryDrawer(restoreFocus) {
     const drawer = state.drawer;
-    if (!drawer.id) return;
+    if (!isMemoryDrawerOpen()) return;
     const target = drawer.returnFocus;
     drawer.id = "";
+    drawer.task = "";
+    drawer.taskItem = null;
     drawer.payload = null;
     drawer.error = "";
     drawer.missing = false;
@@ -3423,16 +3540,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (restoreFocus && target && document.contains(target)) target.focus({ preventScroll: true });
   }
 
-  // Docked in Memory, the drawer starts under the summary line and climbs to the top as the page scrolls.
-  // Below 1440px it is a modal sheet, so the inline top is cleared and the stylesheet places it like Activity.
+  // Docked in Memory, the drawer starts under the summary line (in Pipeline, under the flow strip) and climbs to
+  // the top as the page scrolls. Below 1440px it is a modal sheet, so the inline top is cleared and the stylesheet
+  // places it like Activity.
   function placeMemoryDrawer() {
     const drawerEl = els.activityDrawer;
     if (!drawerEl) return;
-    if (!memoryDrawerIsDocked(state.drawer.host) || !state.drawer.id || !els.memorySummary) {
+    const pipeline = state.drawer.host === "pipelineView";
+    if (!memoryDrawerIsDocked(state.drawer.host) || !isMemoryDrawerOpen() || !(pipeline ? els.pipelineFlowRow : els.memorySummary)) {
       if (drawerEl.style.top) drawerEl.style.top = "";
       return;
     }
-    const anchor = els.memorySummary.hidden ? els.memoryToolbar : els.memorySummary;
+    const anchor = pipeline
+      ? (els.pipelineFlowRow.hidden ? els.pipelineToolbar : els.pipelineFlowRow)
+      : (els.memorySummary.hidden ? els.memoryToolbar : els.memorySummary);
     const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + 10)) + "px";
     if (drawerEl.style.top !== next) drawerEl.style.top = next;
   }
@@ -3446,12 +3567,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
   }
 
+  // Copies the memory id, or the task id while the drawer shows a Pipeline task.
   function copyMemoryId() {
     const drawer = state.drawer;
-    const id = drawer.id;
+    const id = drawer.id || drawer.task;
     if (!id || !navigator.clipboard) return;
     navigator.clipboard.writeText(id).then(() => {
-      if (drawer.id !== id) return;
+      if ((drawer.id || drawer.task) !== id) return;
       drawer.copied = true;
       renderMemoryDrawerCopy();
       window.setTimeout(() => {
@@ -3464,7 +3586,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function renderMemoryDrawerCopy() {
     const button = els.memoryDrawerCopy;
     if (!button) return;
-    const label = t(state.drawer.copied ? "memory.drawerCopied" : "memory.drawerCopyId");
+    const label = t(state.drawer.copied ? "memory.drawerCopied" : state.drawer.id || !state.drawer.task ? "memory.drawerCopyId" : "pipeline.drawerCopyId");
     setAttr(button, "title", label);
     setAttr(button, "aria-label", label);
     button.classList.toggle("is-done", !!state.drawer.copied);
@@ -3687,17 +3809,22 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const drawerEl = els.activityDrawer;
     if (!drawerEl) return;
     const drawer = state.drawer;
-    const open = !!drawer.id;
+    const open = isMemoryDrawerOpen();
+    // A Pipeline task without a memory on show renders the task body from its list item.
+    const taskMode = open && !drawer.id;
     setHidden(drawerEl, !open);
     setHidden(els.memoryDrawerCopy, !!drawer.readsDisabled);
-    // Activity's sheet is always modal over the scrim. Memory hides the scrim only while docked (1440px and wider).
-    // is-drawer-open stays on for Memory so the wide-viewport CSS can reserve list space; that reserve is itself
-    // limited to min-width 1440px.
+    // Activity's sheet is always modal over the scrim. Memory and Pipeline hide the scrim only while docked (1440px
+    // and wider). is-drawer-open stays on for them so the wide-viewport CSS can reserve list space; that reserve is
+    // itself limited to min-width 1440px.
     setHidden(els.activityDrawerScrim, !open || memoryDrawerIsDocked(drawer.host));
     if (els.activityView) els.activityView.classList.toggle("has-drawer", open && drawer.host === "activityView");
     if (els.memoryView) els.memoryView.classList.toggle("is-drawer-open", open && drawer.host === "memoryView");
-    const card = !open || drawer.readsDisabled ? null : findDrawerCard(drawer.id);
-    const signature = [state.locale, drawer.id, drawer.host, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload), drawer.payload ? "" : JSON.stringify(card)].join("|");
+    if (els.pipelineView) els.pipelineView.classList.toggle("is-drawer-open", open && drawer.host === "pipelineView");
+    drawerEl.classList.toggle("is-task", taskMode);
+    if (drawer.task && !drawer.readsDisabled) drawer.taskItem = findPipelineTask(drawer.task) || drawer.taskItem;
+    const card = !open || drawer.readsDisabled || taskMode ? null : findDrawerCard(drawer.id);
+    const signature = [state.locale, drawer.id, drawer.task, drawer.host, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload), drawer.payload ? "" : JSON.stringify(card), drawer.task ? JSON.stringify(drawer.taskItem) : ""].join("|");
     if (drawer.signature === signature) return;
     drawer.signature = signature;
     renderMemoryDrawerCopy();
@@ -3708,16 +3835,25 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       setText(els.activityDrawerTitle, "");
       return;
     }
+    if (taskMode) {
+      renderPipelineTaskDrawer(drawer.readsDisabled ? null : drawer.taskItem);
+      return;
+    }
+    // A memory opened from a Pipeline task leads with the way back to it.
+    const back = drawer.task && drawer.host === "pipelineView"
+      ? '<button class="pipeBack" type="button" data-pipeline-back="true">' + svgIcon("chevronLeft", "pipeBackIcon") + '<span>' + escapeHtml(t("pipeline.drawerBack")) + '</span></button>'
+      : "";
+    drawerEl.classList.toggle("is-from-task", !!back);
     // Until the detail arrives, the row or card already on screen supplies the header.
     const memory = drawer.payload && drawer.payload.memory ? drawer.payload.memory : card;
     els.activityDrawerSub.innerHTML = "";
     if (memory) {
-      els.activityDrawerMeta.innerHTML = renderMemoryDrawerMeta(memory);
+      els.activityDrawerMeta.innerHTML = back + renderMemoryDrawerMeta(memory);
       const title = String(memory.title || "").trim();
       setText(els.activityDrawerTitle, title || t("activity.untitled"));
       setAttr(els.activityDrawerTitle, "title", title);
     } else {
-      els.activityDrawerMeta.innerHTML = "";
+      els.activityDrawerMeta.innerHTML = back;
       setText(els.activityDrawerTitle, drawer.readsDisabled ? t("activity.readsDisabledTitle") : (drawer.error ? t("activity.drawerError") : t("activity.drawerLoading")));
       setAttr(els.activityDrawerTitle, "title", "");
     }
@@ -3773,6 +3909,16 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         void openMemoryDrawer(reopen.getAttribute("data-drawer-open"), null, drawer.host);
         return;
       }
+      const memoryLink = event.target.closest("[data-pipeline-memory]");
+      if (memoryLink) {
+        void openMemoryDrawer(memoryLink.getAttribute("data-pipeline-memory"), null, "pipelineView");
+        if (els.activityDrawerClose) els.activityDrawerClose.focus();
+        return;
+      }
+      if (event.target.closest("[data-pipeline-back]")) {
+        backToPipelineTask();
+        return;
+      }
       const narrativeToggle = event.target.closest("[data-narrative-toggle]");
       if (narrativeToggle) {
         drawer.summaryOpen = !drawer.summaryOpen;
@@ -3806,11 +3952,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !event.defaultPrevented && isMemoryDrawerOpen()) closeMemoryDrawer(true);
     });
-    // One listener: crossing 1440px while Memory's drawer is open flips docked and modal (scrim, aria-modal, focus).
+    // One listener: crossing 1440px while Memory's or Pipeline's drawer is open flips docked and modal (scrim,
+    // aria-modal, focus).
     const memoryDrawerDockQuery = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
     if (memoryDrawerDockQuery && memoryDrawerDockQuery.addEventListener) {
       memoryDrawerDockQuery.addEventListener("change", () => {
-        if (!isMemoryDrawerOpen() || state.drawer.host !== "memoryView") return;
+        if (!isMemoryDrawerOpen() || (state.drawer.host !== "memoryView" && state.drawer.host !== "pipelineView")) return;
         mountMemoryDrawer(state.drawer.host);
         renderMemoryDrawer();
         placeMemoryDrawer();
@@ -4833,6 +4980,877 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }, { passive: true });
   }
 
+  // ---------- Pipeline ----------
+
+  const PIPELINE_PAGE = 50;
+  const PIPELINE_MAX_PAGE = 100;
+  const PIPELINE_REFRESH_HEADROOM = 20;
+  // pipeline-query clips summary at 140 characters, which can land inside a word.
+  const PIPELINE_SUMMARY_CAP = 140;
+  const PIPELINE_STATES = ["queued", "processing", "saved", "skipped", "duplicate", "fallback", "failed", "stuck"];
+  const PIPELINE_STATE_KEYS = {
+    queued: "pipeline.stateQueued",
+    processing: "pipeline.stateProcessing",
+    saved: "pipeline.stateSaved",
+    skipped: "pipeline.stateSkipped",
+    duplicate: "pipeline.stateDuplicate",
+    fallback: "pipeline.stateFallback",
+    failed: "pipeline.stateFailed",
+    stuck: "pipeline.stateStuck",
+  };
+  // Flow strip nodes, in order. Consolidating only displays; the others filter the list.
+  const PIPELINE_FLOW = [["queued", "pipelineStageQueued"], ["processing", "pipelineStageProcessing"], ["consolidating", "pipelineStageConsolidating"],
+    ["saved", "pipelineStageSaved"], ["skipped", "pipelineStageSkipped"], ["duplicate", "pipelineStageDuplicate"], ["fallback", "pipelineStageFallback"],
+    ["failed", "pipelineStageFailed"], ["stuck", "pipelineStuck"]];
+  const PIPELINE_TRIGGER_KEYS = {
+    user_prompt: "pipeline.triggerUserPrompt",
+    turn_end: "pipeline.triggerTurnEnd",
+    session_close: "pipeline.triggerSessionClose",
+    idle_timeout: "pipeline.triggerIdleTimeout",
+    manual: "pipeline.triggerManual",
+    legacy_compaction: "pipeline.triggerLegacyCompaction",
+  };
+
+  function pipelineStateLabel(value) {
+    return PIPELINE_STATE_KEYS[value] ? t(PIPELINE_STATE_KEYS[value]) : String(value || "—");
+  }
+
+  function pipelineTriggerLabel(trigger) {
+    if (!trigger) return "";
+    if (PIPELINE_TRIGGER_KEYS[trigger]) return t(PIPELINE_TRIGGER_KEYS[trigger]);
+    const text = String(trigger).split("_").join(" ");
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  // A task without a memory has no title: name it by its trigger and source instead.
+  function pipelineTaskTitle(item) {
+    const title = String(item.title || "").trim();
+    if (title) return title;
+    if (item.source_kind === "legacy_compacted") return t("pipeline.titleLegacy");
+    const trigger = pipelineTriggerLabel(item.trigger);
+    return trigger ? t("pipeline.titleTrigger", { trigger }) : t("pipeline.titleTask");
+  }
+
+  // The row's second line: why a task is partial or stuck, otherwise its summary.
+  function pipelineTaskNote(item) {
+    if (item.partial) {
+      const pending = Number(item.pending_segments || 0);
+      const missing = Number(item.missing_segments || 0);
+      const text = missing > 0
+        ? t("pipeline.notePartialMissing", { n: formatCount(pending), m: formatCount(missing) })
+        : t(pending === 1 ? "pipeline.notePartialOne" : "pipeline.notePartial", { n: formatCount(pending) });
+      return { tone: "err", text };
+    }
+    if (item.state === "stuck" && item.stuck_reason === "exhausted") {
+      return { tone: "warn", text: t("pipeline.noteExhausted", { n: formatCount(item.attempts), max: formatCount(item.max_attempts) }) };
+    }
+    if (item.state === "stuck" && item.stuck_reason === "stale") {
+      return { tone: "warn", text: t("pipeline.noteStale", { h: formatCount(item.stale_hours || 0) }) };
+    }
+    const summary = String(item.summary || "").trim();
+    // The row keeps this text whole. CSS ellipsis clips the one line; the drawer owns the word boundary.
+    return summary ? { tone: "", text: summary } : null;
+  }
+
+  // A letter or digit at the clip point is the middle of a word. Han and punctuation are already boundaries.
+  function pipelineSummaryIsLatinWord(ch) {
+    const code = ch.charCodeAt(0);
+    return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 192 && code <= 591);
+  }
+
+  function pipelineSummaryIsSpace(ch) {
+    const code = ch.charCodeAt(0);
+    return code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32 || code === 160;
+  }
+
+  function pipelineCollapseSpace(text) {
+    let out = "";
+    let pending = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const ch = text.charAt(index);
+      if (pipelineSummaryIsSpace(ch)) {
+        if (out) pending = true;
+        continue;
+      }
+      if (pending) out += " ";
+      pending = false;
+      out += ch;
+    }
+    // A clip that lands on a space still counts toward the 140 cap, so keep one trailing space.
+    if (pending) out += " ";
+    return out;
+  }
+
+  function pipelineTrimSpace(text) {
+    let start = 0;
+    let end = text.length;
+    while (start < end && pipelineSummaryIsSpace(text.charAt(start))) start += 1;
+    while (end > start && pipelineSummaryIsSpace(text.charAt(end - 1))) end -= 1;
+    return text.slice(start, end);
+  }
+
+  // The API summary is capped at 140 characters, so a full cap (or anything longer) can stop mid-word.
+  // Back up to the previous word boundary and mark the cut. Shorter text is already whole. A task with
+  // an observation keeps the full narrative behind Open memory, so this preview does not expand.
+  function pipelineDrawerSummary(text) {
+    const raw = String(text || "");
+    const collapsed = pipelineCollapseSpace(raw);
+    const trimmed = pipelineTrimSpace(collapsed);
+    if (!trimmed) return "";
+    if (collapsed.length < PIPELINE_SUMMARY_CAP && raw.length < PIPELINE_SUMMARY_CAP) return trimmed;
+    const capSlice = collapsed.slice(0, PIPELINE_SUMMARY_CAP);
+    const capEndsMidWord = pipelineSummaryIsLatinWord(capSlice.charAt(capSlice.length - 1));
+    let sliced = pipelineTrimSpace(capSlice);
+    if (capEndsMidWord) {
+      const space = sliced.lastIndexOf(" ");
+      if (space > 0) sliced = pipelineTrimSpace(sliced.slice(0, space));
+    }
+    while (sliced.length && ",;:、，；：".indexOf(sliced.charAt(sliced.length - 1)) >= 0) {
+      sliced = pipelineTrimSpace(sliced.slice(0, -1));
+    }
+    if (!sliced) return "…";
+    if (sliced.charAt(sliced.length - 1) === "…") return sliced;
+    if (sliced.slice(-3) === "...") return sliced.slice(0, -3) + "…";
+    return sliced + "…";
+  }
+
+  // Zero attempts is an em dash in the list and the drawer. "n/max" starts only after the first try.
+  function pipelineAttempts(item) {
+    const attempts = Number(item.attempts || 0);
+    if (!(attempts > 0)) return "—";
+    const max = Number(item.max_attempts || 0);
+    return max > 0 ? formatCount(attempts) + "/" + formatCount(max) : formatCount(attempts);
+  }
+
+  // "Oct 17 · 01:48", the same stamp as the drawer chips. Both helpers follow the active locale.
+  function formatPipelineStamp(date) {
+    if (!date) return "";
+    return formatShortDate(date) + " · " + formatClock(date);
+  }
+
+  function renderPipelinePill(value) {
+    const known = Object.prototype.hasOwnProperty.call(PIPELINE_STATE_KEYS, value);
+    return '<span class="pipePill state-' + (known ? value : "unknown") + '">' + escapeHtml(pipelineStateLabel(value)) + '</span>';
+  }
+
+  function findPipelineTask(id) {
+    return state.pipeline.items.find((item) => item.task_id === id) || null;
+  }
+
+  // Today, 7 and 30 days start at a local midnight and end now; Custom covers whole local days. The API has no
+  // default range, so every request names both ends.
+  function getPipelineRange() {
+    const pipe = state.pipeline;
+    const now = new Date();
+    const today = shiftDays(now, 0);
+    if (pipe.range === "custom") {
+      const start = parseLocalDay(pipe.customFrom);
+      const end = parseLocalDay(pipe.customTo);
+      if (start && end && start <= end) return { from: start, to: shiftDays(end, 1) };
+    }
+    if (pipe.range === "today") return { from: today, to: now };
+    if (pipe.range === "30d") return { from: shiftDays(today, -29), to: now };
+    return { from: shiftDays(today, -6), to: now };
+  }
+
+  // The window's start day is part of the key, so Today and 7 days start over after midnight.
+  function pipelineKey() {
+    const pipe = state.pipeline;
+    return JSON.stringify([pipe.project.toLowerCase(), pipe.agent.toLowerCase(), pipe.state, pipe.range, pipe.customFrom, pipe.customTo,
+      localDayKey(getPipelineRange().from)]);
+  }
+
+  function pipelineUrl(win, limit, cursor) {
+    const pipe = state.pipeline;
+    const params = new URLSearchParams({
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+      limit: String(limit),
+      stats: cursor ? "0" : "1",
+      from: win.from.toISOString(),
+      to: win.to.toISOString(),
+    });
+    if (pipe.project) params.set("project", pipe.project);
+    if (pipe.agent) params.set("agent", pipe.agent);
+    if (pipe.state) params.set("state", pipe.state);
+    if (cursor) params.set("cursor", cursor);
+    return "/admin/api/pipeline?" + params.toString();
+  }
+
+  function isPipelineFiltered() {
+    const pipe = state.pipeline;
+    return !!(pipe.project || pipe.agent || pipe.state || pipe.range !== "7d");
+  }
+
+  // The 5 s poll only refreshes the plain 7 day list, with the drawer and menus closed and the page at rest.
+  function pipelineCanPoll() {
+    const pipe = state.pipeline;
+    return state.activeView === "pipelineView" && !document.hidden && (pipe.loaded || pipe.readsDisabled) &&
+      !isPipelineFiltered() && !isMemoryDrawerOpen() && !pipe.openPopover && Date.now() - pipe.lastScrollAt > MEMORY_SCROLL_IDLE_MS;
+  }
+
+  // mode: "reset" loads page 1 of new filters, "more" appends the next page, "refresh" re-reads the loaded head and
+  // keeps older pages behind it. Only the newest request may write state.
+  async function loadPipeline(mode) {
+    const pipe = state.pipeline;
+    const key = pipelineKey();
+    // After reads were off, page 1 is the next load. A poll or load-more must not resume the old cursor.
+    if (pipe.readsDisabled) mode = "reset";
+    if (mode !== "reset" && key !== pipe.key) mode = "reset";
+    if (mode === "refresh" && pipe.busySeq) return;
+    if (mode === "refresh" && !pipe.loaded) mode = "reset";
+    if (mode === "more" && (!pipe.nextCursor || !pipe.window || pipe.moreSeq)) return;
+    const seq = pipe.seq + 1;
+    pipe.seq = seq;
+    const loaded = pipe.items.length;
+    const limit = mode === "refresh" ? Math.min(PIPELINE_MAX_PAGE, Math.max(PIPELINE_PAGE, loaded + PIPELINE_REFRESH_HEADROOM)) : PIPELINE_PAGE;
+    const cursor = mode === "more" ? pipe.nextCursor : null;
+    // A cursor only resumes under the from/to it was issued with; page 1 and a refresh read up to now.
+    const win = mode === "more" ? pipe.window : getPipelineRange();
+    if (mode !== "refresh") pipe.busySeq = seq;
+    if (mode === "reset") {
+      pipe.key = key;
+      pipe.error = "";
+      pipe.stale = true;
+      pipe.moreSeq = 0;
+      // The old cursor is bound to the old filters.
+      pipe.nextCursor = null;
+      pipe.window = null;
+    }
+    if (mode === "more") pipe.moreSeq = seq;
+    renderPipeline();
+    try {
+      const payload = await fetchJson(pipelineUrl(win, limit, cursor));
+      if (seq !== pipe.seq) return;
+      if (payload.disabled) {
+        pipe.items = [];
+        pipe.days = [];
+        pipe.stages = null;
+        pipe.nextCursor = null;
+        pipe.window = null;
+        pipe.loaded = false;
+        pipe.readsDisabled = true;
+        pipe.error = "";
+        pipe.refreshFailed = false;
+        // Drop rows that are already on screen. Page 1, a poll and load-more all land here.
+        pipe.groupNodes.clear();
+        pipe.rowNodes.clear();
+        if (els.pipelineList) els.pipelineList.innerHTML = "";
+        applyReadPolicyToViews({ readEnabled: false });
+      } else {
+        // Reads came back on this response: do not merge onto pages from before the gap.
+        if (pipe.readsDisabled) mode = "reset";
+        pipe.readsDisabled = false;
+        const incoming = Array.isArray(payload.items) ? payload.items : [];
+        const days = Array.isArray(payload.days) ? payload.days : [];
+        if (mode === "more") {
+          const seen = new Set(pipe.items.map((item) => item.task_id));
+          pipe.items = pipe.items.concat(incoming.filter((item) => !seen.has(item.task_id)));
+          pipe.days = mergeMemoryDays(pipe.days, days);
+          pipe.nextCursor = payload.next_cursor || null;
+        } else if (mode === "refresh" && loaded + PIPELINE_REFRESH_HEADROOM > PIPELINE_MAX_PAGE && incoming.length && payload.next_cursor) {
+          // More rows are loaded than one request returns: the refreshed head replaces its part and the older
+          // pages stay behind it, with the cursor (and its window) that already points past them.
+          const index = pipe.items.findIndex((item) => item.task_id === incoming[incoming.length - 1].task_id);
+          if (index >= 0) {
+            pipe.items = incoming.concat(pipe.items.slice(index + 1));
+            pipe.days = mergeMemoryDays(pipe.days, days);
+          } else {
+            pipe.items = incoming;
+            pipe.days = mergeMemoryDays([], days);
+            pipe.nextCursor = payload.next_cursor || null;
+            pipe.window = win;
+          }
+        } else {
+          pipe.items = incoming;
+          pipe.days = mergeMemoryDays([], days);
+          pipe.nextCursor = payload.next_cursor || null;
+          pipe.window = win;
+        }
+        if (!cursor) pipe.stages = payload.stages || null;
+        pipe.loaded = true;
+        pipe.refreshFailed = false;
+        pipe.error = "";
+      }
+      pipe.loadedAt = Date.now();
+    } catch (error) {
+      if (seq !== pipe.seq) return;
+      if (mode === "more" && error && error.status === 400) {
+        // A stale cursor: start over from page 1 under the same filters.
+        void loadPipeline("reset");
+        return;
+      }
+      if (mode === "reset") {
+        pipe.items = [];
+        pipe.days = [];
+        pipe.stages = null;
+        pipe.nextCursor = null;
+        pipe.window = null;
+        pipe.loaded = false;
+        pipe.readsDisabled = false;
+        pipe.error = (error && error.message) || t("pipeline.errorTitle");
+      } else {
+        pipe.refreshFailed = true;
+      }
+    } finally {
+      if (pipe.busySeq === seq) pipe.busySeq = 0;
+      if (pipe.moreSeq === seq) pipe.moreSeq = 0;
+      if (seq === pipe.seq) {
+        pipe.stale = false;
+        renderPipeline();
+      }
+    }
+  }
+
+  function setPipelineFilters(patch) {
+    Object.assign(state.pipeline, patch);
+    void loadPipeline("reset");
+  }
+
+  function clearPipelineFilters() {
+    setPipelineFilters({ project: "", agent: "", state: "", range: "7d", customFrom: "", customTo: "" });
+  }
+
+  // Home's queue and attention links land here with one state picked; activateView then loads page 1.
+  function presetPipelineFilters(stateValue, range) {
+    Object.assign(state.pipeline, {
+      project: "",
+      agent: "",
+      state: PIPELINE_STATES.includes(stateValue) ? stateValue : "",
+      range: range === "today" || range === "30d" ? range : "7d",
+      customFrom: "",
+      customTo: "",
+    });
+  }
+
+  // Project and agent lists come from the 5 s overview.
+  function pipelineFacetValues(name) {
+    const raw = state.overview && Array.isArray(state.overview[name === "project" ? "projects" : "agents"]) ? state.overview[name === "project" ? "projects" : "agents"] : [];
+    const values = raw.map((value) => (typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || ""))).filter(Boolean);
+    const selected = state.pipeline[name];
+    if (selected && !values.some((value) => isActivitySelected(value, selected))) values.push(selected);
+    const label = (value) => (name === "project" ? projectBasename(value) : value);
+    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: name === "project" ? value : "" }));
+  }
+
+  function pipelineMenuOptions(name) {
+    if (name === "project") return [{ value: "", label: t("pipeline.allProjects") }].concat(pipelineFacetValues("project"));
+    if (name === "agent") return [{ value: "", label: t("pipeline.allAgents") }].concat(pipelineFacetValues("agent"));
+    return [{ value: "", label: t("pipeline.allStates") }].concat(PIPELINE_STATES.map((value) => ({ value, label: pipelineStateLabel(value), dot: value })));
+  }
+
+  function renderPipelineMenu(name, popover) {
+    const pipe = state.pipeline;
+    const options = pipelineMenuOptions(name);
+    const selected = pipe[name];
+    const signature = [state.locale, selected, JSON.stringify(options)].join("|");
+    if (pipe.signatures["menu-" + name] === signature) return;
+    pipe.signatures["menu-" + name] = signature;
+    const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute("data-pipeline-value") : null;
+    popover.innerHTML = options.map((option, index) => {
+      const isSelected = name === "state" ? option.value === selected : option.value ? isActivitySelected(option.value, selected) : !selected;
+      return (index === 1 ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
+        '<button class="actOption" type="button" role="option" tabindex="-1" data-pipeline-option="' + name + '" data-pipeline-value="' + escapeHtml(option.value) + '" aria-selected="' + isSelected + '"' +
+        (option.title ? ' title="' + escapeHtml(option.title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
+        (option.dot ? '<span class="pipeOptDot state-' + option.dot + '" aria-hidden="true"></span>' : '') +
+        '<span class="actOptionName">' + escapeHtml(option.label) + '</span></button>';
+    }).join("");
+    if (focused !== null) {
+      const target = Array.from(popover.querySelectorAll("[data-pipeline-value]")).find((node) => node.getAttribute("data-pipeline-value") === focused);
+      if (target) target.focus();
+    }
+  }
+
+  function renderPipelineMenus() {
+    if (!els.pipelineView) return;
+    renderPipelineMenu("project", els.pipelineProjectPopover);
+    renderPipelineMenu("agent", els.pipelineAgentPopover);
+    renderPipelineMenu("state", els.pipelineStatePopover);
+    const parts = getPipelinePopoverParts(state.pipeline.openPopover);
+    if (parts) placeViewPopover(els.pipelineView, parts[0], parts[1]);
+  }
+
+  function renderPipelineToolbar() {
+    const pipe = state.pipeline;
+    els.pipelineRangeButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", button.getAttribute("data-pipeline-range") === pipe.range ? "true" : "false");
+    });
+    // A custom range names its days on the segment itself.
+    let customText = t("pipeline.rangeCustom");
+    const start = parseLocalDay(pipe.customFrom);
+    const end = parseLocalDay(pipe.customTo);
+    if (pipe.range === "custom" && start && end) {
+      customText = pipe.customFrom === pipe.customTo ? formatShortDate(end) : formatShortDate(start) + (state.locale === "zh-CN" ? "–" : " – ") + formatShortDate(end);
+    }
+    setText(els.pipelineRangeCustom, customText);
+    const popup = (button, valueEl, value, text, title) => {
+      setText(valueEl, text);
+      setAttr(button, "title", title || "");
+      setClass(button, "actPopup" + (value ? " is-filtered" : ""));
+    };
+    popup(els.pipelineProjectButton, els.pipelineProjectValue, pipe.project, pipe.project ? projectBasename(pipe.project) : t("pipeline.all"), pipe.project);
+    popup(els.pipelineAgentButton, els.pipelineAgentValue, pipe.agent, pipe.agent || t("pipeline.all"), pipe.agent);
+    popup(els.pipelineStateButton, els.pipelineStateValue, pipe.state, pipe.state ? pipelineStateLabel(pipe.state) : t("pipeline.all"), "");
+    const updated = pipe.refreshFailed
+      ? t("pipeline.refreshFailed", { time: formatClock(new Date()) })
+      : pipe.loaded && pipe.loadedAt ? t("pipeline.updated", { time: formatClock(new Date(pipe.loadedAt)) }) : "";
+    setText(els.pipelineUpdated, updated);
+    setClass(els.pipelineUpdated, "memUpdated" + (pipe.refreshFailed ? " is-warn" : ""));
+  }
+
+  // Stage counts follow project, agent and range but never the state filter, so every stage stays clickable.
+  function renderPipelineFlow() {
+    const pipe = state.pipeline;
+    const stages = pipe.readsDisabled ? null : pipe.stages;
+    setHidden(els.pipelineFlowRow, pipe.readsDisabled || (!pipe.loaded && !!pipe.error));
+    PIPELINE_FLOW.forEach((entry) => {
+      const stage = entry[0];
+      const node = document.getElementById(entry[1]);
+      if (!node) return;
+      const count = stages ? Number(stages[stage] || 0) : null;
+      setText(document.getElementById(entry[1] + "Count"), count === null ? "—" : formatCount(count));
+      node.classList.toggle("has-count", !!count);
+      if (stage === "consolidating") return;
+      const pressed = pipe.state === stage;
+      setAttr(node, "aria-pressed", pressed ? "true" : "false");
+      setAttr(node, "title", pressed ? t("pipeline.stageClear") : stage === "stuck" ? t("pipeline.stuckHint") : t("pipeline.stageShowOnly", { state: pipelineStateLabel(stage) }));
+    });
+  }
+
+  function renderPipelineRowBody(item) {
+    const created = parseTimestamp(item.created_at);
+    const title = pipelineTaskTitle(item);
+    const note = pipelineTaskNote(item);
+    const llm = Number(item.llm_calls || 0);
+    const llmHint = t(llm === 1 ? "pipeline.llmHintOne" : "pipeline.llmHint", { n: formatCount(llm) });
+    const attempts = Number(item.attempts || 0);
+    const attemptsLabel = pipelineAttempts(item);
+    const attemptsHint = attempts > 0
+      ? t("pipeline.attemptsHint", { n: formatCount(attempts), max: formatCount(item.max_attempts) })
+      : attemptsLabel;
+    return '<time class="memCell memTime" datetime="' + escapeHtml(created ? created.toISOString() : "") + '" title="' + escapeHtml(created ? formatPipelineStamp(created) : "") + '">' + escapeHtml(created ? formatClock(created) : "—") + '</time>' +
+      '<span class="memCell memKind">' + renderPipelinePill(item.state) + '</span>' +
+      '<span class="memCell memMain"><span class="memTitleLine"><span class="memTitle' + (item.title ? '' : ' is-fallback') + '" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span></span>' +
+        (note ? '<span class="memPreview' + (note.tone ? ' tone-' + note.tone : '') + '">' + escapeHtml(note.text) + '</span>' : '') + '</span>' +
+      '<span class="memCell memProject" title="' + escapeHtml(item.project_path || "") + '">' + escapeHtml(projectBasename(item.project_path) || "—") + '</span>' +
+      '<span class="memCell memAgent">' + escapeHtml(item.agent_id || "—") + '</span>' +
+      '<span class="memCell memNum' + (llm ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(llmHint) + '" title="' + escapeHtml(llmHint) + '">' + svgIcon("llm", "memNumIcon") + escapeHtml(formatCount(llm)) + '</span>' +
+      '<span class="memCell memNum pipeAttempts' + (attempts ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(attemptsHint) + '" title="' + escapeHtml(attemptsHint) + '">' + escapeHtml(attemptsLabel) + '</span>';
+  }
+
+  // Keyed reconcile, as on Memory: one node per task id, rewritten only when its fields or the locale change.
+  function syncPipelineRows(container, items) {
+    const nodes = state.pipeline.rowNodes;
+    const open = state.drawer.task;
+    let cursor = container.firstElementChild;
+    items.forEach((item) => {
+      let entry = nodes.get(item.task_id);
+      if (!entry) {
+        const node = document.createElement("article");
+        node.className = "memRow pipeRow";
+        node.setAttribute("data-task-id", item.task_id);
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-haspopup", "dialog");
+        entry = { node, signature: "" };
+        nodes.set(item.task_id, entry);
+      }
+      entry.node.classList.toggle("is-open", open === item.task_id);
+      setAttr(entry.node, "aria-expanded", open === item.task_id ? "true" : "false");
+      const signature = state.locale + "|" + JSON.stringify(item);
+      if (entry.signature !== signature) {
+        entry.signature = signature;
+        entry.node.innerHTML = renderPipelineRowBody(item);
+      }
+      if (entry.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        container.insertBefore(entry.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+  }
+
+  function renderPipelineNotice() {
+    const pipe = state.pipeline;
+    let notice = null;
+    if (pipe.readsDisabled) {
+      notice = { tone: "", title: t("pipeline.readsDisabledTitle"), lead: t("pipeline.readsDisabledLead"), action: null };
+    } else if (!pipe.loaded && pipe.error) {
+      notice = { tone: " is-error", title: t("pipeline.errorTitle"), lead: pipe.error, action: ["retry", t("pipeline.retry")] };
+    } else if (pipe.loaded && !pipe.stale && !pipe.items.length) {
+      // Quiet weeks are common: offer a wider window before anything else.
+      if (pipe.project || pipe.agent || pipe.state) {
+        notice = { tone: "", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
+      } else if (pipe.range === "today") {
+        notice = { tone: "", title: t("pipeline.emptyTodayTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show7d")] };
+      } else if (pipe.range === "7d") {
+        notice = { tone: "", title: t("pipeline.emptyWeekTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show30d")] };
+      } else {
+        notice = { tone: "", title: t("pipeline.emptyRangeTitle"), lead: t("pipeline.emptyRangeLead"), action: pipe.range === "custom" ? ["clear", t("pipeline.show7d")] : null };
+      }
+    }
+    setHidden(els.pipelineNotice, !notice);
+    if (notice) {
+      setClass(els.pipelineNotice, "actNotice memNotice glassCard glassBlur" + notice.tone);
+      setText(els.pipelineNoticeTitle, notice.title);
+      setText(els.pipelineNoticeLead, notice.lead);
+      setHidden(els.pipelineNoticeAction, !notice.action);
+      setAttr(els.pipelineNoticeAction, "data-pipeline-action", notice.action ? notice.action[0] : null);
+      setText(els.pipelineNoticeAction, notice.action ? notice.action[1] : "");
+    }
+    return !!notice;
+  }
+
+  function renderPipelineList() {
+    const pipe = state.pipeline;
+    const list = els.pipelineList;
+    // Clear before the notice early-return, so a disabled payload cannot leave the previous rows up.
+    if (pipe.readsDisabled && list) {
+      list.innerHTML = "";
+      pipe.groupNodes.clear();
+      pipe.rowNodes.clear();
+    }
+    const noticed = renderPipelineNotice();
+    setHidden(list, noticed);
+    setHidden(els.pipelineListHead, noticed);
+    setAttr(list, "aria-busy", pipe.stale || !pipe.loaded ? "true" : "false");
+    list.classList.toggle("is-stale", pipe.stale && pipe.items.length > 0);
+    setHidden(els.pipelineLoadMore, noticed || !pipe.nextCursor);
+    setText(els.pipelineLoadMore, t(pipe.moreSeq ? "pipeline.loadingMore" : "pipeline.loadMore"));
+    setAttr(els.pipelineLoadMore, "aria-busy", pipe.moreSeq ? "true" : null);
+    if (noticed) return;
+    if (!pipe.items.length) {
+      // First load or a reload of an empty list: skeleton rows.
+      if (!list.querySelector(".is-skeleton")) {
+        list.innerHTML = MEMORY_SKELETON;
+        pipe.groupNodes.clear();
+        pipe.rowNodes.clear();
+      }
+      return;
+    }
+    const skeleton = list.querySelector(".memGroup.is-skeleton");
+    if (skeleton) skeleton.remove();
+    const order = [];
+    const byDay = new Map();
+    pipe.items.forEach((item) => {
+      const created = parseTimestamp(item.created_at);
+      const day = item.day || (created ? localDayKey(created) : "");
+      if (!byDay.has(day)) {
+        byDay.set(day, []);
+        order.push(day);
+      }
+      byDay.get(day).push(item);
+    });
+    const counts = new Map(pipe.days.map((day) => [day.day, day.count]));
+    const visible = new Set();
+    let cursor = list.firstElementChild;
+    order.forEach((day) => {
+      let group = pipe.groupNodes.get(day);
+      if (!group) {
+        const node = document.createElement("section");
+        node.className = "memGroup";
+        node.innerHTML = '<h3 class="memDayHead"></h3><div class="memRows"></div>';
+        group = { node, head: node.firstElementChild, rows: node.lastElementChild, signature: "" };
+        pipe.groupNodes.set(day, group);
+      }
+      const label = memoryDayLabel(day);
+      const count = counts.has(day) ? counts.get(day) : byDay.get(day).length;
+      const signature = [state.locale, label.name, label.date, count].join("|");
+      if (group.signature !== signature) {
+        group.signature = signature;
+        group.head.innerHTML = '<span class="memDayName">' + escapeHtml(label.name) + '</span>' +
+          (label.date ? '<span class="memDayDate">' + escapeHtml(label.date) + '</span>' : '') +
+          '<span class="memDayCount">' + escapeHtml(t("pipeline.dayCount", { n: formatCount(count) })) + '</span>';
+      }
+      syncPipelineRows(group.rows, byDay.get(day));
+      byDay.get(day).forEach((item) => visible.add(item.task_id));
+      if (group.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        list.insertBefore(group.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+    pipe.groupNodes.forEach((_group, day) => {
+      if (!byDay.has(day)) pipe.groupNodes.delete(day);
+    });
+    pipe.rowNodes.forEach((_entry, id) => {
+      if (!visible.has(id)) pipe.rowNodes.delete(id);
+    });
+  }
+
+  // Task body of the shared drawer, rendered from the list item: chips, state, title, summary, the four counts,
+  // the partial or stuck line, the last error and the way to the memory. There is no step timeline in v1.
+  function renderPipelineTaskDrawer(task) {
+    const drawer = state.drawer;
+    els.activityDrawerSub.innerHTML = "";
+    if (!task) {
+      const loading = !drawer.readsDisabled && !state.pipeline.loaded;
+      els.activityDrawerMeta.innerHTML = "";
+      setText(els.activityDrawerTitle, drawer.readsDisabled ? t("pipeline.readsDisabledTitle") : loading ? t("pipeline.drawerLoading") : t("pipeline.drawerMissingTitle"));
+      setAttr(els.activityDrawerTitle, "title", "");
+      els.activityDrawerBody.innerHTML = loading
+        ? '<div class="actDrawerSkeleton" aria-hidden="true"><span class="is-long"></span><span class="is-mid"></span><span class="is-short"></span></div>'
+        : '<div class="actDrawerState"><p>' + escapeHtml(t(drawer.readsDisabled ? "pipeline.drawerReadsDisabled" : "pipeline.drawerMissing")) + '</p></div>';
+      return;
+    }
+    const created = parseTimestamp(task.created_at);
+    const chips = [];
+    if (task.project_path) chips.push('<span class="actMetaChip pipeChipProject" title="' + escapeHtml(task.project_path) + '"><span class="pipeChipDot" aria-hidden="true"></span><span class="pipeChipName">' + escapeHtml(projectBasename(task.project_path)) + '</span></span>');
+    if (task.agent_id) chips.push('<span class="actMetaChip is-agent">' + escapeHtml(task.agent_id) + '</span>');
+    const trigger = pipelineTriggerLabel(task.trigger);
+    if (trigger) chips.push('<span class="actMetaChip">' + svgIcon("activity", "actMetaChipIcon") + escapeHtml(trigger) + '</span>');
+    if (created) {
+      const when = calendarDaysAgo(created) === 0 ? formatClock(created) : formatPipelineStamp(created);
+      chips.push('<time class="actMetaChip actDrawerTime" datetime="' + escapeHtml(created.toISOString()) + '" title="' + escapeHtml(formatPipelineStamp(created)) + '">' + escapeHtml(when) + '</time>');
+    }
+    els.activityDrawerMeta.innerHTML = '<span class="actMetaChips">' + chips.join("") + '</span>';
+    els.activityDrawerSub.innerHTML = renderPipelinePill(task.state);
+    const title = pipelineTaskTitle(task);
+    setText(els.activityDrawerTitle, title);
+    setAttr(els.activityDrawerTitle, "title", title);
+
+    const parts = [];
+    // With a memory, the summary is its preview; without one it is the last error, which has its own box.
+    const summary = task.title ? pipelineDrawerSummary(task.summary) : "";
+    const stateKey = PIPELINE_STATE_KEYS[task.state];
+    const lead = summary || (stateKey ? t(stateKey.replace("pipeline.state", "pipeline.about")) : "");
+    if (lead) parts.push('<section class="actSection is-lead"><h3 class="visuallyHidden">' + escapeHtml(t("pipeline.drawerSummary")) + '</h3><p class="actNarrative">' + escapeHtml(lead) + '</p></section>');
+    const note = task.partial || task.state === "stuck" ? pipelineTaskNote(task) : null;
+    if (note) {
+      parts.push('<p class="pipeNote tone-' + note.tone + '">' + svgIcon("warning", "pipeNoteIcon") + '<span>' + escapeHtml(note.text) +
+        '<span class="pipeNoteHint">' + escapeHtml(t(task.partial ? "pipeline.drawerPartialHint" : task.stuck_reason === "stale" ? "pipeline.drawerStaleHint" : "pipeline.drawerExhaustedHint")) + '</span></span></p>');
+    }
+    const pending = Number(task.pending_segments || 0);
+    const missing = Number(task.missing_segments || 0);
+    const segmentNote = [pending > 0 ? t("pipeline.statPending", { n: formatCount(pending) }) : "", missing > 0 ? t("pipeline.statMissing", { n: formatCount(missing) }) : ""].filter(Boolean).join(" · ");
+    const stat = (icon, label, value, sub) => '<div class="actPane pipeStat"><span class="pipeStatLabel">' + svgIcon(icon, "pipeStatIcon") + '<span>' + escapeHtml(label) + '</span></span>' +
+      '<span class="pipeStatValue">' + escapeHtml(value) + '</span>' + (sub ? '<span class="pipeStatSub">' + escapeHtml(sub) + '</span>' : '') + '</div>';
+    parts.push('<div class="pipeStats">' +
+      stat("llm", t("pipeline.statLlm"), formatCount(task.llm_calls), "") +
+      stat("retry", t("pipeline.statAttempts"), pipelineAttempts(task), "") +
+      stat("segments", t("pipeline.statSegments"), formatCount(task.segment_count), segmentNote) +
+      stat("evidence", t("pipeline.statEvidence"), formatCount(task.evidence_count), "") + '</div>');
+    const memoryId = task.observation_id || task.duplicate_of;
+    if (memoryId) {
+      parts.push('<button class="actPane pipeLink" type="button" data-pipeline-memory="' + escapeHtml(memoryId) + '">' + svgIcon("memory", "pipeLinkIcon") +
+        '<span class="pipeLinkText"><span class="pipeLinkLabel">' + escapeHtml(t(task.observation_id ? "pipeline.drawerRelated" : "pipeline.drawerDuplicateOf")) + '</span>' +
+        '<span class="pipeLinkAction">' + escapeHtml(t("pipeline.drawerOpenMemory")) + svgIcon("arrowRight", "pipeLinkArrow") + '</span></span>' + svgIcon("external", "pipeLinkEnd") + '</button>');
+    }
+    if (task.last_error) {
+      parts.push('<section class="actPane pipeError"><h3 class="pipeErrorTitle">' + svgIcon("warning", "pipeErrorIcon") + '<span>' + escapeHtml(t("pipeline.drawerLastError")) + '</span></h3>' +
+        '<p class="pipeErrorText">' + escapeHtml(task.last_error) + '</p></section>');
+    }
+    const updated = parseTimestamp(task.updated_at);
+    const ids = [[t("pipeline.drawerTaskId"), task.task_id, true], [t("pipeline.drawerSession"), task.session_id, true], [t("pipeline.drawerUpdated"), updated ? formatPipelineStamp(updated) : "", false]];
+    parts.push('<section class="actSection is-ids"><dl class="actIds">' + ids.filter((row) => row[1]).map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' +
+      (row[2] ? '<code class="actMono">' + escapeHtml(row[1]) + '</code>' : escapeHtml(row[1])) + '</dd>').join("") + '</dl></section>');
+    els.activityDrawerBody.innerHTML = parts.join("");
+  }
+
+  function renderPipeline() {
+    if (!els.pipelineView) return;
+    renderPipelineToolbar();
+    renderPipelineFlow();
+    renderPipelineMenus();
+    renderPipelineList();
+    if (state.drawer.host === "pipelineView") renderMemoryDrawer();
+    placeMemoryDrawer();
+  }
+
+  function getPipelinePopoverParts(name) {
+    if (name === "project") return [els.pipelineProjectPopover, els.pipelineProjectButton];
+    if (name === "agent") return [els.pipelineAgentPopover, els.pipelineAgentButton];
+    if (name === "state") return [els.pipelineStatePopover, els.pipelineStateButton];
+    if (name === "custom") return [els.pipelineCustomPopover, els.pipelineRangeCustom];
+    return null;
+  }
+
+  function setPipelinePopover(name) {
+    if (!els.pipelineView) return;
+    const pipe = state.pipeline;
+    pipe.openPopover = getPipelinePopoverParts(name) ? name : "";
+    ["project", "agent", "state", "custom"].forEach((key) => {
+      const parts = getPipelinePopoverParts(key);
+      const open = key === pipe.openPopover;
+      setHidden(parts[0], !open);
+      setAttr(parts[1], "aria-expanded", open ? "true" : "false");
+      if (open) placeViewPopover(els.pipelineView, parts[0], parts[1]);
+    });
+  }
+
+  function closePipelinePopover(restoreFocus) {
+    const parts = getPipelinePopoverParts(state.pipeline.openPopover);
+    setPipelinePopover("");
+    if (parts && restoreFocus) parts[1].focus();
+  }
+
+  function openPipelineMenu(name) {
+    if (state.pipeline.openPopover === name) {
+      closePipelinePopover(false);
+      return;
+    }
+    setPipelinePopover(name);
+    const popover = getPipelinePopoverParts(name)[0];
+    const target = popover.querySelector('[aria-selected="true"]') || popover.querySelector(".actOption");
+    if (target) target.focus();
+  }
+
+  function openPipelineCustom() {
+    if (state.pipeline.openPopover === "custom") {
+      closePipelinePopover(false);
+      return;
+    }
+    const pipe = state.pipeline;
+    const today = localDayKey(new Date());
+    els.pipelineCustomFrom.value = pipe.customFrom || localDayKey(shiftDays(new Date(), -6));
+    els.pipelineCustomTo.value = pipe.customTo || today;
+    els.pipelineCustomFrom.max = today;
+    els.pipelineCustomTo.max = today;
+    setHidden(els.pipelineCustomError, true);
+    setPipelinePopover("custom");
+    els.pipelineCustomFrom.focus();
+  }
+
+  function applyPipelineCustomRange() {
+    const from = els.pipelineCustomFrom.value;
+    const to = els.pipelineCustomTo.value;
+    const start = parseLocalDay(from);
+    const end = parseLocalDay(to);
+    const error = !start || !end ? t("pipeline.customMissing") : start > end ? t("pipeline.customOrder") : "";
+    if (error) {
+      setText(els.pipelineCustomError, error);
+      setHidden(els.pipelineCustomError, false);
+      return;
+    }
+    closePipelinePopover(true);
+    setPipelineFilters({ range: "custom", customFrom: from, customTo: to });
+  }
+
+  function bindPipelineEvents() {
+    if (!els.pipelineView) return;
+    els.pipelineView.addEventListener("click", (event) => {
+      const pipe = state.pipeline;
+      // The shared drawer and its scrim handle their own clicks (see bindMemoryDrawerEvents).
+      if (els.activityDrawer.contains(event.target) || event.target === els.activityDrawerScrim) return;
+      const row = event.target.closest(".pipeRow[data-task-id]");
+      if (row) {
+        const id = row.getAttribute("data-task-id");
+        // The open row closes the drawer again; any other row swaps its content.
+        if (state.drawer.task === id) closeMemoryDrawer(false);
+        else openPipelineTask(id, row);
+        return;
+      }
+      const range = event.target.closest("[data-pipeline-range]");
+      if (range) {
+        const value = range.getAttribute("data-pipeline-range");
+        if (value === "custom") {
+          openPipelineCustom();
+        } else {
+          setPipelinePopover("");
+          if (value !== pipe.range) setPipelineFilters({ range: value });
+        }
+        return;
+      }
+      const popup = event.target.closest("#pipelineProjectButton, #pipelineAgentButton, #pipelineStateButton");
+      if (popup) {
+        openPipelineMenu(popup.id.replace("pipeline", "").replace("Button", "").toLowerCase());
+        return;
+      }
+      const option = event.target.closest("[data-pipeline-option]");
+      if (option) {
+        closePipelinePopover(true);
+        setPipelineFilters({ [option.getAttribute("data-pipeline-option")]: option.getAttribute("data-pipeline-value") || "" });
+        return;
+      }
+      // A stage or the Stuck chip picks that state; a second click clears it.
+      const stage = event.target.closest("[data-pipeline-stage]");
+      if (stage) {
+        const value = stage.getAttribute("data-pipeline-stage");
+        setPipelineFilters({ state: pipe.state === value ? "" : value });
+        return;
+      }
+      if (event.target.closest("#pipelineLoadMore")) {
+        void loadPipeline("more");
+        return;
+      }
+      const action = event.target.closest("[data-pipeline-action]");
+      if (action) {
+        const kind = action.getAttribute("data-pipeline-action");
+        if (kind === "clear") clearPipelineFilters();
+        else if (kind === "widen") setPipelineFilters({ range: pipe.range === "today" ? "7d" : "30d" });
+        else void loadPipeline("reset");
+        return;
+      }
+      if (event.target.closest("#pipelineCustomApply")) {
+        applyPipelineCustomRange();
+        return;
+      }
+      if (event.target.closest("#pipelineCustomCancel")) closePipelinePopover(true);
+    });
+
+    els.pipelineView.addEventListener("keydown", (event) => {
+      if (els.activityDrawer.contains(event.target)) return;
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches(".pipeRow[data-task-id]")) {
+        event.preventDefault();
+        event.target.click();
+        return;
+      }
+      const open = state.pipeline.openPopover;
+      if (!open) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePipelinePopover(true);
+        return;
+      }
+      if (open === "custom") {
+        if (event.key === "Enter" && event.target.matches(".actDateInput")) {
+          event.preventDefault();
+          applyPipelineCustomRange();
+        }
+        return;
+      }
+      const options = Array.from(getPipelinePopoverParts(open)[0].querySelectorAll(".actOption"));
+      const index = options.indexOf(document.activeElement);
+      let next = -1;
+      if (event.key === "ArrowDown") next = Math.min(options.length - 1, index + 1);
+      else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = options.length - 1;
+      else if (event.key === "Tab") {
+        event.preventDefault();
+        closePipelinePopover(true);
+        return;
+      }
+      if (next >= 0 && options[next]) {
+        event.preventDefault();
+        options[next].focus();
+      }
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      const parts = getPipelinePopoverParts(state.pipeline.openPopover);
+      if (!parts || parts[0].contains(event.target) || parts[1].contains(event.target)) return;
+      setPipelinePopover("");
+    });
+    window.addEventListener("resize", () => {
+      if (state.pipeline.openPopover) setPipelinePopover("");
+    });
+    window.addEventListener("scroll", () => {
+      if (state.activeView !== "pipelineView") return;
+      state.pipeline.lastScrollAt = Date.now();
+      scheduleMemoryDrawerPlace();
+    }, { passive: true });
+  }
+
   async function loadReleaseCheck() {
     if (!state.overview || !state.overview.release) return;
     state.isCheckingRelease = true;
@@ -5420,11 +6438,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function applyReadPolicyToViews(policy) {
     if (!policy) return;
     const mem = state.memory;
+    const pipe = state.pipeline;
     const early = state.activity.earlier;
     const drawer = state.drawer;
     if (policy.readEnabled) {
-      if (!mem.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
+      if (!mem.readsDisabled && !pipe.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
       mem.readsDisabled = false;
+      pipe.readsDisabled = false;
       early.readsDisabled = false;
       early.message = "";
       early.payload = null;
@@ -5435,11 +6455,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const refreshDrawer = !!drawer.id && drawer.readsDisabled;
       drawer.readsDisabled = false;
       if (state.activeView === "memoryView") void loadMemories("reset");
+      if (state.activeView === "pipelineView") void loadPipeline("reset");
       if (state.activeView === "activityView") void loadActivityEarlier(true);
       if (refreshDrawer) void openMemoryDrawer(drawer.id, null, drawer.host);
+      // A task body comes back with the reloaded list.
+      else if (drawer.task) renderMemoryDrawer();
       return;
     }
-    if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && !drawer.payload && (!drawer.id || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
+    if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && pipe.readsDisabled && pipe.items.length === 0 && !pipe.nextCursor && !drawer.taskItem &&
+      !drawer.payload && (!isMemoryDrawerOpen() || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
     mem.items = [];
     mem.days = [];
     mem.stats = null;
@@ -5455,13 +6479,30 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     mem.moreSeq = 0;
     mem.seq += 1;
     if (els.memoryList) els.memoryList.innerHTML = "";
+    pipe.items = [];
+    pipe.days = [];
+    pipe.stages = null;
+    pipe.nextCursor = null;
+    pipe.window = null;
+    pipe.loaded = false;
+    pipe.error = "";
+    pipe.refreshFailed = false;
+    pipe.stale = false;
+    pipe.readsDisabled = true;
+    pipe.groupNodes.clear();
+    pipe.rowNodes.clear();
+    pipe.busySeq = 0;
+    pipe.moreSeq = 0;
+    pipe.seq += 1;
+    if (els.pipelineList) els.pipelineList.innerHTML = "";
     drawer.payload = null;
+    drawer.taskItem = null;
     drawer.error = "";
     drawer.missing = false;
     drawer.copied = false;
     drawer.signature = "";
     drawer.seq += 1;
-    if (drawer.id) drawer.readsDisabled = true;
+    if (isMemoryDrawerOpen()) drawer.readsDisabled = true;
     early.payload = null;
     early.loadedAt = 0;
     early.key = "";
@@ -5470,8 +6511,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     early.readsDisabled = true;
     early.seq += 1;
     renderMemory();
+    renderPipeline();
     renderActivityEarlier();
-    if (drawer.id) renderMemoryDrawer();
+    if (isMemoryDrawerOpen()) renderMemoryDrawer();
   }
 
   async function savePolicy() {
@@ -5561,11 +6603,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (persist) persistBackground();
   }
 
-  // Activity and Memory have their own default backdrop (artwork, light or dark with the system). It shows while the
-  // user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
+  // Activity, Memory and Pipeline have their own default backdrop (artwork, light or dark with the system). It shows
+  // while the user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
   function usesActivityBackdrop() {
     const settings = bg.settings;
-    return (state.activeView === "activityView" || state.activeView === "memoryView") && !!settings && !settings.pinned &&
+    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView") && !!settings && !settings.pinned &&
       settings.preset === bg.api.defaults.preset && settings.tone === "auto";
   }
 
@@ -5923,7 +6965,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     } else if (state.memory.openPopover) {
       setMemoryPopover("");
     }
-    if (state.drawer.id && state.drawer.host !== nextView) closeMemoryDrawer(false);
+    if (nextView === "pipelineView") {
+      void loadPipeline(state.pipeline.loaded ? "refresh" : "reset");
+    } else if (state.pipeline.openPopover) {
+      setPipelinePopover("");
+    }
+    if (isMemoryDrawerOpen() && state.drawer.host !== nextView) closeMemoryDrawer(false);
     if (nextView === "devToolsView") {
       void ensureDevToolsLoaded();
     }
@@ -6032,6 +7079,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (memoryCanPoll()) await loadMemories("refresh");
       return;
     }
+    if (state.activeView === "pipelineView") {
+      renderPipelineMenus();
+      if (pipelineCanPoll()) await loadPipeline("refresh");
+      return;
+    }
     if (!overviewOk) return;
     if (state.activeView === "homeView") {
       await refreshHomeData(false);
@@ -6086,6 +7138,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const devPanel = trigger.getAttribute("data-dev-panel");
       if (devPanel) {
         activatePanel(devPanel);
+      }
+      // Home's queue card and attention items open Pipeline filtered to the state they count.
+      if (trigger.hasAttribute("data-pipeline-state")) {
+        presetPipelineFilters(trigger.getAttribute("data-pipeline-state"), trigger.getAttribute("data-pipeline-range"));
       }
       activateView(trigger.getAttribute("data-nav-target"));
       // Legacy panels sit below the hero and the tab dock, and "View all" is clicked from the bottom of Home,
@@ -6396,6 +7452,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindLocaleMenu();
     bindActivityEvents();
     bindMemoryEvents();
+    bindPipelineEvents();
     bindMemoryDrawerEvents();
     activateView("homeView");
     try {
