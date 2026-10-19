@@ -2637,9 +2637,10 @@ ${WALLPAPER_CSS}
 
   /* Activity tokens. Light glass is milky white with a faint periwinkle shadow; dark glass is deep navy with a
      cool rim. The shell's own tokens (--text, --shell-hover, ...) still drive ink, so a user background keeps
-     working; these only shape Activity's surfaces. Memory shares them. */
+     working; these only shape Activity's surfaces. Memory and Pipeline share them. */
   .activityView,
-  .memoryView {
+  .memoryView,
+  .pipelineView {
     position: relative;
     --a-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.62 * var(--glass-scale))), rgba(255, 255, 255, calc(0.40 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.05), 0 18px 40px -22px rgba(70, 80, 180, 0.38);
@@ -2680,7 +2681,7 @@ ${WALLPAPER_CSS}
     --a-line: rgba(40, 50, 100, 0.10);
     --a-drawer-fill: linear-gradient(180deg, rgba(252, 252, 255, 0.84), rgba(246, 247, 255, 0.74));
     --a-drawer-shadow: var(--glass-edge), 0 40px 90px -30px rgba(40, 50, 140, 0.45), 0 6px 18px rgba(40, 50, 140, 0.10);
-    --a-scrim: rgba(40, 46, 90, 0.10);
+    --a-scrim: rgba(40, 46, 90, 0.22);
     --a-section-fill: rgba(255, 255, 255, 0.52);
     --a-well-blur: blur(18px) saturate(145%);
     /* Project dots: ten evenly spread, muted hues; the client hands each visible project its own slot. */
@@ -2698,7 +2699,8 @@ ${WALLPAPER_CSS}
   }
 
   html[data-glass="dark"] .activityView,
-  html[data-glass="dark"] .memoryView {
+  html[data-glass="dark"] .memoryView,
+  html[data-glass="dark"] .pipelineView {
     --a-well-blur: blur(22px) saturate(160%);
     --a-glass: linear-gradient(180deg, rgba(30, 42, 88, calc(0.50 * var(--glass-scale))), rgba(12, 18, 46, calc(0.46 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 22px 48px -20px rgba(0, 0, 0, 0.70);
@@ -2739,7 +2741,7 @@ ${WALLPAPER_CSS}
     --a-line: rgba(255, 255, 255, 0.10);
     --a-drawer-fill: linear-gradient(180deg, rgba(24, 34, 74, 0.86), rgba(10, 15, 40, 0.82));
     --a-drawer-shadow: var(--glass-edge), 0 40px 90px -30px rgba(0, 0, 0, 0.85);
-    --a-scrim: rgba(2, 4, 16, 0.38);
+    --a-scrim: rgba(2, 4, 16, 0.50);
     --a-section-fill: rgba(255, 255, 255, 0.05);
     --proj-0: #5cc596;
     --proj-1: #8b96ff;
@@ -3441,7 +3443,8 @@ ${WALLPAPER_CSS}
   }
 
   .activityView .actNotice,
-  .memoryView .actNotice {
+  .memoryView .actNotice,
+  .pipelineView .actNotice {
     background: var(--a-glass);
     box-shadow: var(--a-glass-shadow);
   }
@@ -3690,7 +3693,8 @@ ${WALLPAPER_CSS}
      A transform animation that keeps filling would make the view the containing block of the fixed drawer and
      scrim, so Activity's entry animation does not fill forwards (its end state is transform: none anyway). */
   .activityView.is-active,
-  .memoryView.is-active {
+  .memoryView.is-active,
+  .pipelineView.is-active {
     animation-fill-mode: none;
   }
 
@@ -3700,6 +3704,13 @@ ${WALLPAPER_CSS}
     z-index: 48;
     background: var(--a-scrim);
     animation: scrimEnter 200ms var(--ease-out) both;
+  }
+
+  /* Soft blur only while the view is showing, same gate as the drawer, so a hidden view never blurs.
+     Activity, Memory and Pipeline share this scrim; none of them paint it transparent. */
+  .appView.is-active .actScrim {
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
   }
 
   .actDrawer {
@@ -4421,7 +4432,8 @@ ${WALLPAPER_CSS}
   /* ---------- Memory detail drawer (shared by Activity and Memory) ---------- */
 
   .activityView,
-  .memoryView {
+  .memoryView,
+  .pipelineView {
     --a-pane-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.46));
     --a-pane-shadow: var(--glass-edge), 0 10px 24px -16px rgba(60, 70, 160, 0.34);
     --a-concept-fill: rgba(10, 132, 255, 0.09);
@@ -4430,7 +4442,8 @@ ${WALLPAPER_CSS}
   }
 
   html[data-glass="dark"] .activityView,
-  html[data-glass="dark"] .memoryView {
+  html[data-glass="dark"] .memoryView,
+  html[data-glass="dark"] .pipelineView {
     --a-pane-fill: linear-gradient(180deg, rgba(40, 54, 110, 0.46), rgba(16, 24, 60, 0.42));
     --a-pane-shadow: var(--glass-edge), 0 14px 30px -18px rgba(0, 0, 0, 0.80);
     --a-concept-fill: rgba(40, 110, 255, 0.20);
@@ -4715,7 +4728,8 @@ ${WALLPAPER_CSS}
 
   /* ---------- Memory ---------- */
 
-  .memoryView {
+  .memoryView,
+  .pipelineView {
     --m-legacy-fill: rgba(255, 170, 40, 0.15);
     --m-legacy-ink: #9a5800;
     --m-legacy-dot: #f5a524;
@@ -4742,7 +4756,8 @@ ${WALLPAPER_CSS}
     --m-dot-4: #f2697a;
   }
 
-  html[data-glass="dark"] .memoryView {
+  html[data-glass="dark"] .memoryView,
+  html[data-glass="dark"] .pipelineView {
     --m-legacy-fill: rgba(255, 176, 50, 0.20);
     --m-legacy-ink: #ffc76a;
     --m-legacy-dot: #ffb340;
@@ -5428,6 +5443,864 @@ ${WALLPAPER_CSS}
       right: 8px;
       bottom: 8px;
       width: calc(100vw - 16px);
+    }
+  }
+
+  /* ---------- Pipeline ---------- */
+
+  /* Pipeline tokens. Colour only marks problems: saved and processing stay neutral, queued and skipped muted,
+     stuck amber, failed and fallback red, duplicate purple. Glass fills multiply --glass-scale like Activity's. */
+  .pipelineView {
+    --p-neutral-fill: rgba(112, 120, 156, 0.12);
+    --p-neutral-ink: #394156;
+    --p-neutral-dot: #7d869e;
+    --p-muted-fill: rgba(140, 148, 172, 0.08);
+    --p-muted-ink: #6a7187;
+    --p-muted-dot: #b3b8c7;
+    --p-warn-fill: rgba(255, 159, 10, 0.16);
+    --p-warn-ink: #9a5200;
+    --p-warn-dot: #f59e0b;
+    --p-err-fill: rgba(255, 69, 58, 0.12);
+    --p-err-ink: #b42318;
+    --p-err-dot: #ff453a;
+    --p-dup-fill: rgba(130, 100, 240, 0.13);
+    --p-dup-ink: #5a3fc4;
+    --p-dup-dot: #8e6cf6;
+    --p-orb-fill: linear-gradient(180deg, rgba(255, 255, 255, calc(0.92 * var(--glass-scale))), rgba(232, 236, 250, calc(0.62 * var(--glass-scale))));
+    --p-orb-shadow: var(--glass-edge), 0 4px 10px -4px rgba(60, 70, 160, 0.32);
+    --p-stuck-fill: linear-gradient(180deg, rgba(255, 238, 206, calc(0.86 * var(--glass-scale))), rgba(255, 216, 156, calc(0.58 * var(--glass-scale))));
+    --p-stuck-shadow: var(--glass-edge), inset 0 0 0 1px rgba(245, 158, 11, 0.22), 0 16px 32px -18px rgba(220, 130, 20, 0.60);
+    --p-stuck-orb: linear-gradient(180deg, #ffc65a, #f29a0e);
+    --p-well: rgba(232, 236, 250, 0.58);
+  }
+
+  html[data-glass="dark"] .pipelineView {
+    --p-neutral-fill: rgba(255, 255, 255, 0.10);
+    --p-neutral-ink: #d9e0f0;
+    --p-neutral-dot: #9aa5c2;
+    --p-muted-fill: rgba(255, 255, 255, 0.06);
+    --p-muted-ink: #a2aac2;
+    --p-muted-dot: #6b738e;
+    --p-warn-fill: rgba(255, 170, 50, 0.20);
+    --p-warn-ink: #ffc766;
+    --p-warn-dot: #ffad33;
+    --p-err-fill: rgba(255, 82, 72, 0.20);
+    --p-err-ink: #ff9d95;
+    --p-err-dot: #ff5a4f;
+    --p-dup-fill: rgba(140, 110, 255, 0.24);
+    --p-dup-ink: #cbb8ff;
+    --p-dup-dot: #9a7cff;
+    --p-orb-fill: linear-gradient(180deg, rgba(64, 78, 136, calc(0.80 * var(--glass-scale))), rgba(18, 26, 62, calc(0.72 * var(--glass-scale))));
+    --p-orb-shadow: var(--glass-edge), 0 4px 12px -4px rgba(0, 0, 0, 0.65);
+    --p-stuck-fill: linear-gradient(180deg, rgba(118, 74, 20, calc(0.66 * var(--glass-scale))), rgba(64, 40, 14, calc(0.60 * var(--glass-scale))));
+    --p-stuck-shadow: var(--glass-edge), inset 0 0 0 1px rgba(255, 176, 70, 0.42), 0 0 28px -8px rgba(255, 150, 30, 0.60);
+    --p-well: rgba(6, 10, 30, 0.44);
+  }
+
+  .pipeLeadRow {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin: -16px 0 20px 2px;
+  }
+
+  .policyBanner:not([hidden]) ~ .pipelineView .pipeLeadRow {
+    margin-top: 0;
+  }
+
+  .pipeLeadRow .pipeLead {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .pipeLeadRow .memUpdated {
+    flex: 0 0 auto;
+  }
+
+  /* Toolbar: the three pickers share the left, the range control keeps its own width on the right. */
+  .pipeFilters {
+    display: flex;
+    flex: 1 1 auto;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .pipeFilters .actPopup {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 230px;
+    min-height: 42px;
+    padding: 0 14px 0 17px;
+    font-size: 14.5px;
+  }
+
+  .pipeFilters .actPopupIcon {
+    margin-left: auto;
+  }
+
+  .pipeFlagChip {
+    flex: 0 0 auto;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    min-height: 32px;
+    padding: 0 10px 0 12px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--p-dup-fill);
+    color: var(--p-dup-ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .pipeFlagChip::after {
+    content: "×";
+    font-weight: 500;
+    opacity: 0.75;
+  }
+
+  .pipeFlagChip[hidden] {
+    display: none !important;
+  }
+
+  /* All time is an internal range (Home links). It is a state of this control, not a fifth permanent button. */
+  .pipeRangeAll {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 0 24px;
+    border: 1px solid var(--a-seg-on-border);
+    border-radius: 22px;
+    background: var(--a-seg-on-fill);
+    box-shadow: var(--a-seg-on-shadow);
+    color: var(--a-seg-on-ink);
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .pipeRangeAll[hidden] {
+    display: none !important;
+  }
+
+  .pipePause {
+    display: flex;
+    justify-content: flex-end;
+    margin: 2px 18px 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-3);
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.4;
+    cursor: pointer;
+  }
+
+  .pipePause:hover {
+    color: var(--text-2);
+  }
+
+  .pipePause[hidden] {
+    display: none !important;
+  }
+
+  /* Flow strip: one glass capsule with the in-flight stages joined by chevrons, then the outcomes. Stuck sits
+     apart as its own chip. Each stage is an orb with a dot and a label over the count. */
+  .pipeFlowRow {
+    display: flex;
+    align-items: stretch;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .pipeFlow {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    min-width: 0;
+    padding: 7px 10px 7px 8px;
+    border-radius: 32px;
+    background: var(--a-glass);
+    box-shadow: var(--a-glass-shadow);
+  }
+
+  .pipeFlowGroup {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .pipeFlowGroup:not(.is-flow) {
+    flex: 1 1 auto;
+    justify-content: space-between;
+  }
+
+  .pipeFlowSep {
+    flex: 0 0 1px;
+    align-self: stretch;
+    margin: 6px 10px;
+    background: var(--a-line);
+  }
+
+  .pipeChevron {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 15px;
+    color: var(--text-3);
+    opacity: 0.8;
+  }
+
+  .pipeStage {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 14px 5px 6px;
+    border: 1px solid transparent;
+    border-radius: 24px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+  }
+
+  .pipeStage:hover {
+    background: var(--shell-hover);
+  }
+
+  .pipeStage.is-static {
+    cursor: default;
+  }
+
+  .pipeStage.is-static:hover {
+    background: transparent;
+  }
+
+  .pipeStage[aria-pressed="true"] {
+    background: var(--a-on-fill);
+    box-shadow: inset 0 0 0 1px var(--a-on-border), var(--a-on-shadow);
+  }
+
+  .pipeOrb {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 50%;
+    background: var(--p-orb-fill);
+    box-shadow: var(--p-orb-shadow);
+  }
+
+  .pipeOrbDot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--p-muted-dot);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.45);
+  }
+
+  .pipeStage.has-count .pipeOrbDot {
+    background: var(--p-neutral-dot);
+  }
+
+  /* Processing breathes while it has work; problem stages only take their colour once they count something. */
+  .pipeStage.stage-processing.has-count .pipeOrbDot {
+    animation: pipeBreathe 2.2s ease-in-out infinite;
+  }
+
+  .pipeStage.stage-duplicate.has-count .pipeOrbDot {
+    background: var(--p-dup-dot);
+    box-shadow: 0 0 0 3px rgba(142, 108, 246, 0.16), 0 0 10px rgba(142, 108, 246, 0.45);
+  }
+
+  .pipeStage.stage-fallback.has-count .pipeOrbDot,
+  .pipeStage.stage-failed.has-count .pipeOrbDot {
+    background: var(--p-err-dot);
+    box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.14), 0 0 10px rgba(255, 69, 58, 0.45);
+  }
+
+  @keyframes pipeBreathe {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(0.72); opacity: 0.6; }
+  }
+
+  .pipeStageText {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    line-height: 1.15;
+  }
+
+  .pipeStageLabel {
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pipeStageCount {
+    color: var(--text);
+    font-size: 15.5px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pipeStuck {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 12px;
+    min-width: 132px;
+    padding: 7px 24px 7px 9px;
+    border-radius: 32px;
+    background: var(--a-glass);
+    box-shadow: var(--a-glass-shadow);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: box-shadow 180ms var(--ease-out), background 180ms var(--ease-out);
+  }
+
+  .pipeStuckIcon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    border-radius: 50%;
+    background: var(--p-orb-fill);
+    box-shadow: var(--p-orb-shadow);
+    color: var(--text-3);
+  }
+
+  .pipeStuckGlyph {
+    width: 18px;
+    height: 18px;
+  }
+
+  .pipeStuck.has-count {
+    background: var(--p-stuck-fill);
+    box-shadow: var(--p-stuck-shadow);
+  }
+
+  .pipeStuck.has-count .pipeStuckIcon {
+    background: var(--p-stuck-orb);
+    box-shadow: inset 0 1px 0.5px rgba(255, 255, 255, 0.75), inset 0 -6px 10px -6px rgba(150, 70, 0, 0.45), 0 4px 12px -4px rgba(230, 130, 10, 0.65);
+    color: #ffffff;
+  }
+
+  .pipeStuck.has-count .pipeStageLabel,
+  .pipeStuck.has-count .pipeStageCount {
+    color: var(--p-warn-ink);
+  }
+
+  .pipeStuck[aria-pressed="true"] {
+    box-shadow: var(--p-stuck-shadow), 0 0 0 2px rgba(245, 158, 11, 0.70);
+  }
+
+  .pipeStuck:not(.has-count)[aria-pressed="true"] {
+    box-shadow: var(--a-glass-shadow), 0 0 0 2px var(--a-on-border);
+  }
+
+  /* State pills. The dot carries the state too: hollow while waiting or running, solid once settled. */
+  .pipePill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    padding: 0 10px 0 9px;
+    border-radius: 999px;
+    background: var(--p-neutral-fill);
+    color: var(--p-neutral-ink);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .pipePill::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: var(--p-neutral-dot);
+  }
+
+  .pipePill.state-processing::before {
+    box-sizing: border-box;
+    border: 1.6px solid var(--p-neutral-dot);
+    background: transparent;
+    animation: pipeBreathe 2.2s ease-in-out infinite;
+  }
+
+  .pipePill.state-queued,
+  .pipePill.state-skipped,
+  .pipePill.state-unknown {
+    background: var(--p-muted-fill);
+    color: var(--p-muted-ink);
+  }
+
+  .pipePill.state-queued::before {
+    box-sizing: border-box;
+    border: 1.6px solid var(--p-muted-dot);
+    background: transparent;
+  }
+
+  .pipePill.state-skipped::before,
+  .pipePill.state-unknown::before { background: var(--p-muted-dot); }
+  .pipePill.state-stuck { background: var(--p-warn-fill); color: var(--p-warn-ink); }
+  .pipePill.state-stuck::before { background: var(--p-warn-dot); }
+  .pipePill.state-failed,
+  .pipePill.state-fallback { background: var(--p-err-fill); color: var(--p-err-ink); }
+  .pipePill.state-failed::before,
+  .pipePill.state-fallback::before { background: var(--p-err-dot); }
+  .pipePill.state-duplicate { background: var(--p-dup-fill); color: var(--p-dup-ink); }
+  .pipePill.state-duplicate::before { background: var(--p-dup-dot); }
+
+  .pipeOptDot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border-radius: 50%;
+    background: var(--p-neutral-dot);
+  }
+
+  .pipeOptDot.state-queued,
+  .pipeOptDot.state-skipped { background: var(--p-muted-dot); }
+  .pipeOptDot.state-stuck { background: var(--p-warn-dot); }
+  .pipeOptDot.state-failed,
+  .pipeOptDot.state-fallback { background: var(--p-err-dot); }
+  .pipeOptDot.state-duplicate { background: var(--p-dup-dot); }
+
+  /* List: Memory's day cards and rows, with a state column and two counts. */
+  .pipeBoard {
+    --m-cols: 60px 112px minmax(0, 1fr) minmax(90px, 140px) minmax(64px, 96px) 72px 64px;
+  }
+
+  .pipeHead .memCol {
+    white-space: nowrap;
+  }
+
+  .pipeRow .memKind .pipePill {
+    min-width: 100px;
+  }
+
+  .pipeRow .memTitle.is-fallback {
+    color: var(--text-2);
+  }
+
+  .pipeRow .memPreview.tone-warn {
+    color: var(--p-warn-ink);
+  }
+
+  .pipeRow .memPreview.tone-err {
+    color: var(--p-err-ink);
+  }
+
+  .pipeAttempts {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Drawer, task body: chips, then the state pill above the title (the flex order puts the sub row first). */
+  .actDrawer.is-task .actDrawerSub {
+    order: 1;
+    margin-top: 18px;
+  }
+
+  .actDrawer.is-task .actDrawerTitle {
+    order: 2;
+    margin-top: 12px;
+  }
+
+  .actDrawer.is-task .actDrawerBody {
+    order: 3;
+  }
+
+  .actDrawerSub .pipePill {
+    min-height: 24px;
+  }
+
+  /* The task chips may wrap to a second line rather than squeeze the project name away. */
+  .actDrawer.is-task .actDrawerMeta,
+  .actDrawer.is-from-task .actDrawerMeta {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .actDrawer.is-task .actDrawerMeta {
+    column-gap: 5px;
+  }
+
+  .actDrawer.is-task .actMetaChip:not(.actDrawerTime) {
+    min-height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+  }
+
+  .actDrawer.is-task .actMetaChip + .actMetaChip {
+    border-left: 0;
+  }
+
+  .pipeChipProject {
+    flex-shrink: 0;
+    max-width: 220px;
+    gap: 6px;
+  }
+
+  .pipeChipName {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pipeChipDot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: var(--a-outcome-dot);
+  }
+
+  .pipeBack {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+    min-height: 26px;
+    margin-right: 4px;
+    padding: 0 10px 0 4px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+    color: var(--a-link);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .pipeBack:hover {
+    background: var(--shell-hover);
+  }
+
+  .pipeBackIcon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .pipeNote {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 18px 0 0;
+    padding: 11px 14px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .pipeNote.tone-warn {
+    background: var(--p-warn-fill);
+    color: var(--p-warn-ink);
+  }
+
+  .pipeNote.tone-err {
+    background: var(--p-err-fill);
+    color: var(--p-err-ink);
+  }
+
+  .pipeNoteIcon {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    margin-top: 1px;
+  }
+
+  .pipeNote span {
+    font-weight: 600;
+  }
+
+  .pipeNoteHint {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-2);
+    font-weight: 400;
+  }
+
+  .pipeNote .pipeNoteHint {
+    font-weight: 400;
+  }
+
+  .pipeStats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 20px;
+  }
+
+  .pipeStat.actPane {
+    display: grid;
+    align-content: start;
+    gap: 9px;
+    padding: 11px 8px 12px 10px;
+    border-radius: 16px;
+  }
+
+  .pipeStatLabel {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .pipeStatLabel span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pipeStatIcon {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 15px;
+    color: var(--a-link);
+  }
+
+  .pipeStatValue {
+    color: var(--text);
+    font-size: 24px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pipeStatSub {
+    margin-top: -2px;
+    color: var(--p-warn-ink);
+    font-size: 12px;
+  }
+
+  .pipeLink.actPane {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    margin-top: 12px;
+    padding: 14px 16px;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: box-shadow 160ms var(--ease-out);
+  }
+
+  .pipeLink.actPane:hover {
+    box-shadow: var(--a-pane-shadow), 0 0 0 1px var(--a-on-border);
+  }
+
+  .pipeLinkIcon {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    color: var(--a-link);
+  }
+
+  .pipeLinkText {
+    display: grid;
+    flex: 1 1 auto;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .pipeLinkLabel {
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  .pipeLinkAction {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--a-link);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .pipeLinkArrow {
+    width: 16px;
+    height: 16px;
+  }
+
+  .pipeLinkEnd {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    color: var(--a-link);
+  }
+
+  .pipeError.actPane {
+    margin-top: 12px;
+    padding: 14px 16px 16px;
+  }
+
+  .pipeErrorTitle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .pipeErrorIcon {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    color: var(--p-err-dot);
+  }
+
+  .pipeErrorText {
+    margin: 0;
+    padding: 11px 14px;
+    border-radius: 12px;
+    background: var(--p-well);
+    box-shadow: inset 0 1px 3px rgba(20, 30, 80, 0.08);
+    color: var(--text);
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  /* Docked beside the list (1440px and wider): the toolbar and flow strip stay full width, the list steps aside
+     and drops Agent (the drawer shows it). Below 1440px the sheet floats over the full list with the scrim. */
+  @media (min-width: 1440px) {
+    .pipelineView.is-drawer-open .pipeHead,
+    .pipelineView.is-drawer-open .memGroup,
+    .pipelineView.is-drawer-open .memMoreRow,
+    .pipelineView.is-drawer-open .memNotice {
+      margin-right: calc(min(456px, calc(100vw - 32px)) + 16px);
+    }
+
+    .pipelineView.is-drawer-open .pipeBoard {
+      --m-cols: 50px 106px minmax(0, 1fr) minmax(70px, 104px) 64px 58px;
+    }
+
+    .pipelineView.is-drawer-open .pipeHead,
+    .pipelineView.is-drawer-open .pipeRow {
+      column-gap: 10px;
+    }
+
+    .pipelineView.is-drawer-open .pipeHead .memCol:nth-child(5),
+    .pipelineView.is-drawer-open .pipeRow .memAgent {
+      display: none;
+    }
+  }
+
+  /* Below 1440px the strip tightens so all nine stages fit on one line at about 1280. */
+  @media (max-width: 1439px) {
+    .pipeFlow {
+      padding: 6px 8px 6px 6px;
+    }
+
+    .pipeFlowSep {
+      margin: 6px 6px;
+    }
+
+    .pipeStage {
+      gap: 7px;
+      padding: 4px 9px 4px 4px;
+    }
+
+    .pipeOrb {
+      width: 26px;
+      height: 26px;
+      flex-basis: 26px;
+    }
+
+    .pipeOrbDot {
+      width: 9px;
+      height: 9px;
+    }
+
+    .pipeStageLabel {
+      font-size: 12.5px;
+    }
+
+    .pipeChevron {
+      width: 13px;
+      height: 13px;
+      flex-basis: 13px;
+    }
+
+    .pipeStuck {
+      min-width: 0;
+      gap: 10px;
+      padding: 6px 18px 6px 7px;
+    }
+
+    .pipeStuckIcon {
+      width: 30px;
+      height: 30px;
+      flex-basis: 30px;
+    }
+  }
+
+  @media (max-width: 1199px) {
+    .pipeBoard {
+      --m-cols: 56px 106px minmax(0, 1fr) minmax(80px, 120px) 64px 58px;
+    }
+
+    .pipeFlowRow {
+      flex-wrap: wrap;
+    }
+
+    .pipeFlow {
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+  }
+
+  @media (max-width: 860px) {
+    .pipeBoard {
+      --m-cols: 50px minmax(0, 1fr) 46px;
+    }
+
+    .pipeFilters {
+      flex-wrap: wrap;
+    }
+
+    .pipeStats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pipeStage.stage-processing.has-count .pipeOrbDot,
+    .pipePill.state-processing::before {
+      animation: none;
     }
   }
 

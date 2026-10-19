@@ -767,7 +767,7 @@ test('Memory drawer docks only when matchMedia 1440 matches and is a modal sheet
   assert.match(bind, /window\.matchMedia\("\(min-width: 1440px\)"\)/);
   assert.match(bind, /addEventListener\("change"/);
   assert.equal((bind.match(/addEventListener\("change"/g) || []).length, 1);
-  assert.match(bind, /if \(!isMemoryDrawerOpen\(\) \|\| state\.drawer\.host !== "memoryView"\) return;/);
+  assert.match(bind, /if \(!isMemoryDrawerOpen\(\) \|\| \(state\.drawer\.host !== "memoryView" && state\.drawer\.host !== "pipelineView"\)\) return;/);
   assert.match(bind, /mountMemoryDrawer\(state\.drawer\.host\)/);
   assert.match(bind, /event\.key === "Tab" && !memoryDrawerIsDocked\(state\.drawer\.host\)/);
   assert.match(bind, /event\.key === "Escape"/);

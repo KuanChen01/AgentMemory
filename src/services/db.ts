@@ -2869,7 +2869,8 @@ export class DatabaseManager {
       'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'duplicate_flags'];
     // Quick-skip only when the stored schema revision is current AND every table and index exists. Any change to the
     // block below must bump TASK_SCHEMA_REVISION, so a database from an older revision always runs the (idempotent) upgrade.
-    const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open', 'idx_task_results_task',
+    const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open',
+      'idx_task_event_buffer_result', 'idx_task_results_task',
       'idx_task_results_observation', 'idx_observation_content_hash', 'idx_review_runs_interval', 'idx_observations_created_dt',
       'idx_observations_project_dt'];
     const have = this.db.all(`SELECT name FROM sqlite_master WHERE type IN ('table','index') AND name IN (${[...wanted, ...indexes].map(() => '?').join(',')})`,
@@ -2907,6 +2908,10 @@ export class DatabaseManager {
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_results_task ON task_results(task_id, segment_index)`);
       // Activity cards count tasks per memory and memory-detail lists them; additive, older releases ignore it.
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_results_observation ON task_results(observation_id)`);
+      // TASK_COMPLETE_SQL and the pipeline list look up / group task_event_buffer by task_result_id (covering received_ms).
+      // idx_task_event_buffer_open leads with session_id, so it cannot serve that probe.
+      // A missing index alone re-enters this block; the schema revision stays 11.
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_event_buffer_result ON task_event_buffer(task_result_id, received_ms)`);
       // Whole-task completion marker (additive). Tasks already finished by an earlier revision are backfilled
       // from task_results that have no frozen rows left, so they are not re-run.
       const hadCompletions = this.columnsOf('task_completions').size > 0;
