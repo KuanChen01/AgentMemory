@@ -12,6 +12,7 @@ const uiScript = uiHtml.match(/<script>([\s\S]*)<\/script>/)[1];
 function uiClientFunction(name) {
   const start = uiScript.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing function ${name}`);
+  const from = uiScript.slice(start - 6, start) === 'async ' ? start - 6 : start;
   let depth = 0;
   let seen = false;
   let quote = '';
@@ -37,7 +38,7 @@ function uiClientFunction(name) {
       seen = true;
     } else if (char === '}') {
       depth -= 1;
-      if (seen && depth === 0) return uiScript.slice(start, index + 1);
+      if (seen && depth === 0) return uiScript.slice(from, index + 1);
     }
   }
   assert.fail(`unclosed function ${name}`);
@@ -119,20 +120,30 @@ test('Pipeline client reads /admin/api/pipeline with from, to and the tz offset,
 test('pipelineCanPoll is false for a filter, a range, an open drawer or a hidden tab', () => {
   const result = vm.runInNewContext(`
     const MEMORY_SCROLL_IDLE_MS = 1500;
+    const PIPELINE_MAX_PAGE = 100;
+    const PIPELINE_REFRESH_HEADROOM = 20;
     const state = {
       activeView: "pipelineView",
-      pipeline: { project: "", agent: "", state: "", range: "7d", loaded: true, readsDisabled: false, openPopover: "", lastScrollAt: 0 },
+      pipeline: { project: "", agent: "", state: "", flagged: false, range: "7d", loaded: true, readsDisabled: false, openPopover: "", lastScrollAt: 0, items: [] },
       drawer: { id: "", task: "" },
     };
     const document = { hidden: false };
     ${uiClientFunction('isMemoryDrawerOpen')}
     ${uiClientFunction('isPipelineFiltered')}
+    ${uiClientFunction('pipelinePollPaused')}
     ${uiClientFunction('pipelineCanPoll')}
     const out = { plain: pipelineCanPoll() };
     state.pipeline.project = "harbor-sync"; out.project = pipelineCanPoll(); state.pipeline.project = "";
     state.pipeline.agent = "claude"; out.agent = pipelineCanPoll(); state.pipeline.agent = "";
     state.pipeline.state = "stuck"; out.state = pipelineCanPoll(); state.pipeline.state = "";
+    state.pipeline.flagged = true; out.flagged = pipelineCanPoll(); state.pipeline.flagged = false;
     state.pipeline.range = "30d"; out.range = pipelineCanPoll(); state.pipeline.range = "7d";
+    state.pipeline.range = "all"; out.all = pipelineCanPoll(); state.pipeline.range = "7d";
+    state.pipeline.items = Array.from({ length: 150 }, (_item, index) => ({ task_id: "row-" + index }));
+    out.long = pipelineCanPoll();
+    state.pipeline.items = Array.from({ length: 40 }, (_item, index) => ({ task_id: "row-" + index }));
+    out.short = pipelineCanPoll();
+    state.pipeline.items = [];
     state.drawer.task = "task-1"; out.task = pipelineCanPoll(); state.drawer.task = "";
     state.drawer.id = "mem-1"; out.memory = pipelineCanPoll(); state.drawer.id = "";
     document.hidden = true; out.hidden = pipelineCanPoll(); document.hidden = false;
@@ -141,7 +152,8 @@ test('pipelineCanPoll is false for a filter, a range, an open drawer or a hidden
     out;
   `);
   assert.equal(result.plain, true);
-  for (const key of ['project', 'agent', 'state', 'range', 'task', 'memory', 'hidden', 'scrolling', 'elsewhere']) {
+  assert.equal(result.short, true);
+  for (const key of ['project', 'agent', 'state', 'flagged', 'range', 'all', 'long', 'task', 'memory', 'hidden', 'scrolling', 'elsewhere']) {
     assert.equal(result[key], false, `${key} stops the poll`);
   }
 });
@@ -170,11 +182,14 @@ test('reads off clears Pipeline rows and the task drawer at once', () => {
 
 test('Home queue and attention links open Pipeline with the matching state', () => {
   const attention = uiClientFunction('collectAttentionItems');
-  assert.match(attention, /home\.attnStuck[^\n]*pipelineState: "stuck"/);
-  assert.match(attention, /home\.attnDuplicates[^\n]*pipelineState: "duplicate"/);
-  assert.match(attention, /home\.attnFallbacks[^\n]*pipelineState: "fallback"/);
+  assert.match(attention, /home\.attnStuck[^\n]*pipelineState: "stuck"[^\n]*pipelineRange: "all"/);
+  assert.match(attention, /home\.attnDuplicates[^\n]*pipelineFlagged: "1"[^\n]*pipelineRange: "all"/);
+  assert.match(attention, /home\.attnFallbacks[^\n]*pipelineState: "fallback"[^\n]*pipelineRange: "all"/);
+  assert.match(attention, /superset of every counted task/);
   assert.match(uiClientFunction('renderHomeAttention'), /data-pipeline-state="/);
+  assert.match(uiClientFunction('renderHomeAttention'), /data-pipeline-flagged="/);
   assert.match(uiClientFunction('renderHomeHealth'), /setAttr\(els\.homeQueueCard, "data-pipeline-state"/);
+  assert.match(uiClientFunction('renderHomeHealth'), /stuck > 0 \|\| duplicates > 0 \? "all" : "7d"/);
   assert.match(uiClientFunction('bindEvents'), /presetPipelineFilters\(trigger\.getAttribute\("data-pipeline-state"\)/);
   const preset = vm.runInNewContext(`
     const PIPELINE_STATES = ["queued", "processing", "saved", "skipped", "duplicate", "fallback", "failed", "stuck"];
@@ -183,11 +198,22 @@ test('Home queue and attention links open Pipeline with the matching state', () 
     presetPipelineFilters("stuck", "30d");
     const stuck = Object.assign({}, state.pipeline);
     presetPipelineFilters("bogus", "forever");
-    ({ stuck, bogus: Object.assign({}, state.pipeline) });
+    const bogus = Object.assign({}, state.pipeline);
+    presetPipelineFilters("fallback", "all");
+    const fallback = Object.assign({}, state.pipeline);
+    presetPipelineFilters("", "all", "1");
+    ({ stuck, bogus, fallback, flagged: Object.assign({}, state.pipeline) });
   `);
-  assert.deepEqual(JSON.parse(JSON.stringify(preset.stuck)), { project: '', agent: '', state: 'stuck', range: '30d', customFrom: '', customTo: '' });
+  assert.deepEqual(JSON.parse(JSON.stringify(preset.stuck)), { project: '', agent: '', state: 'stuck', range: '30d', customFrom: '', customTo: '', flagged: false });
   assert.equal(preset.bogus.state, '');
   assert.equal(preset.bogus.range, '7d');
+  assert.equal(preset.bogus.flagged, false);
+  assert.equal(preset.fallback.state, 'fallback');
+  assert.equal(preset.fallback.range, 'all');
+  assert.equal(preset.fallback.flagged, false);
+  assert.equal(preset.flagged.state, '');
+  assert.equal(preset.flagged.range, 'all');
+  assert.equal(preset.flagged.flagged, true);
 });
 
 test('Pipeline rows and the task drawer escape hostile titles and errors', () => {
@@ -418,3 +444,383 @@ test('Pipeline drawer dates use the short stamp and the overlay scrim is shared'
   assert.doesNotMatch(css, /\.(?:memory|pipeline)View[^{]*\.actScrim[^{]*\{[^}]*background:\s*(?:transparent|none)/);
   assert.doesNotMatch(css, /--a-scrim:\s*rgba\([^)]*,\s*0(?:\.0+)?\)/);
 });
+
+async function vmJson(script, sandbox) {
+  return JSON.parse(JSON.stringify(await vm.runInNewContext(script, sandbox)));
+}
+
+function pipelineBehaviourPrelude() {
+  return `
+    const MEMORY_SCROLL_IDLE_MS = 1500;
+    const PIPELINE_PAGE = 50;
+    const PIPELINE_MAX_PAGE = 100;
+    const PIPELINE_REFRESH_HEADROOM = 20;
+    const state = {
+      activeView: "pipelineView",
+      locale: "en",
+      overview: { projects: [], agents: [] },
+      memory: {
+        items: [], days: [], stats: null, nextCursor: null, loaded: false, error: "",
+        readsDisabled: false, refreshFailed: false, stale: false, seq: 0, busySeq: 0, moreSeq: 0,
+        groupNodes: new Map(), rowNodes: new Map(),
+      },
+      activity: { earlier: { key: "", payload: null, loading: false, error: "", readsDisabled: false, message: "", seq: 0, loadedAt: 0 } },
+      drawer: { id: "", task: "", taskItem: null, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0 },
+      pipeline: {
+        project: "", agent: "", state: "", flagged: false, range: "7d", customFrom: "", customTo: "",
+        items: [], days: [], stages: null, facets: null, nextCursor: null, window: null, key: "",
+        loaded: false, loadedAt: 0, error: "", readsDisabled: false, refreshFailed: false, stale: false,
+        seq: 0, busySeq: 0, moreSeq: 0, lastScrollAt: 0, openPopover: "",
+        rowNodes: new Map(), groupNodes: new Map(), signatures: {},
+      },
+    };
+    const document = { hidden: false };
+    const window = { scrolls: 0, scrollTo(x, y) { this.scrolls += 1; this.x = x; this.y = y; } };
+    const els = {
+      pipelineUpdatesPaused: { hidden: true, textContent: "" },
+      pipelineList: { innerHTML: "rows" },
+      memoryList: { innerHTML: "rows" },
+    };
+    const calls = [];
+    function fetchJson(url) {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      calls.push({ url, resolve, reject, promise });
+      return promise;
+    }
+    function setText(element, value) {
+      if (!element) return;
+      const next = String(value);
+      if (element.textContent !== next) element.textContent = next;
+    }
+    function setHidden(element, hidden) {
+      if (element && element.hidden !== !!hidden) element.hidden = !!hidden;
+    }
+    function t(key) { return Object.prototype.hasOwnProperty.call(en, key) ? en[key] : key; }
+    ${uiClientFunction('localDayKey')}
+    ${uiClientFunction('shiftDays')}
+    ${uiClientFunction('parseLocalDay')}
+    ${uiClientFunction('projectBasename')}
+    ${uiClientFunction('isActivitySelected')}
+    ${uiClientFunction('isMemoryDrawerOpen')}
+    ${uiClientFunction('getPipelineRange')}
+    ${uiClientFunction('pipelineKey')}
+    ${uiClientFunction('pipelineUrl')}
+    ${uiClientFunction('mergeMemoryDays')}
+    ${uiClientFunction('isPipelineFiltered')}
+    ${uiClientFunction('pipelinePollPaused')}
+    ${uiClientFunction('pipelineCanPoll')}
+    ${uiClientFunction('renderPipelinePauseHint')}
+    ${uiClientFunction('reloadPipelineFromStart')}
+    ${uiClientFunction('loadPipeline')}
+    ${uiClientFunction('applyReadPolicyToViews')}
+    ${uiClientFunction('pipelineFacetValues')}
+    function renderPipeline() {}
+    function renderMemory() {}
+    function renderActivityEarlier() {}
+    function renderMemoryDrawer() {}
+    function loadMemories() {}
+    function loadActivityEarlier() {}
+    function openMemoryDrawer() {}
+    async function settle() {
+      for (let step = 0; step < 12; step += 1) await Promise.resolve();
+    }
+    function rowIds() { return state.pipeline.items.map((item) => item.task_id); }
+  `;
+}
+
+test('a list longer than one refresh pauses the poll, and a shorter list is replaced whole', async () => {
+  assert.doesNotMatch(uiClientFunction('loadPipeline'), /incoming\[incoming\.length - 1\]/);
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    (async () => {
+      state.pipeline.items = Array.from({ length: 150 }, (_item, index) => ({ task_id: "old-" + index }));
+      state.pipeline.loaded = true;
+      state.pipeline.key = pipelineKey();
+      const canPollLong = pipelineCanPoll();
+      if (pipelineCanPoll()) await loadPipeline("refresh");
+      const fetchesAfterPollGuard = calls.length;
+      await loadPipeline("refresh");
+      await settle();
+      const direct = { fetches: calls.length, ids: rowIds(), first: state.pipeline.items[0].task_id, last: state.pipeline.items[149].task_id };
+      renderPipelinePauseHint(true);
+      const hintHiddenWithNotice = els.pipelineUpdatesPaused.hidden;
+      renderPipelinePauseHint();
+      const hint = { hidden: els.pipelineUpdatesPaused.hidden, text: els.pipelineUpdatesPaused.textContent };
+      reloadPipelineFromStart();
+      await settle();
+      const resetUrl = calls[0].url;
+      calls[0].resolve({
+        items: [{ task_id: "fresh-1" }],
+        days: [],
+        stages: { queued: 1 },
+        facets: { projects: ["/work/harbor-sync"], agents: ["brindle-agent"] },
+        next_cursor: null,
+      });
+      await calls[0].promise;
+      await settle();
+      const afterReset = { scrolls: window.scrolls, ids: rowIds(), hintHidden: els.pipelineUpdatesPaused.hidden, facets: state.pipeline.facets };
+      state.pipeline.items = Array.from({ length: 40 }, (_item, index) => ({ task_id: "page-" + index }));
+      state.pipeline.loaded = true;
+      state.pipeline.range = "7d";
+      state.pipeline.flagged = false;
+      state.pipeline.key = pipelineKey();
+      state.pipeline.lastScrollAt = 0;
+      const canPollShort = pipelineCanPoll();
+      renderPipelinePauseHint();
+      const shortHintHidden = els.pipelineUpdatesPaused.hidden;
+      const beforeRefresh = calls.length;
+      const refresh = loadPipeline("refresh");
+      await settle();
+      const refreshUrl = calls[beforeRefresh].url;
+      calls[beforeRefresh].resolve({
+        items: [{ task_id: "replaced" }],
+        days: [{ day: "2026-10-18", count: 1 }],
+        stages: { queued: 3 },
+        next_cursor: null,
+      });
+      await refresh;
+      await settle();
+      return {
+        canPollLong, fetchesAfterPollGuard, direct, hintHiddenWithNotice, hint, resetUrl, afterReset,
+        canPollShort, shortHintHidden, refreshUrl, afterRefresh: rowIds(), stages: state.pipeline.stages,
+      };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.equal(result.canPollLong, false);
+  assert.equal(result.fetchesAfterPollGuard, 0);
+  assert.equal(result.direct.fetches, 0);
+  assert.equal(result.direct.ids.length, 150);
+  assert.equal(result.direct.first, 'old-0');
+  assert.equal(result.direct.last, 'old-149');
+  assert.equal(result.hintHiddenWithNotice, true);
+  assert.equal(result.hint.hidden, false);
+  assert.equal(result.hint.text, 'Updates paused – Refresh');
+  assert.equal(result.hint.text.includes('\u2013'), true);
+  assert.equal(result.resetUrl.includes('cursor='), false);
+  assert.equal(result.resetUrl.includes('limit=50'), true);
+  assert.equal(result.afterReset.scrolls, 1);
+  assert.deepEqual(result.afterReset.ids, ['fresh-1']);
+  assert.equal(result.afterReset.hintHidden, true);
+  assert.deepEqual(result.afterReset.facets, { projects: ['/work/harbor-sync'], agents: ['brindle-agent'] });
+  assert.equal(result.canPollShort, true);
+  assert.equal(result.shortHintHidden, true);
+  assert.equal(result.refreshUrl.includes('limit=60'), true);
+  assert.equal(result.refreshUrl.includes('cursor='), false);
+  assert.deepEqual(result.afterRefresh, ['replaced']);
+  assert.equal(result.stages.queued, 3);
+});
+
+test('a slow pipeline response is ignored once a newer request has been sent', async () => {
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    (async () => {
+      state.pipeline.loaded = true;
+      state.pipeline.key = pipelineKey();
+      const first = loadPipeline("reset");
+      await settle();
+      const second = loadPipeline("reset");
+      await settle();
+      calls[1].resolve({
+        items: [{ task_id: "newer" }],
+        days: [{ day: "2026-10-18", count: 1 }],
+        stages: { queued: 1 },
+        facets: { projects: ["/work/harbor-sync"], agents: [] },
+        next_cursor: null,
+      });
+      await calls[1].promise;
+      await settle();
+      calls[0].resolve({
+        items: [{ task_id: "stale-slow" }],
+        days: [],
+        stages: { queued: 99 },
+        facets: { projects: ["/work/stale"], agents: ["stale-agent"] },
+        next_cursor: "stale-cursor",
+      });
+      await first;
+      await second;
+      await settle();
+      return {
+        ids: rowIds(),
+        queued: state.pipeline.stages && state.pipeline.stages.queued,
+        projects: state.pipeline.facets && state.pipeline.facets.projects,
+        nextCursor: state.pipeline.nextCursor,
+      };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.deepEqual(result.ids, ['newer']);
+  assert.equal(result.queued, 1);
+  assert.deepEqual(result.projects, ['/work/harbor-sync']);
+  assert.equal(result.nextCursor, null);
+});
+
+test('turning reads off drops an in-flight pipeline response', async () => {
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    (async () => {
+      state.pipeline.items = [{ task_id: "visible" }];
+      state.pipeline.facets = { projects: ["/work/harbor-sync"], agents: ["brindle-agent"] };
+      state.pipeline.loaded = true;
+      state.pipeline.key = pipelineKey();
+      const pending = loadPipeline("reset");
+      await settle();
+      applyReadPolicyToViews({ readEnabled: false });
+      const during = { ids: rowIds(), readsDisabled: state.pipeline.readsDisabled, facets: state.pipeline.facets, list: els.pipelineList.innerHTML };
+      calls[0].resolve({
+        items: [{ task_id: "late-task" }],
+        days: [{ day: "2026-10-18", count: 1 }],
+        stages: { queued: 4 },
+        facets: { projects: ["/work/late"], agents: ["late-agent"] },
+        next_cursor: "late-cursor",
+      });
+      await pending;
+      await settle();
+      return { during, after: { ids: rowIds(), readsDisabled: state.pipeline.readsDisabled, facets: state.pipeline.facets, stages: state.pipeline.stages, nextCursor: state.pipeline.nextCursor } };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.deepEqual(result.during.ids, []);
+  assert.equal(result.during.readsDisabled, true);
+  assert.equal(result.during.facets, null);
+  assert.equal(result.during.list, '');
+  assert.deepEqual(result.after.ids, []);
+  assert.equal(result.after.readsDisabled, true);
+  assert.equal(result.after.facets, null);
+  assert.equal(result.after.stages, null);
+  assert.equal(result.after.nextCursor, null);
+});
+
+test('load more merges a repeated boundary day by day and dedupes task ids', async () => {
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    (async () => {
+      state.pipeline.items = [{ task_id: "keep-a", day: "2026-10-17" }];
+      state.pipeline.days = [{ day: "2026-10-17", count: 4 }];
+      state.pipeline.nextCursor = "cursor-day";
+      state.pipeline.window = getPipelineRange();
+      state.pipeline.loaded = true;
+      state.pipeline.key = pipelineKey();
+      const more = loadPipeline("more");
+      await settle();
+      const url = calls[0].url;
+      calls[0].resolve({
+        items: [
+          { task_id: "keep-a", day: "2026-10-17" },
+          { task_id: "new-b", day: "2026-10-17" },
+          { task_id: "new-c", day: "2026-10-16" },
+        ],
+        days: [{ day: "2026-10-17", count: 4 }, { day: "2026-10-16", count: 2 }],
+        next_cursor: null,
+      });
+      await more;
+      await settle();
+      return { url, ids: rowIds(), days: state.pipeline.days };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.equal(result.url.includes('cursor='), true);
+  assert.deepEqual(result.ids, ['keep-a', 'new-b', 'new-c']);
+  assert.deepEqual(result.days, [
+    { day: '2026-10-17', count: 4 },
+    { day: '2026-10-16', count: 2 },
+  ]);
+});
+
+test('a 400 on a cursor request refetches pipeline page 1', async () => {
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    (async () => {
+      state.pipeline.items = [{ task_id: "page-2-old", day: "2026-10-16" }];
+      state.pipeline.days = [{ day: "2026-10-16", count: 1 }];
+      state.pipeline.nextCursor = "cursor-stale";
+      state.pipeline.window = getPipelineRange();
+      state.pipeline.loaded = true;
+      state.pipeline.key = pipelineKey();
+      const more = loadPipeline("more");
+      await settle();
+      const moreUrl = calls[0].url;
+      const error = new Error("Invalid pipeline request: cursor");
+      error.status = 400;
+      calls[0].reject(error);
+      await settle();
+      const resetUrl = calls[1] ? calls[1].url : "";
+      calls[1].resolve({
+        items: [{ task_id: "page-1" }],
+        days: [{ day: "2026-10-18", count: 1 }],
+        stages: { queued: 2 },
+        facets: { projects: ["/work/harbor-sync"], agents: ["brindle-agent"] },
+        next_cursor: null,
+      });
+      await calls[1].promise;
+      await more;
+      await settle();
+      return { moreUrl, resetUrl, fetches: calls.length, ids: rowIds(), queued: state.pipeline.stages.queued };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.equal(result.fetches, 2);
+  assert.equal(result.moreUrl.includes('cursor='), true);
+  assert.equal(result.resetUrl.includes('cursor='), false);
+  assert.equal(result.resetUrl.includes('limit=50'), true);
+  assert.deepEqual(result.ids, ['page-1']);
+  assert.equal(result.queued, 2);
+});
+
+test('range all sends no from or to, and a flagged filter pauses the poll', () => {
+  const result = vm.runInNewContext(`
+    const MEMORY_SCROLL_IDLE_MS = 1500;
+    const PIPELINE_MAX_PAGE = 100;
+    const PIPELINE_REFRESH_HEADROOM = 20;
+    const state = {
+      activeView: "pipelineView",
+      pipeline: { project: "", agent: "", state: "", flagged: true, range: "all", customFrom: "", customTo: "", loaded: true, readsDisabled: false, openPopover: "", lastScrollAt: 0, items: [] },
+      drawer: { id: "", task: "" },
+    };
+    const document = { hidden: false };
+    ${uiClientFunction('localDayKey')}
+    ${uiClientFunction('shiftDays')}
+    ${uiClientFunction('parseLocalDay')}
+    ${uiClientFunction('isMemoryDrawerOpen')}
+    ${uiClientFunction('isPipelineFiltered')}
+    ${uiClientFunction('pipelinePollPaused')}
+    ${uiClientFunction('getPipelineRange')}
+    ${uiClientFunction('pipelineUrl')}
+    ${uiClientFunction('pipelineCanPoll')}
+    const allUrl = pipelineUrl(getPipelineRange(), 50, null);
+    const allPoll = pipelineCanPoll();
+    state.pipeline.flagged = false;
+    state.pipeline.range = "7d";
+    const weekUrl = pipelineUrl(getPipelineRange(), 50, null);
+    const weekPoll = pipelineCanPoll();
+    ({ allUrl, allPoll, weekUrl, weekPoll });
+  `, { URLSearchParams });
+  assert.equal(result.allUrl.includes('from='), false);
+  assert.equal(result.allUrl.includes('to='), false);
+  assert.equal(result.allUrl.includes('flagged=1'), true);
+  assert.equal(result.allPoll, false);
+  assert.equal(result.weekUrl.includes('from='), true);
+  assert.equal(result.weekUrl.includes('to='), true);
+  assert.equal(result.weekUrl.includes('flagged='), false);
+  assert.equal(result.weekPoll, true);
+});
+
+test('pipeline pickers merge overview lists with facets, and overview spelling wins', () => {
+  const result = JSON.parse(JSON.stringify(vm.runInNewContext(`
+    const state = {
+      overview: { projects: ["/work/lumen-notes"], agents: ["lumen-agent"] },
+      pipeline: {
+        project: "/work/quay-notes",
+        agent: "",
+        facets: { projects: ["/work/harbor-sync", "/work/Lumen-Notes"], agents: ["quay-agent", "lumen-agent"] },
+      },
+    };
+    ${uiClientFunction('projectBasename')}
+    ${uiClientFunction('isActivitySelected')}
+    ${uiClientFunction('pipelineFacetValues')}
+    ({
+      projects: pipelineFacetValues("project").map((option) => option.value),
+      agents: pipelineFacetValues("agent").map((option) => option.value),
+    });
+  `)));
+  assert.deepEqual(result.projects, ['/work/harbor-sync', '/work/lumen-notes', '/work/quay-notes']);
+  assert.deepEqual(result.agents, ['lumen-agent', 'quay-agent']);
+});
+

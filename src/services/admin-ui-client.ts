@@ -243,14 +243,17 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipeline: {
       project: "",
       agent: "",
-      // One state, or "" for all.
+      // One state, or "" for all. flagged limits the list to needs_confirmation duplicate flags.
       state: "",
+      flagged: false,
       range: "7d",
       customFrom: "",
       customTo: "",
       items: [],
       days: [],
       stages: null,
+      // Distinct projects and agents from the latest page-1 stats response, merged into the pickers.
+      facets: null,
       nextCursor: null,
       window: null,
       key: "",
@@ -543,6 +546,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipelineToolbar: document.getElementById("pipelineToolbar"),
     pipelineRangeButtons: Array.from(document.querySelectorAll("[data-pipeline-range]")),
     pipelineRangeCustom: document.getElementById("pipelineRangeCustom"),
+    pipelineRangeAll: document.getElementById("pipelineRangeAll"),
+    pipelineFlaggedChip: document.getElementById("pipelineFlaggedChip"),
+    pipelineUpdatesPaused: document.getElementById("pipelineUpdatesPaused"),
     pipelineProjectButton: document.getElementById("pipelineProjectButton"),
     pipelineProjectValue: document.getElementById("pipelineProjectValue"),
     pipelineAgentButton: document.getElementById("pipelineAgentButton"),
@@ -2205,8 +2211,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const stuck = Number(overview.queue.stuck_tasks || 0);
       const duplicates = Number(overview.queue.duplicate_flags || 0);
       // The card opens Pipeline on what it warns about, or on the queue when all is well.
+      // Stuck and duplicate counts cover all history, so those links use the internal all-time range.
       setAttr(els.homeQueueCard, "data-pipeline-state", stuck > 0 ? "stuck" : duplicates > 0 ? "duplicate" : "queued");
-      setAttr(els.homeQueueCard, "data-pipeline-range", stuck > 0 || duplicates > 0 ? "30d" : "7d");
+      setAttr(els.homeQueueCard, "data-pipeline-range", stuck > 0 || duplicates > 0 ? "all" : "7d");
       renderHealthCard(
         els.homeQueueCard,
         stuck > 0 || duplicates > 0 ? "warn" : "ok",
@@ -2415,15 +2422,19 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     const queue = overview && overview.queue || {};
     if (Number(queue.stuck_tasks || 0) > 0) {
-      items.push({ severity: "warn", text: t("home.attnStuck", { n: queue.stuck_tasks }), target: "pipelineView", pipelineState: "stuck", pipelineRange: "30d" });
+      items.push({ severity: "warn", text: t("home.attnStuck", { n: queue.stuck_tasks }), target: "pipelineView", pipelineState: "stuck", pipelineRange: "all" });
     }
     if (Number(queue.duplicate_flags || 0) > 0) {
-      items.push({ severity: "warn", text: t("home.attnDuplicates", { n: queue.duplicate_flags }), target: "pipelineView", pipelineState: "duplicate", pipelineRange: "30d" });
+      // The count is needs_confirmation flags. Those tasks may be saved or failed, so state=duplicate misses them.
+      // flagged=1 is that same status, and range all matches the unwindowed overview count.
+      items.push({ severity: "warn", text: t("home.attnDuplicates", { n: queue.duplicate_flags }), target: "pipelineView", pipelineFlagged: "1", pipelineRange: "all" });
     }
     if (summary) {
       const fallback = Number(summary.tasks_today && summary.tasks_today.fallback || 0);
       if (fallback > 0) {
-        items.push({ severity: "warn", text: t("home.attnFallbacks", { n: fallback }), target: "pipelineView", pipelineState: "fallback", pipelineRange: "today" });
+        // tasks_today.fallback counts by result time. A Today range filters task created_at, so it can miss a
+        // result that landed today for an older task. All time + fallback is a superset of every counted task, newest first.
+        items.push({ severity: "warn", text: t("home.attnFallbacks", { n: fallback }), target: "pipelineView", pipelineState: "fallback", pipelineRange: "all" });
       }
       const failed = summary.digests && Array.isArray(summary.digests.failed_recent) ? summary.digests.failed_recent : [];
       failed.forEach((digest) => {
@@ -2518,7 +2529,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setClass(els.homeAttentionCount, "countBadge" + (errors > 0 ? " is-error" : ""));
     setHtmlIfChanged("attention", els.homeAttentionList, JSON.stringify(items), () => items.map((item) => (
       '<li><button class="attentionItem is-' + item.severity + '" type="button" data-nav-target="' + item.target + '"' +
-        (item.pipelineState ? ' data-pipeline-state="' + item.pipelineState + '" data-pipeline-range="' + item.pipelineRange + '"' : '') +
+        (item.pipelineState ? ' data-pipeline-state="' + item.pipelineState + '"' : '') +
+        (item.pipelineRange ? ' data-pipeline-range="' + item.pipelineRange + '"' : '') +
+        (item.pipelineFlagged ? ' data-pipeline-flagged="' + item.pipelineFlagged + '"' : '') +
         (item.title ? ' title="' + escapeHtml(item.title) + '"' : '') + '>' +
         '<span class="attentionDot" aria-hidden="true"></span><span>' + escapeHtml(item.text) + '</span>' +
       '</button></li>'
@@ -5137,12 +5150,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return state.pipeline.items.find((item) => item.task_id === id) || null;
   }
 
-  // Today, 7 and 30 days start at a local midnight and end now; Custom covers whole local days. The API has no
-  // default range, so every request names both ends.
+  // Today, 7 and 30 days start at a local midnight and end now; Custom covers whole local days.
+  // "all" is the internal all-time window used by Home's stuck, flagged and fallback links: no from/to is sent.
+  // Every other request names both ends, because the API has no default range.
   function getPipelineRange() {
     const pipe = state.pipeline;
     const now = new Date();
     const today = shiftDays(now, 0);
+    if (pipe.range === "all") return { from: null, to: null };
     if (pipe.range === "custom") {
       const start = parseLocalDay(pipe.customFrom);
       const end = parseLocalDay(pipe.customTo);
@@ -5153,11 +5168,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return { from: shiftDays(today, -6), to: now };
   }
 
-  // The window's start day is part of the key, so Today and 7 days start over after midnight.
+  // The window's start day is part of the key, so Today and 7 days start over after midnight. All time has none.
   function pipelineKey() {
     const pipe = state.pipeline;
-    return JSON.stringify([pipe.project.toLowerCase(), pipe.agent.toLowerCase(), pipe.state, pipe.range, pipe.customFrom, pipe.customTo,
-      localDayKey(getPipelineRange().from)]);
+    const win = getPipelineRange();
+    return JSON.stringify([pipe.project.toLowerCase(), pipe.agent.toLowerCase(), pipe.state, pipe.flagged ? "1" : "", pipe.range, pipe.customFrom, pipe.customTo,
+      win.from ? localDayKey(win.from) : ""]);
   }
 
   function pipelineUrl(win, limit, cursor) {
@@ -5166,30 +5182,57 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       tz_offset_minutes: String(-new Date().getTimezoneOffset()),
       limit: String(limit),
       stats: cursor ? "0" : "1",
+    });
+    // All time has neither end. Every other window has both, so the toISOString calls stay in this object.
+    const ranged = win.from && win.to ? {
       from: win.from.toISOString(),
       to: win.to.toISOString(),
-    });
+    } : {};
+    if (ranged.from) params.set("from", ranged.from);
+    if (ranged.to) params.set("to", ranged.to);
     if (pipe.project) params.set("project", pipe.project);
     if (pipe.agent) params.set("agent", pipe.agent);
     if (pipe.state) params.set("state", pipe.state);
+    if (pipe.flagged) params.set("flagged", "1");
     if (cursor) params.set("cursor", cursor);
     return "/admin/api/pipeline?" + params.toString();
   }
 
   function isPipelineFiltered() {
     const pipe = state.pipeline;
-    return !!(pipe.project || pipe.agent || pipe.state || pipe.range !== "7d");
+    return !!(pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.range !== "7d");
+  }
+
+  // More rows are on screen than one request can refresh (the limit max is PIPELINE_MAX_PAGE). The poll pauses
+  // instead of splicing a fresh head onto a stale tail.
+  function pipelinePollPaused() {
+    const loaded = Array.isArray(state.pipeline.items) ? state.pipeline.items.length : 0;
+    return loaded + PIPELINE_REFRESH_HEADROOM > PIPELINE_MAX_PAGE;
+  }
+
+  function renderPipelinePauseHint(listHidden) {
+    const show = pipelinePollPaused() && listHidden !== true && !state.pipeline.readsDisabled;
+    setHidden(els.pipelineUpdatesPaused, !show);
+    if (show) setText(els.pipelineUpdatesPaused, t("pipeline.updatesPaused"));
+  }
+
+  // The pause hint reloads page 1 and brings the list header back to the top.
+  function reloadPipelineFromStart() {
+    window.scrollTo(0, 0);
+    void loadPipeline("reset");
   }
 
   // The 5 s poll only refreshes the plain 7 day list, with the drawer and menus closed and the page at rest.
+  // Any other range, including all time, pauses it. So does a list longer than one refresh can replace.
   function pipelineCanPoll() {
     const pipe = state.pipeline;
     return state.activeView === "pipelineView" && !document.hidden && (pipe.loaded || pipe.readsDisabled) &&
-      !isPipelineFiltered() && !isMemoryDrawerOpen() && !pipe.openPopover && Date.now() - pipe.lastScrollAt > MEMORY_SCROLL_IDLE_MS;
+      !pipelinePollPaused() && !isPipelineFiltered() && !isMemoryDrawerOpen() && !pipe.openPopover &&
+      Date.now() - pipe.lastScrollAt > MEMORY_SCROLL_IDLE_MS;
   }
 
-  // mode: "reset" loads page 1 of new filters, "more" appends the next page, "refresh" re-reads the loaded head and
-  // keeps older pages behind it. Only the newest request may write state.
+  // mode: "reset" loads page 1, "more" appends the next page, "refresh" replaces the loaded rows when they still
+  // fit in one request. Past that, refresh does not run. Only the newest request may write state.
   async function loadPipeline(mode) {
     const pipe = state.pipeline;
     const key = pipelineKey();
@@ -5198,6 +5241,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (mode !== "reset" && key !== pipe.key) mode = "reset";
     if (mode === "refresh" && pipe.busySeq) return;
     if (mode === "refresh" && !pipe.loaded) mode = "reset";
+    if (mode === "refresh" && pipelinePollPaused()) return;
     if (mode === "more" && (!pipe.nextCursor || !pipe.window || pipe.moreSeq)) return;
     const seq = pipe.seq + 1;
     pipe.seq = seq;
@@ -5225,6 +5269,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         pipe.items = [];
         pipe.days = [];
         pipe.stages = null;
+        pipe.facets = null;
         pipe.nextCursor = null;
         pipe.window = null;
         pipe.loaded = false;
@@ -5247,26 +5292,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           pipe.items = pipe.items.concat(incoming.filter((item) => !seen.has(item.task_id)));
           pipe.days = mergeMemoryDays(pipe.days, days);
           pipe.nextCursor = payload.next_cursor || null;
-        } else if (mode === "refresh" && loaded + PIPELINE_REFRESH_HEADROOM > PIPELINE_MAX_PAGE && incoming.length && payload.next_cursor) {
-          // More rows are loaded than one request returns: the refreshed head replaces its part and the older
-          // pages stay behind it, with the cursor (and its window) that already points past them.
-          const index = pipe.items.findIndex((item) => item.task_id === incoming[incoming.length - 1].task_id);
-          if (index >= 0) {
-            pipe.items = incoming.concat(pipe.items.slice(index + 1));
-            pipe.days = mergeMemoryDays(pipe.days, days);
-          } else {
-            pipe.items = incoming;
-            pipe.days = mergeMemoryDays([], days);
-            pipe.nextCursor = payload.next_cursor || null;
-            pipe.window = win;
-          }
         } else {
           pipe.items = incoming;
           pipe.days = mergeMemoryDays([], days);
           pipe.nextCursor = payload.next_cursor || null;
           pipe.window = win;
         }
-        if (!cursor) pipe.stages = payload.stages || null;
+        if (!cursor) {
+          pipe.stages = payload.stages || null;
+          if (payload.facets && typeof payload.facets === "object") {
+            pipe.facets = {
+              projects: Array.isArray(payload.facets.projects) ? payload.facets.projects.filter((value) => typeof value === "string" && value) : [],
+              agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => typeof value === "string" && value) : [],
+            };
+          }
+        }
         pipe.loaded = true;
         pipe.refreshFailed = false;
         pipe.error = "";
@@ -5283,6 +5323,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         pipe.items = [];
         pipe.days = [];
         pipe.stages = null;
+        pipe.facets = null;
         pipe.nextCursor = null;
         pipe.window = null;
         pipe.loaded = false;
@@ -5296,6 +5337,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (pipe.moreSeq === seq) pipe.moreSeq = 0;
       if (seq === pipe.seq) {
         pipe.stale = false;
+        renderPipelinePauseHint();
         renderPipeline();
       }
     }
@@ -5307,25 +5349,41 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function clearPipelineFilters() {
-    setPipelineFilters({ project: "", agent: "", state: "", range: "7d", customFrom: "", customTo: "" });
+    setPipelineFilters({ project: "", agent: "", state: "", flagged: false, range: "7d", customFrom: "", customTo: "" });
   }
 
   // Home's queue and attention links land here with one state picked; activateView then loads page 1.
-  function presetPipelineFilters(stateValue, range) {
+  // range "all" sends no from/to. flagged "1" is the needs_confirmation duplicate-flag filter.
+  function presetPipelineFilters(stateValue, range, flagged) {
     Object.assign(state.pipeline, {
       project: "",
       agent: "",
       state: PIPELINE_STATES.includes(stateValue) ? stateValue : "",
-      range: range === "today" || range === "30d" ? range : "7d",
+      range: range === "today" || range === "30d" || range === "all" ? range : "7d",
       customFrom: "",
       customTo: "",
+      flagged: flagged === "1",
     });
   }
 
-  // Project and agent lists come from the 5 s overview.
+  // Project and agent lists merge the 5 s overview with the pipeline facets, so a project that only has
+  // queued or failed tasks still appears. Overview wins on a case-insensitive clash.
   function pipelineFacetValues(name) {
-    const raw = state.overview && Array.isArray(state.overview[name === "project" ? "projects" : "agents"]) ? state.overview[name === "project" ? "projects" : "agents"] : [];
-    const values = raw.map((value) => (typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || ""))).filter(Boolean);
+    const key = name === "project" ? "projects" : "agents";
+    const overviewRaw = state.overview && Array.isArray(state.overview[key]) ? state.overview[key] : [];
+    const facetRaw = state.pipeline.facets && Array.isArray(state.pipeline.facets[key]) ? state.pipeline.facets[key] : [];
+    const seen = new Set();
+    const values = [];
+    const push = (value) => {
+      const text = typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || "");
+      if (!text) return;
+      const fold = text.toLowerCase();
+      if (seen.has(fold)) return;
+      seen.add(fold);
+      values.push(text);
+    };
+    overviewRaw.forEach(push);
+    facetRaw.forEach(push);
     const selected = state.pipeline[name];
     if (selected && !values.some((value) => isActivitySelected(value, selected))) values.push(selected);
     const label = (value) => (name === "project" ? projectBasename(value) : value);
@@ -5374,6 +5432,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.pipelineRangeButtons.forEach((button) => {
       setAttr(button, "aria-pressed", button.getAttribute("data-pipeline-range") === pipe.range ? "true" : "false");
     });
+    const allTime = pipe.range === "all";
+    setHidden(els.pipelineRangeAll, !allTime);
+    setAttr(els.pipelineRangeAll, "aria-current", allTime ? "true" : null);
+    setHidden(els.pipelineFlaggedChip, !pipe.flagged);
     // A custom range names its days on the segment itself.
     let customText = t("pipeline.rangeCustom");
     const start = parseLocalDay(pipe.customFrom);
@@ -5482,7 +5544,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       notice = { tone: " is-error", title: t("pipeline.errorTitle"), lead: pipe.error, action: ["retry", t("pipeline.retry")] };
     } else if (pipe.loaded && !pipe.stale && !pipe.items.length) {
       // Quiet weeks are common: offer a wider window before anything else.
-      if (pipe.project || pipe.agent || pipe.state) {
+      if (pipe.project || pipe.agent || pipe.state || pipe.flagged) {
         notice = { tone: "", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
       } else if (pipe.range === "today") {
         notice = { tone: "", title: t("pipeline.emptyTodayTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show7d")] };
@@ -5516,6 +5578,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const noticed = renderPipelineNotice();
     setHidden(list, noticed);
     setHidden(els.pipelineListHead, noticed);
+    renderPipelinePauseHint(noticed);
     setAttr(list, "aria-busy", pipe.stale || !pipe.loaded ? "true" : "false");
     list.classList.toggle("is-stale", pipe.stale && pipe.items.length > 0);
     setHidden(els.pipelineLoadMore, noticed || !pipe.nextCursor);
@@ -5775,6 +5838,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (stage) {
         const value = stage.getAttribute("data-pipeline-stage");
         setPipelineFilters({ state: pipe.state === value ? "" : value });
+        return;
+      }
+      if (event.target.closest("#pipelineUpdatesPaused")) {
+        reloadPipelineFromStart();
+        return;
+      }
+      if (event.target.closest("#pipelineFlaggedChip")) {
+        setPipelineFilters({ flagged: false });
         return;
       }
       if (event.target.closest("#pipelineLoadMore")) {
@@ -6482,6 +6553,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipe.items = [];
     pipe.days = [];
     pipe.stages = null;
+    pipe.facets = null;
     pipe.nextCursor = null;
     pipe.window = null;
     pipe.loaded = false;
@@ -7140,8 +7212,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         activatePanel(devPanel);
       }
       // Home's queue card and attention items open Pipeline filtered to the state they count.
-      if (trigger.hasAttribute("data-pipeline-state")) {
-        presetPipelineFilters(trigger.getAttribute("data-pipeline-state"), trigger.getAttribute("data-pipeline-range"));
+      if (trigger.hasAttribute("data-pipeline-state") || trigger.hasAttribute("data-pipeline-flagged")) {
+        presetPipelineFilters(trigger.getAttribute("data-pipeline-state"), trigger.getAttribute("data-pipeline-range"), trigger.getAttribute("data-pipeline-flagged"));
       }
       activateView(trigger.getAttribute("data-nav-target"));
       // Legacy panels sit below the hero and the tab dock, and "View all" is clicked from the bottom of Home,

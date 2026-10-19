@@ -5539,6 +5539,77 @@ ${WALLPAPER_CSS}
     margin-left: auto;
   }
 
+  .pipeFlagChip {
+    flex: 0 0 auto;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    min-height: 32px;
+    padding: 0 10px 0 12px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--p-dup-fill);
+    color: var(--p-dup-ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .pipeFlagChip::after {
+    content: "×";
+    font-weight: 500;
+    opacity: 0.75;
+  }
+
+  .pipeFlagChip[hidden] {
+    display: none !important;
+  }
+
+  /* All time is an internal range (Home links). It is a state of this control, not a fifth permanent button. */
+  .pipeRangeAll {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 0 24px;
+    border: 1px solid var(--a-seg-on-border);
+    border-radius: 22px;
+    background: var(--a-seg-on-fill);
+    box-shadow: var(--a-seg-on-shadow);
+    color: var(--a-seg-on-ink);
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .pipeRangeAll[hidden] {
+    display: none !important;
+  }
+
+  .pipePause {
+    display: flex;
+    justify-content: flex-end;
+    margin: 2px 18px 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-3);
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.4;
+    cursor: pointer;
+  }
+
+  .pipePause:hover {
+    color: var(--text-2);
+  }
+
+  .pipePause[hidden] {
+    display: none !important;
+  }
+
   /* Flow strip: one glass capsule with the in-flight stages joined by chevrons, then the outcomes. Stuck sits
      apart as its own chip. Each stage is an orb with a dot and a label over the count. */
   .pipeFlowRow {

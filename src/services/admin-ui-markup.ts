@@ -609,8 +609,10 @@ function renderPipelineView(): string {
 
         <div class="memToolbar pipeToolbar glassSurface glassBlur" id="pipelineToolbar" role="group" data-i18n-aria-label="pipeline.toolbarLabel" aria-label="Pipeline filters">
           <div class="pipeFilters">${renderMemoryPopup('pipelineProject', 'pipeline.project', 'Project')}${renderMemoryPopup('pipelineAgent', 'pipeline.agent', 'Agent')}${renderMemoryPopup('pipelineState', 'pipeline.state', 'State')}
+            <button class="pipeFlagChip" id="pipelineFlaggedChip" type="button" hidden data-i18n="pipeline.flaggedChip" data-i18n-title="pipeline.flaggedRemove" title="Remove flagged duplicates">Flagged duplicates</button>
           </div>
           <div class="actSegmented memSegmented" id="pipelineRangeControl" role="group" data-i18n-aria-label="pipeline.rangeLabel" aria-label="Time range">${segments}
+            <span class="pipeRangeAll" id="pipelineRangeAll" hidden data-i18n="pipeline.rangeAll">All time</span>
           </div>
         </div>
 
@@ -629,6 +631,7 @@ function renderPipelineView(): string {
         </div>
 
         <div class="memBoard pipeBoard" id="pipelineBoard">
+          <button class="pipePause" id="pipelineUpdatesPaused" type="button" hidden data-i18n="pipeline.updatesPaused">Updates paused – Refresh</button>
           <div class="memHead pipeHead" id="pipelineListHead" aria-hidden="true">${column('pipeline.colTime', 'Time')}${column('pipeline.colState', 'State')}${column('pipeline.colTask', 'Task / Title')}${column('pipeline.colProject', 'Project')}${column('pipeline.colAgent', 'Agent')}${column('pipeline.colLlm', 'LLM calls', ' is-num')}${column('pipeline.colAttempts', 'Attempts', ' is-num')}
           </div>
           <div class="memList pipeList" id="pipelineList" role="region" data-i18n-aria-label="pipeline.listLabel" aria-label="Tasks by day" aria-busy="true"></div>
