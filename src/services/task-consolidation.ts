@@ -106,10 +106,140 @@ export function frozenTasks(db: DatabaseManager): { task_id: string; session_id:
     WHERE COALESCE(a.attempts, 0) < ? AND NOT ${TASK_COMPLETE_SQL('t.task_id')}`, [MAX_TASK_ATTEMPTS]);
 }
 
-/** Tasks that exhausted their retries and are not complete (partial results included). */
-export function stuckTaskCount(db: DatabaseManager): number {
-  return db.sqlGet(`SELECT COUNT(*) AS n FROM task_attempts a WHERE a.attempts >= ? AND NOT ${TASK_COMPLETE_SQL('a.task_id')}`,
-    [MAX_TASK_ATTEMPTS]).n;
+const STUCK_FLOOR_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A task is stale only after it has been quiet longer than a real idle/retry cycle.
+ * The floor is 24h, so a task still inside the idle window is never stale.
+ */
+export function stuckStaleMs(env: NodeJS.ProcessEnv = process.env): number {
+  return Math.max(STUCK_FLOOR_MS, 2 * taskIdleMs(env) + taskRetryMs(env));
+}
+
+export interface TaskPipelineSqlOpts {
+  nowMs: number;
+  /** JSON array of in-flight task ids. Bound once and read with json_each. */
+  inflightJson: string;
+  staleMs: number;
+}
+
+/**
+ * Statement-level CTE body (no leading WITH) ending in `pipeline_tasks`: one lean row per task id with the
+ * aggregate fields, `state`, `stuck_reason` and `partial`. Detail fields (trigger, observation, errors, title) are
+ * looked up per page row by the caller. Task ids are a UNION of the four sources; each source is aggregated once
+ * (GROUP BY) and LEFT JOINed, and every side table may be absent for a task. The only per-task correlated probe is
+ * TASK_COMPLETE_SQL. Open/closed is never inferred by comparing completion time with result times.
+ */
+export function taskPipelineSql(opts: TaskPipelineSqlOpts): { sql: string; params: any[] } {
+  const ms = (col: string) => `CAST(ROUND((julianday(${col}) - 2440587.5) * 86400000) AS INTEGER)`;
+  // Partial: unfinished segment rows that will never be retried. Either the task is complete, or it was closed
+  // (a task_completions row, even a backfilled 0) and frozenTasks cannot pick it up again. Never stuck.
+  const partial = `(pending_segments > 0 AND (is_complete = 1 OR (is_closed = 1 AND is_retriable = 0)))`;
+  const stale = `(updated_ms IS NOT NULL AND (? - updated_ms) > ?)`;
+  const sql = `inflight_ids AS MATERIALIZED (SELECT DISTINCT value AS task_id FROM json_each(?)),
+    buf_frozen AS MATERIALIZED (
+      SELECT substr(task_result_id, 6) AS task_id, COUNT(*) AS n, MIN(received_ms) AS min_ms, MAX(received_ms) AS max_ms,
+        session_id, project_path, agent_id
+      FROM task_event_buffer WHERE task_result_id >= 'task:' AND task_result_id < 'task;' GROUP BY task_result_id
+    ),
+    buf_done AS MATERIALIZED (
+      SELECT r.task_id, SUM(g.n) AS n, MIN(g.min_ms) AS min_ms, MAX(g.max_ms) AS max_ms
+      FROM (SELECT task_result_id, COUNT(*) AS n, MIN(received_ms) AS min_ms, MAX(received_ms) AS max_ms FROM task_event_buffer
+            WHERE task_result_id IS NOT NULL AND NOT (task_result_id >= 'task:' AND task_result_id < 'task;') GROUP BY task_result_id) g
+      JOIN task_results r ON r.id = g.task_result_id GROUP BY r.task_id
+    ),
+    ev_agg AS MATERIALIZED (
+      SELECT task_id, COUNT(*) AS n, MIN(received_ms) AS min_ms, MAX(received_ms) AS max_ms, session_id, project_path, agent_id
+      FROM tool_evidence WHERE task_id IS NOT NULL GROUP BY task_id
+    ),
+    res_first AS MATERIALIZED (
+      SELECT task_id, session_id, project_path, agent_id, MIN(segment_index) AS first_segment FROM task_results GROUP BY task_id
+    ),
+    res_agg AS MATERIALIZED (
+      SELECT task_id, COUNT(*) AS result_rows, COALESCE(SUM(llm_calls), 0) AS llm_calls, COALESCE(MAX(segment_count), 0) AS segment_count,
+        SUM(CASE WHEN status NOT IN ('saved', 'fallback', 'duplicate', 'skipped') THEN 1 ELSE 0 END) AS pending_segments,
+        SUM(CASE WHEN status NOT IN ('saved', 'fallback', 'duplicate', 'skipped') AND TRIM(COALESCE(last_error, '')) <> '' THEN 1 ELSE 0 END) AS pending_errors,
+        MAX(source_kind = 'legacy_compacted') AS any_legacy, MAX(source_kind = 'task') AS any_task_source,
+        MAX(status = 'fallback') AS any_fallback, MAX(status = 'saved') AS any_saved, MAX(status = 'duplicate') AS any_duplicate,
+        MIN(${ms('created_at')}) AS min_ms, MAX(${ms('created_at')}) AS max_ms
+      FROM task_results GROUP BY task_id
+    ),
+    task_ids AS MATERIALIZED (
+      SELECT task_id FROM buf_frozen UNION SELECT task_id FROM buf_done UNION SELECT task_id FROM ev_agg
+      UNION SELECT task_id FROM res_agg UNION SELECT task_id FROM task_attempts
+    ),
+    pipeline_core AS (
+      SELECT ids.task_id,
+        COALESCE(rf.session_id, bf.session_id, ev.session_id, a.session_id) AS session_id,
+        COALESCE(rf.project_path, bf.project_path, ev.project_path) AS project_path,
+        COALESCE(rf.agent_id, bf.agent_id, ev.agent_id) AS agent_id,
+        CASE WHEN res.any_legacy = 1 THEN 'legacy_compacted' ELSE 'task' END AS source_kind,
+        NULLIF(MIN(COALESCE(bf.min_ms, 9e18), COALESCE(bd.min_ms, 9e18), COALESCE(ev.min_ms, 9e18), COALESCE(res.min_ms, 9e18)), 9e18) AS created_ms,
+        NULLIF(MAX(COALESCE(bf.max_ms, -1), COALESCE(bd.max_ms, -1), COALESCE(ev.max_ms, -1), COALESCE(res.max_ms, -1),
+          COALESCE(a.updated_ms, -1), CASE WHEN c.completed_ms > 0 THEN c.completed_ms ELSE -1 END), -1) AS updated_ms,
+        COALESCE(a.attempts, 0) AS attempts, COALESCE(res.llm_calls, 0) AS llm_calls, COALESCE(res.segment_count, 0) AS segment_count,
+        COALESCE(res.result_rows, 0) AS result_rows,
+        COALESCE(bf.n, 0) + COALESCE(bd.n, 0) + COALESCE(ev.n, 0) AS evidence_count,
+        COALESCE(res.pending_segments, 0) AS pending_segments, COALESCE(res.pending_errors, 0) AS pending_errors,
+        COALESCE(res.any_fallback, 0) AS any_fallback, COALESCE(res.any_saved, 0) AS any_saved, COALESCE(res.any_duplicate, 0) AS any_duplicate,
+        TRIM(COALESCE(a.last_error, '')) <> '' AS attempt_error,
+        CASE WHEN ${TASK_COMPLETE_SQL('ids.task_id')} THEN 1 ELSE 0 END AS is_complete,
+        c.task_id IS NOT NULL AS is_closed,
+        (bf.task_id IS NOT NULL OR ev.task_id IS NOT NULL OR COALESCE(res.any_task_source, 0) = 1) AS is_retriable,
+        inf.task_id IS NOT NULL AS is_inflight
+      FROM task_ids ids
+      LEFT JOIN res_agg res ON res.task_id = ids.task_id
+      LEFT JOIN res_first rf ON rf.task_id = ids.task_id
+      LEFT JOIN buf_frozen bf ON bf.task_id = ids.task_id
+      LEFT JOIN buf_done bd ON bd.task_id = ids.task_id
+      LEFT JOIN ev_agg ev ON ev.task_id = ids.task_id
+      LEFT JOIN task_attempts a ON a.task_id = ids.task_id
+      LEFT JOIN task_completions c ON c.task_id = ids.task_id
+      LEFT JOIN inflight_ids inf ON inf.task_id = ids.task_id
+    ),
+    pipeline_tasks AS (
+      SELECT task_id, session_id, project_path, agent_id, source_kind, CAST(created_ms AS INTEGER) AS created_ms, CAST(updated_ms AS INTEGER) AS updated_ms,
+        attempts, ${MAX_TASK_ATTEMPTS} AS max_attempts, llm_calls, segment_count, evidence_count, pending_segments,
+        CASE WHEN segment_count > result_rows THEN segment_count - result_rows ELSE 0 END AS missing_segments,
+        any_fallback AS fallback, CASE WHEN ${partial} THEN 1 ELSE 0 END AS partial,
+        CASE
+          WHEN ${partial} THEN 'failed'
+          WHEN is_complete = 1 THEN CASE WHEN any_fallback = 1 THEN 'fallback' WHEN any_saved = 1 THEN 'saved'
+            WHEN any_duplicate = 1 THEN 'duplicate' ELSE 'skipped' END
+          WHEN is_inflight = 1 THEN 'processing'
+          WHEN attempts >= ${MAX_TASK_ATTEMPTS} THEN 'stuck'
+          WHEN ${stale} THEN 'stuck'
+          WHEN attempts >= 1 OR pending_errors > 0 OR attempt_error = 1 THEN 'failed'
+          ELSE 'queued'
+        END AS state,
+        CASE
+          WHEN ${partial} OR is_complete = 1 OR is_inflight = 1 THEN NULL
+          WHEN attempts >= ${MAX_TASK_ATTEMPTS} THEN 'exhausted'
+          WHEN ${stale} THEN 'stale'
+          ELSE NULL
+        END AS stuck_reason
+      FROM pipeline_core
+    )`;
+  return { sql, params: [opts.inflightJson, opts.nowMs, opts.staleMs, opts.nowMs, opts.staleMs] };
+}
+
+export interface StuckTaskCountOpts {
+  nowMs?: number;
+  inflight?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+}
+
+/** Tasks in state `stuck` (exhausted or stale), same classifier as GET /admin/api/pipeline. */
+export function stuckTaskCount(db: DatabaseManager, opts?: StuckTaskCountOpts): number {
+  const env = opts?.env ?? process.env;
+  const inflight = opts?.inflight ?? inflightTaskIds();
+  const built = taskPipelineSql({
+    nowMs: opts?.nowMs ?? Date.now(),
+    inflightJson: JSON.stringify(inflight.map((id) => String(id))),
+    staleMs: stuckStaleMs(env),
+  });
+  const row = db.sqlGet(`WITH ${built.sql} SELECT COUNT(*) AS n FROM pipeline_tasks WHERE state = 'stuck'`, built.params);
+  return Number(row?.n || 0);
 }
 
 /**
@@ -191,6 +321,8 @@ export interface ConsolidationResult { task_id: string | null; llm_calls: number
 
 const inflight = new Set<string>();
 export function isTaskInFlight(taskId: string) { return inflight.has(taskId); }
+/** Task ids currently inside consolidateTask in this process. */
+export function inflightTaskIds(): string[] { return [...inflight]; }
 
 /**
  * Shared by task and legacy consolidation: what an interrupted earlier attempt already saved for this result
