@@ -294,10 +294,10 @@ test('project and agent pickers list All first and use first-page facets', () =>
   assert.equal(result.projects[1].title, '/work/harbor-sync');
   assert.equal(result.agents[0].label, 'All agents');
   const agentOptions = result.agents.slice(1);
-  assert.deepEqual(agentOptions.map((item) => item.value).sort(), ['codex', 'grok-build']);
+  assert.deepEqual(Array.from(agentOptions, (item) => item.value).sort(), ['codex', 'grok-build']);
   assert.equal(agentOptions.find((item) => item.value === 'grok-build').label, 'Grok Build');
   assert.equal(agentOptions.find((item) => item.value === 'codex').label, 'codex');
-  const agentLabels = agentOptions.map((item) => item.label);
+  const agentLabels = Array.from(agentOptions, (item) => item.label);
   assert.deepEqual(agentLabels, [...agentLabels].sort((left, right) => left.localeCompare(right)));
 });
 

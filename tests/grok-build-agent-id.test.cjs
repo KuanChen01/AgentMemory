@@ -156,15 +156,15 @@ test('reads alias grok and grok-build while stored grok rows stay grok', withDb(
       event_count, source_ids, trigger, status, observation_id, llm_calls, created_at)
       VALUES ('res-codex', 'task-codex', 'sess-grok-build', ?, 'codex', 0, 1, 1, '[]', 'user_prompt', 'saved', 'obs-codex', 0, ?)`, [PROJECT, DAY]);
     for (const row of [
-      { id: 'd-alias', sources: ['obs-legacy-grok', 'obs-display'] },
-      { id: 'd-bot', sources: ['obs-bot'] },
-      { id: 'd-codex', sources: ['obs-codex'] },
+      { id: 'd-alias', day: '2026-10-18', sources: ['obs-legacy-grok', 'obs-display'] },
+      { id: 'd-bot', day: '2026-10-17', sources: ['obs-bot'] },
+      { id: 'd-codex', day: '2026-10-16', sources: ['obs-codex'] },
     ]) {
       tx.run(`INSERT INTO daily_memory_digests (
           id, project_path, local_date, status, digest_json, source_observation_ids, source_count,
           model, prompt_version, generated_at
-        ) VALUES (?, ?, '2026-10-18', 'success', ?, ?, ?, NULL, 'daily-digest-v1', '2026-10-18T12:00:00.000Z')`, [
-        row.id, PROJECT, JSON.stringify({ summary: row.id }), JSON.stringify(row.sources), row.sources.length,
+        ) VALUES (?, ?, ?, 'success', ?, ?, ?, NULL, 'daily-digest-v1', '2026-10-18T12:00:00.000Z')`, [
+        row.id, PROJECT, row.day, JSON.stringify({ summary: row.id }), JSON.stringify(row.sources), row.sources.length,
       ]);
     }
   });
@@ -383,7 +383,7 @@ test('admin client labels Grok Build and dedupes alias options', () => {
   assert.equal(result.slash, 'codex/local_fit');
   assert.equal(result.same, true);
   assert.equal(result.apart, false);
-  assert.deepEqual(result.options.map((option) => option.value).sort(), ['codex', 'grok-bot', 'grok-build']);
+  assert.deepEqual(Array.from(result.options, (option) => option.value).sort(), ['codex', 'grok-bot', 'grok-build']);
   assert.equal(result.options.find((option) => option.value === 'grok-build').label, 'Grok Build');
   assert.equal(result.options.find((option) => option.value === 'grok-bot').label, 'Grok Bot');
 });
