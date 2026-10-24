@@ -181,7 +181,7 @@ test('Skills client wiring: sequencing, stale cursor, reads off, backdrop, docki
 function skillsContext(writeEnabled = true) {
   const context = vm.createContext({ UI: ADMIN_UI_TRANSLATIONS.en, writeEnabled, state: {
     locale: 'en',
-    skills: { status: 'candidate', days: 30, items: [], pending: {}, notes: {}, readsDisabled: false },
+    skills: { status: 'candidate', days: 30, items: [], pending: {}, promoted: {}, notes: {}, readsDisabled: false },
     drawer: { skill: '', skillPayload: null, skillItem: null, skillRecord: { outcome: 'success', notes: '' }, readsDisabled: false },
   } });
   vm.runInContext(`
@@ -198,6 +198,9 @@ function skillsContext(writeEnabled = true) {
     ${uiClientFunction('projectAgo')}
     ${uiClientFunction('skillWritesOff')}
     ${uiClientFunction('skillWritePending')}
+    ${uiClientFunction('findSkillItem')}
+    ${uiClientFunction('skillDrawerItem')}
+    ${uiClientFunction('skillDrawerSignature')}
     ${uiClientFunction('skillVariant')}
     ${uiClientFunction('skillMatchedAgo')}
     ${uiClientFunction('skillSource')}
@@ -349,10 +352,12 @@ test('skill writes: confirm before disable or retire, no delete, writes-off stay
   }
   assert.match(uiClientFunction('runSkillAction'), /body = \{ project_path: item\.project_path, local_date: ref\.local_date, candidate_index: ref\.candidate_index \}/);
   assert.match(uiClientFunction('runSkillAction'), /"\/admin\/api\/skills\/promote-candidate"/);
+  assert.match(uiClientFunction('runSkillAction'), /if \(action === "promote" && \(skl\.promoted \|\| \{\}\)\[id\]\) return;/);
   assert.match(uiClientFunction('runSkillAction'), /if \(!item \|\| skl\.pending\[id\] \|\| skillWritePending\(\)\) return;/);
   assert.match(uiClientFunction('recordSkillFeedback'), /body = \{ skill_id: id, project_path: item\.project_path, outcome: record\.outcome \}/);
   assert.match(uiClientFunction('refreshSkillAfterWrite'), /loadSkills\("reset"\)/);
-  assert.match(uiClientFunction('refreshSkillAfterWrite'), /openSkillDrawer\(drawer\.skill === previousId \? nextId : drawer\.skill, null\)/);
+  assert.match(uiClientFunction('refreshSkillAfterWrite'), /await loadSkills\("reset"\)/);
+  assert.match(uiClientFunction('refreshSkillAfterWrite'), /\(forceOpen \|\| drawer\.skill === previousId\) \? nextId : drawer\.skill/);
 });
 
 test('list and detail stay on the newest request, a missing skill is quiet, and the dev panel is preset without rendering the path', () => {
@@ -430,4 +435,160 @@ test('Skills joins the shared glass tokens in light and dark and docks the drawe
   for (const selector of selectors) {
     assert.match(selector, /^\.sidebar\b|\.is-active\b/, `${selector} would blur hidden surfaces`);
   }
+});
+
+function skillsWriteHarness() {
+  const item = {
+    id: candidate.id,
+    kind: 'digest_candidate',
+    name: candidate.name,
+    status: 'candidate',
+    stored_status: null,
+    project_path: '/work/harbor-sync',
+    candidate_ref: { local_date: '2026-10-23', candidate_index: 0 },
+  };
+  const gate = { fetch: null, load: null };
+  const opens = [];
+  const posts = [];
+  const context = vm.createContext({
+    posts,
+    opens,
+    gate,
+    state: {
+      skills: {
+        status: 'candidate',
+        days: 30,
+        items: [item],
+        pending: {},
+        promoted: {},
+        notes: {},
+        readsDisabled: false,
+      },
+      drawer: {
+        host: '',
+        skill: '',
+        skillPayload: null,
+        skillItem: null,
+        skillRecord: { outcome: 'success', notes: '' },
+        readsDisabled: false,
+      },
+    },
+  });
+  vm.runInContext(`
+    const SKILL_STATUS_WRITES = { enable: ["enabled", "skills.noteEnabled"], reenable: ["enabled", "skills.noteEnabled"], disable: ["disabled", "skills.noteDisabled"], retire: ["retired", "skills.noteRetired"] };
+    function t(key) { return key; }
+    function skillWritesOff() { return false; }
+    function skillWritePending() {
+      const pending = state.skills.pending || {};
+      return Object.keys(pending).some((key) => pending[key]);
+    }
+    function findSkillItem(id) {
+      return state.skills.items.find((entry) => String(entry.id) === id) || null;
+    }
+    function skillDrawerItem() {
+      const drawer = state.drawer;
+      if (!drawer.skill) return null;
+      if (drawer.skillPayload && drawer.skillPayload.skill) return drawer.skillPayload.skill;
+      return findSkillItem(drawer.skill) || drawer.skillItem;
+    }
+    function setSkillNote(id, tone, text) { if (id) state.skills.notes[id] = { tone, text }; }
+    function skillWriteRejected(_id, payload) { return !!(payload && payload.success === false); }
+    function renderSkills() { state.renders = (state.renders || 0) + 1; }
+    function fetchJson(url, options) {
+      posts.push({ url, body: JSON.parse(options.body) });
+      return new Promise((resolve, reject) => { gate.fetch = { resolve, reject }; });
+    }
+    function loadSkills() {
+      return new Promise((resolve) => { gate.load = resolve; });
+    }
+    function openSkillDrawer(id) { opens.push(id); }
+    ${uiClientFunction('refreshSkillAfterWrite')}
+    ${uiClientFunction('runSkillAction')}
+  `, context);
+  return { context, gate, opens, posts };
+}
+
+async function settleGate(gate, key) {
+  for (let step = 0; step < 30 && !gate[key]; step += 1) await Promise.resolve();
+  assert.ok(gate[key], `expected ${key} to be pending`);
+}
+
+test('a second Promote for the same candidate is ignored until the list refresh', async () => {
+  const { context, gate, opens, posts } = skillsWriteHarness();
+  const first = vm.runInContext(`runSkillAction(${JSON.stringify(candidate.id)}, "promote")`, context);
+  const inFlight = vm.runInContext(`runSkillAction(${JSON.stringify(candidate.id)}, "promote")`, context);
+  assert.equal(context.state.skills.pending[candidate.id], 'promote');
+  assert.equal(posts.length, 1);
+  await settleGate(gate, 'fetch');
+  gate.fetch.resolve({ success: true, skill: { id: 'sk_new' } });
+  await settleGate(gate, 'load');
+  assert.equal(context.state.skills.promoted[candidate.id], 'sk_new');
+  assert.equal(context.state.skills.items[0].id, 'sk_new');
+  assert.equal(context.state.skills.items[0].kind, 'skill');
+  assert.equal(context.state.skills.items[0].stored_status, 'draft');
+  assert.equal(context.state.skills.pending[candidate.id], 'promote');
+  const afterSuccess = vm.runInContext(`runSkillAction(${JSON.stringify(candidate.id)}, "promote")`, context);
+  gate.load();
+  await first;
+  await inFlight;
+  await afterSuccess;
+  const afterRefresh = vm.runInContext(`runSkillAction(${JSON.stringify(candidate.id)}, "promote")`, context);
+  await afterRefresh;
+  assert.equal(posts.length, 1);
+  assert.equal(context.state.skills.pending[candidate.id], undefined);
+  assert.deepEqual(opens, ['sk_new']);
+  assert.equal(context.state.skills.notes.sk_new.tone, 'ok');
+});
+
+test('promoting from a row opens the drawer on the new draft, or the candidate id when the response has no id', async () => {
+  const withId = skillsWriteHarness();
+  const fromRow = vm.runInContext(`runSkillAction(${JSON.stringify(candidate.id)}, "promote")`, withId.context);
+  await settleGate(withId.gate, 'fetch');
+  withId.gate.fetch.resolve({ success: true, skill: { id: 'sk_row' } });
+  await settleGate(withId.gate, 'load');
+  assert.deepEqual(withId.opens, ['sk_row']);
+  withId.gate.load();
+  await fromRow;
+
+  const fromDrawer = skillsWriteHarness();
+  fromDrawer.context.state.drawer.host = 'skillsView';
+  fromDrawer.context.state.drawer.skill = candidate.id;
+  fromDrawer.context.state.drawer.skillItem = fromDrawer.context.state.skills.items[0];
+  const drawerPromote = vm.runInContext(`runSkillAction(${JSON.stringify(candidate.id)}, "promote")`, fromDrawer.context);
+  await settleGate(fromDrawer.gate, 'fetch');
+  fromDrawer.gate.fetch.resolve({ success: true, skill: { id: 'sk_drawer' } });
+  await settleGate(fromDrawer.gate, 'load');
+  assert.deepEqual(fromDrawer.opens, ['sk_drawer']);
+  fromDrawer.gate.load();
+  await drawerPromote;
+
+  const fallback = skillsWriteHarness();
+  const noId = vm.runInContext(`runSkillAction(${JSON.stringify(candidate.id)}, "promote")`, fallback.context);
+  await settleGate(fallback.gate, 'fetch');
+  fallback.gate.fetch.resolve({ success: true, skill: {} });
+  await settleGate(fallback.gate, 'load');
+  assert.deepEqual(fallback.opens, [candidate.id]);
+  fallback.gate.load();
+  await noId;
+});
+
+test('row and drawer signatures include the global write-pending state so sibling actions re-enable', () => {
+  assert.match(uiClientFunction('syncSkillRows'), /const signature = \[state\.locale, skl\.days, mode, off, skillWritePending\(\)/);
+  assert.match(uiClientFunction('skillDrawerSignature'), /state\.skills\.pending\[id\] \|\| "", skillWritePending\(\)/);
+  const context = skillsContext();
+  const before = vm.runInContext('skillDrawerSignature()', context);
+  const rowBefore = vm.runInContext(`renderSkillRowBody(${JSON.stringify(candidate)}, "source")`, context);
+  assert.doesNotMatch(rowBefore, /aria-disabled="true"/);
+  vm.runInContext('state.skills.pending.other = "enable";', context);
+  const during = vm.runInContext('skillDrawerSignature()', context);
+  const rowDuring = vm.runInContext(`renderSkillRowBody(${JSON.stringify(candidate)}, "source")`, context);
+  assert.notEqual(during, before);
+  assert.match(rowDuring, /aria-disabled="true"/);
+  vm.runInContext('state.skills.pending = {};', context);
+  const after = vm.runInContext('skillDrawerSignature()', context);
+  const rowAfter = vm.runInContext(`renderSkillRowBody(${JSON.stringify(candidate)}, "source")`, context);
+  assert.equal(after, before);
+  assert.doesNotMatch(rowAfter, /aria-disabled="true"/);
+  vm.runInContext(`state.skills.promoted[${JSON.stringify(candidate.id)}] = "sk_new";`, context);
+  assert.match(vm.runInContext(`renderSkillRowBody(${JSON.stringify(candidate)}, "source")`, context), /aria-disabled="true"/);
 });

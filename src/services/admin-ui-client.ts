@@ -335,7 +335,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     },
     // Skills: page 1 of skills-summary for one status segment. The summary ignores status and q, so it drives both
     // the tiles and the segment counts. sort "" means the segment default (recent on Candidates, matches elsewhere).
-    // pending maps a skill id to the write in flight, notes an id to its inline note, confirm the open confirm popover.
+    // pending maps a skill id to the write in flight, promoted maps a candidate already promoted this session to its
+    // new draft id, notes an id to its inline note, confirm the open confirm popover.
     skills: {
       status: "candidate",
       statusChosen: false,
@@ -361,6 +362,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       projects: [],
       projectsAt: 0,
       pending: {},
+      promoted: {},
       notes: {},
       confirm: null,
       rowNodes: new Map(),
@@ -7519,7 +7521,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const skl = state.skills;
     const busy = skl.pending[id] === action;
     const off = skillWritesOff();
-    const inert = off || skillWritePending();
+    const promoted = action === "promote" && !!(skl.promoted || {})[id];
+    const inert = off || skillWritePending() || promoted;
     const label = busy ? t("skills.actionWorking") : t(labelKey || "skills.action" + action.charAt(0).toUpperCase() + action.slice(1));
     return '<button class="sklAction ' + tone + '" type="button" data-skill-action="' + action + '" data-skill-target="' + escapeHtml(id) + '"' +
       (busy ? ' aria-busy="true"' : '') + (inert ? ' aria-disabled="true"' : '') + (off ? ' title="' + escapeHtml(t("skills.writesOffTitle")) + '"' : '') + '>' + escapeHtml(label) + '</button>';
@@ -7601,7 +7604,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }
       setClass(entry.node, "memRow sklRow is-" + skillVariant(item) + (open === id ? " is-open" : ""));
       setAttr(entry.node, "aria-expanded", open === id ? "true" : "false");
-      const signature = [state.locale, skl.days, mode, off, skl.pending[id] || "", JSON.stringify(skl.notes[id] || null), JSON.stringify(item)].join("|");
+      const signature = [state.locale, skl.days, mode, off, skillWritePending(), skl.pending[id] || "", JSON.stringify(skl.notes[id] || null), JSON.stringify(item)].join("|");
       if (entry.signature !== signature) {
         entry.signature = signature;
         entry.node.innerHTML = renderSkillRowBody(item, mode);
@@ -7901,10 +7904,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return false;
   }
 
-  function refreshSkillAfterWrite(previousId, nextId) {
+  // After a successful write, keep the in-flight pending flag until this refresh returns so a second click cannot
+  // reuse the old row. forceOpen is a row Promote: the new draft may land past page one, so the drawer must open
+  // on that id (or the candidate id, for the detail 404 fallback) for the note and Enable to stay visible.
+  async function refreshSkillAfterWrite(previousId, nextId, forceOpen) {
     const drawer = state.drawer;
-    void loadSkills("reset");
-    if (drawer.host === "skillsView" && drawer.skill) void openSkillDrawer(drawer.skill === previousId ? nextId : drawer.skill, null);
+    const reopen = forceOpen || (drawer.host === "skillsView" && drawer.skill);
+    const openId = (forceOpen || drawer.skill === previousId) ? nextId : drawer.skill;
+    if (reopen) void openSkillDrawer(openId, null);
+    await loadSkills("reset");
   }
 
   // Promote, Enable, Re-enable, Disable or Retire. Promote creates a draft (a new id; the candidate id disappears),
@@ -7913,6 +7921,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const skl = state.skills;
     const drawer = state.drawer;
     const item = (drawer.host === "skillsView" && drawer.skill === id ? skillDrawerItem() : null) || findSkillItem(id);
+    if (action === "promote" && (skl.promoted || {})[id]) return;
     if (!item || skl.pending[id] || skillWritePending()) return;
     if (skillWritesOff()) {
       setSkillNote(id, "info", t("skills.writesOffTitle"));
@@ -7931,6 +7940,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     } else {
       return;
     }
+    const fromRow = action === "promote" && !(drawer.host === "skillsView" && drawer.skill === id);
     skl.pending[id] = action;
     delete skl.notes[id];
     renderSkills();
@@ -7938,10 +7948,26 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const payload = await fetchJson(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (skillWriteRejected(id, payload)) return;
       const nextId = action === "promote" && payload && payload.skill && payload.skill.id !== undefined && payload.skill.id !== null ? String(payload.skill.id) : id;
+      if (action === "promote") {
+        if (!skl.promoted) skl.promoted = {};
+        skl.promoted[id] = nextId;
+        const index = skl.items.findIndex((entry) => String(entry.id) === id);
+        if (index >= 0 && nextId !== id) {
+          skl.items[index] = Object.assign({}, item, {
+            id: nextId,
+            kind: "skill",
+            stored_status: "draft",
+            status: "candidate",
+            candidate_ref: null,
+          });
+        }
+      }
       setSkillNote(nextId, "ok", t(action === "promote" ? "skills.notePromoted" : SKILL_STATUS_WRITES[action][1]));
-      refreshSkillAfterWrite(id, nextId);
+      await refreshSkillAfterWrite(id, nextId, fromRow);
     } catch (error) {
       if (action === "promote" && error && error.status === 404) {
+        if (!skl.promoted) skl.promoted = {};
+        if (!skl.promoted[id]) skl.promoted[id] = id;
         setSkillNote(id, "info", t("skills.noteGone"));
         void loadSkills("reset");
       } else {
@@ -7974,7 +8000,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (skillWriteRejected(id, payload)) return;
       record.notes = "";
       setSkillNote(id, "ok", t("skills.noteFeedback"));
-      refreshSkillAfterWrite(id, id);
+      await refreshSkillAfterWrite(id, id);
     } catch (error) {
       setSkillNote(id, "error", t("skills.noteError", { message: (error && error.message) || "" }));
     } finally {
@@ -8072,7 +8098,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const drawer = state.drawer;
     const item = skillDrawerItem();
     const id = item ? String(item.id) : drawer.skill;
-    return JSON.stringify([drawer.skillPayload, drawer.skillPayload ? null : item, state.skills.notes[id] || null, state.skills.pending[id] || "", skillWritesOff(), drawer.skillRecord.outcome, state.skills.days]);
+    return JSON.stringify([drawer.skillPayload, drawer.skillPayload ? null : item, state.skills.notes[id] || null, state.skills.pending[id] || "", skillWritePending(), skillWritesOff(), drawer.skillRecord.outcome, state.skills.days]);
   }
 
   function skillSection(title, extra, inner, className) {
