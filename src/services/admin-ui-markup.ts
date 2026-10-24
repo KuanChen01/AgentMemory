@@ -40,6 +40,11 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   minus: '<path d="M7.5 12h9"/>',
   star: '<path d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.9l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"/>',
   pulse: '<path d="M3 12.5h4.2l2.3-6.5 5 13 2.3-6.5H21"/>',
+  sparkle: '<path d="M10.5 4.5c.6 3.6 2.4 5.4 6 6-3.6.6-5.4 2.4-6 6-.6-3.6-2.4-5.4-6-6 3.6-.6 5.4-2.4 6-6z"/><path d="M17.5 3c.25 1.5 1 2.25 2.5 2.5-1.5.25-2.25 1-2.5 2.5-.25-1.5-1-2.25-2.5-2.5 1.5-.25 2.25-1 2.5-2.5z"/>',
+  target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.6"/>',
+  gauge: '<path d="M4.2 17.5a8.5 8.5 0 1 1 15.6 0"/><path d="m12 13.5 3.6-4.1"/><circle cx="12" cy="13.8" r="1.3"/><path d="M7.3 9.3l.9.9M12 6.4v1.2"/>',
+  thumbUp: '<path d="M7.5 10.5v9h-3v-9z"/><path d="M7.5 10.5 11 4.2a1.8 1.8 0 0 1 3.3 1.2l-.6 3.6h5a1.8 1.8 0 0 1 1.8 2.1l-1.3 6.8a2 2 0 0 1-2 1.6H7.5"/>',
+  thumbDown: '<path d="M7.5 13.5v-9h-3v9z"/><path d="M7.5 13.5 11 19.8a1.8 1.8 0 0 0 3.3-1.2l-.6-3.6h5a1.8 1.8 0 0 0 1.8-2.1l-1.3-6.8a2 2 0 0 0-2-1.6H7.5"/>',
 };
 
 export function renderAdminIcon(name: string, className: string = 'icon'): string {
@@ -54,7 +59,7 @@ export const ADMIN_UI_NAV_ITEMS: Array<{ id: string; target: string; key: string
   { id: 'navPipeline', target: 'pipelineView', key: 'nav.pipeline', label: 'Pipeline', icon: 'pipeline' },
   { id: 'navDigests', target: 'digestsView', key: 'nav.digests', label: 'Digests & Reviews', icon: 'digests' },
   { id: 'navProjects', target: 'projectsView', key: 'nav.projects', label: 'Projects', icon: 'projects' },
-  { id: 'navSkills', target: 'skillsView', key: 'nav.skills', label: 'Skills', icon: 'skills' },
+  { id: 'navSkills', target: 'skillsView', key: 'nav.skills', label: 'Skills', icon: 'star' },
   { id: 'navSettings', target: 'settingsView', key: 'nav.settings', label: 'Settings', icon: 'settings' },
 ];
 
@@ -79,9 +84,8 @@ export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: stri
   { key: 'vault', id: 'homeHealthRingVault', card: 'homeVaultCard', labelKey: 'home.vaultLabel', label: 'Vault review' },
 ];
 
-const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [
-  { id: 'skillsView', icon: 'skills', titleKey: 'nav.skills', title: 'Skills', leadKey: 'shell.skillsLead', lead: 'Procedural skills, digest candidates and how often post-task reviews matched them.' },
-];
+// Views still waiting for their page. Empty for now; the shape stays for the next placeholder.
+const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [];
 
 const BRAND_MARK = `<svg class="brandMark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
   <defs>
@@ -858,6 +862,103 @@ function renderProjectsView(): string {
       </section>`;
 }
 
+// Range presets of the Skills toolbar (days, as skills-summary takes them); 30 days is the default.
+export const ADMIN_UI_SKILL_RANGES: Array<{ id: string; days: number; key: string; label: string }> = [
+  { id: 'sklRange7', days: 7, key: 'skills.range7', label: '7 days' },
+  { id: 'sklRange30', days: 30, key: 'skills.range30', label: '30 days' },
+  { id: 'sklRange90', days: 90, key: 'skills.range90', label: '90 days' },
+];
+
+// Segments of the Skills list, in order; each count comes from the skills-summary summary.
+export const ADMIN_UI_SKILL_SEGMENTS: Array<{ id: string; status: string; key: string; label: string }> = [
+  { id: 'sklSegCandidate', status: 'candidate', key: 'skills.segCandidates', label: 'Candidates' },
+  { id: 'sklSegActive', status: 'active', key: 'skills.segActive', label: 'Active' },
+  { id: 'sklSegDisabled', status: 'disabled', key: 'skills.segDisabled', label: 'Disabled' },
+  { id: 'sklSegRetired', status: 'retired', key: 'skills.segRetired', label: 'Retired' },
+];
+
+function renderSkillPopup(id: string, labelKey: string, label: string, valueKey: string, value: string): string {
+  return `
+          <button class="actPopup prjSort sklPopup" id="${id}Button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}Popover">
+            <span class="actPopupLabel" data-i18n="${labelKey}">${label}</span>
+            <span class="actPopupValue" id="${id}Value" data-i18n="${valueKey}">${value}</span>
+            ${renderAdminIcon('chevronUpDown', 'actPopupIcon')}
+          </button>`;
+}
+
+// Skills: a sibling of Projects (toolbar, four tiles, one glass list card, the shared drawer). The card leads with
+// the status segments; the client fills #sklList keyed by data-skill-id and swaps the column set per segment.
+function renderSkillsView(): string {
+  const ranges = ADMIN_UI_SKILL_RANGES.map((item) => `
+            <button class="actSegment" id="${item.id}" type="button" data-skill-range="${item.days}" aria-pressed="${item.days === 30}" data-i18n="${item.key}">${item.label}</button>`).join('');
+  const segments = ADMIN_UI_SKILL_SEGMENTS.map((item) => `
+              <button class="actSegment sklSeg" id="${item.id}" type="button" data-skill-status="${item.status}" aria-pressed="${item.status === 'candidate'}"><span class="sklSegName" data-i18n="${item.key}">${item.label}</span><span class="sklSegCount" id="${item.id}Count">—</span></button>`).join('');
+  const column = (key: string, label: string, extra: string = '') => `<span class="prjCol${extra}" data-i18n="${key}">${label}</span>`;
+  return `
+      <section id="skillsView" class="appView skillsView" aria-labelledby="pageTitle">
+        <div class="pipeLeadRow prjLeadRow">
+          <p class="memLead pipeLead" id="sklLead" data-i18n="shell.skillsLead">Procedural skills, digest candidates and how often post-task reviews matched them.</p>
+          <span class="memUpdated" id="sklUpdated"></span>
+        </div>
+
+        <div class="memToolbar prjToolbar sklToolbar digGlass glassSurface glassBlur" id="sklToolbar" role="search" data-i18n-aria-label="skills.toolbarLabel" aria-label="Skill filters">
+          <label class="memSearch prjSearch" for="sklSearchInput">
+            ${renderAdminIcon('search', 'memSearchIcon')}
+            <span class="visuallyHidden" data-i18n="skills.searchLabel">Search skills</span>
+            <input class="memSearchInput" id="sklSearchInput" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="skills.searchPlaceholder" placeholder="Search skills" />
+            <button class="memSearchClear" id="sklSearchClear" type="button" data-i18n-aria-label="skills.searchClear" aria-label="Clear search" hidden>${renderAdminIcon('close', 'memSearchClearIcon')}</button>
+          </label>${renderSkillPopup('sklProject', 'skills.project', 'Project', 'skills.projectAll', 'All projects')}${renderSkillPopup('sklSort', 'skills.sort', 'Sort', 'skills.sortRecent', 'Newest')}
+          <div class="actSegmented memSegmented" id="sklRangeControl" role="group" data-i18n-aria-label="skills.rangeLabel" aria-label="Match range">${ranges}
+          </div>
+        </div>
+
+        <div class="prjStats sklStats" id="sklStats">${renderProjectStat('sklStatActive', 'star', 'skills.statActive', 'Active', true)}${renderProjectStat('sklStatCandidates', 'sparkle', 'skills.statCandidates', 'Candidates')}${renderProjectStat('sklStatMatches', 'target', 'skills.statMatches', 'Matches in 30 days')}${renderProjectStat('sklStatHitRate', 'gauge', 'skills.statHitRate', 'Hit rate', true)}
+        </div>
+
+        <div class="prjBoard sklBoard" id="sklBoard">
+          <div class="prjCard sklCard digGlass glassCard glassBlur" id="sklCard" data-skill-mode="source">
+            <div class="sklCardTop">
+              <div class="actSegmented sklSegments" id="sklSegments" role="group" data-i18n-aria-label="skills.segmentsLabel" aria-label="Skill status">${segments}
+              </div>
+            </div>
+            <p class="sklBanner" id="sklBanner" role="status" hidden></p>
+            <div class="prjHead sklHead" id="sklListHead" aria-hidden="true">${column('skills.colSkill', 'Skill', ' is-name')}${column('skills.colProject', 'Project')}<span class="prjCol" id="sklColThird" data-i18n="skills.colSource">Source</span><span class="prjCol" id="sklColFourth" data-i18n="skills.colSteps">Steps</span><span class="prjCol"></span>
+            </div>
+            <div class="prjList sklList" id="sklList" role="region" data-i18n-aria-label="skills.listLabel" aria-label="Skills" aria-busy="true"></div>
+            <div class="sklEmpty" id="sklEmpty" role="status" hidden>
+              <span class="sklEmptyIcon" id="sklEmptyIcon" aria-hidden="true">${renderAdminIcon('star', 'sklEmptyGlyph')}</span>
+              <p class="sklEmptyTitle" id="sklEmptyTitle"></p>
+              <p class="sklEmptyLead" id="sklEmptyLead" hidden></p>
+              <button class="sklAction is-primary" id="sklEmptyAction" type="button" hidden></button>
+            </div>
+            <div class="prjFoot sklFoot" id="sklFoot">
+              <span class="prjCount" id="sklCount"></span>
+              <button class="sklMore" id="sklLoadMore" type="button" hidden data-i18n="skills.loadMore">Load more</button>
+            </div>
+          </div>
+          <div class="actNotice memNotice digGlass glassCard glassBlur" id="sklNotice" role="status" hidden>
+            <div class="placeholderIcon" id="sklNoticeIcon">${renderAdminIcon('sparkle', 'placeholderGlyph')}</div>
+            <h2 class="actNoticeTitle" id="sklNoticeTitle"></h2>
+            <p class="actNoticeLead" id="sklNoticeLead"></p>
+            <div class="actNoticeActions">
+              <button class="bgButton is-primary" id="sklNoticeAction" type="button" hidden></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Popovers sit outside the blurred toolbar and card so their own blur sees the page. -->
+        <div class="actPopover actMenu" id="sklProjectPopover" role="listbox" data-i18n-aria-label="skills.projectMenu" aria-label="Filter by project" hidden></div>
+        <div class="actPopover actMenu" id="sklSortPopover" role="listbox" data-i18n-aria-label="skills.sortMenu" aria-label="Sort skills" hidden></div>
+        <div class="actPopover sklConfirm" id="sklConfirm" role="alertdialog" aria-labelledby="sklConfirmText" hidden>
+          <p class="sklConfirmText" id="sklConfirmText"></p>
+          <div class="sklConfirmActions">
+            <button class="sklAction is-quiet" id="sklConfirmCancel" type="button" data-i18n="skills.confirmCancel">Cancel</button>
+            <button class="sklAction is-primary" id="sklConfirmGo" type="button"></button>
+          </div>
+        </div>
+      </section>`;
+}
+
 function renderPlaceholderViews(): string {
   return PLACEHOLDER_VIEWS.map((view) => `
       <section id="${view.id}" class="appView" aria-labelledby="pageTitle">
@@ -902,7 +1003,7 @@ export function renderAdminWorkbenchMarkup(): string {
   return `
   <div class="appShell">${renderSidebar()}${renderBackgroundPopover()}
     <main class="mainArea" id="mainArea">
-      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderDigestsView()}${renderProjectsView()}${renderPlaceholderViews()}${renderSettingsView()}
+      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderDigestsView()}${renderProjectsView()}${renderSkillsView()}${renderPlaceholderViews()}${renderSettingsView()}
 
       <section id="devToolsView" class="appView devToolsView" aria-labelledby="pageTitle">
     <p class="devToolsLead" data-i18n="devtools.lead">Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.</p>
