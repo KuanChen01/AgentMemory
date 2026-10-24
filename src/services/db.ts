@@ -10,6 +10,14 @@ import {
   timestampsEqual,
 } from './timestamps';
 import { normalizeAgentId } from './agent-id';
+import { sanitizeText } from './redact';
+
+// Stored errors can echo provider responses: redact the whole text first, then clip.
+function clipRedacted(value: unknown, max: number): string | null {
+  const text = sanitizeText(value);
+  if (!text) return null;
+  return text.length > max ? text.slice(0, max) : text;
+}
 import { cjkOverlapScore, extractCjkBigrams } from './cjk';
 
 // Type definitions
@@ -1184,7 +1192,7 @@ function cloneMemoriesStats(stats: AdminMemoriesStats, cached: boolean): AdminMe
 
 /** Task rows for one memory. getAdminMemoryDetail and its EXPLAIN test share this text. */
 export const ADMIN_MEMORY_DETAIL_TASKS_SQL =
-  `SELECT id, task_id, segment_index, segment_count, event_count, evidence_count, status, trigger, llm_calls, source_kind, substr(COALESCE(last_error,''),1,300) AS last_error, created_at FROM task_results WHERE observation_id=? ORDER BY rowid`;
+  `SELECT id, task_id, segment_index, segment_count, event_count, evidence_count, status, trigger, llm_calls, source_kind, substr(COALESCE(last_error,''),1,4000) AS last_error, created_at FROM task_results WHERE observation_id=? ORDER BY rowid`;
 
 const ADMIN_MEMORY_DETAIL_TRACE_BYTES = 64 * 1024;
 
@@ -3098,7 +3106,7 @@ export class DatabaseManager {
       ? Number(this.db.get(`SELECT COUNT(*) AS n FROM daily_memory_digests WHERE local_date = ?`, [latestDigest.local_date]).n) || 0
       : 0;
     // Failed rows are rewritten in place by a successful re-run (unique per project and day), so these are still open.
-    const failedDigests = this.db.all(`SELECT project_path, local_date, substr(COALESCE(last_error, ''), 1, 300) AS last_error
+    const failedDigests = this.db.all(`SELECT project_path, local_date, substr(COALESCE(last_error, ''), 1, 4000) AS last_error
       FROM daily_memory_digests WHERE status = 'failed' AND local_date >= ? ORDER BY local_date DESC, project_path LIMIT 5`,
     [localDay(nowMs - 86400000)]);
 
@@ -3131,7 +3139,7 @@ export class DatabaseManager {
       daily,
       recent,
       tasks_today: tasksToday,
-      digests: { latest: latestDigest, latest_day_projects: latestDayProjects, failed_recent: failedDigests },
+      digests: { latest: latestDigest, latest_day_projects: latestDayProjects, failed_recent: failedDigests.map((row: any) => ({ ...row, last_error: clipRedacted(row.last_error, 300) })) },
       vault_review: { last_successful_review_at: vaultValue },
     };
   }
@@ -3419,7 +3427,8 @@ export class DatabaseManager {
       trigger: task.trigger,
       llm_calls: Number(task.llm_calls),
       source_kind: task.source_kind,
-      last_error: task.last_error ? String(task.last_error) : null,
+      // Redact the whole stored error, then clip, so a clip never leaves part of a credential.
+      last_error: clipRedacted(task.last_error, 300),
       created_at: task.created_at,
     }));
     const duplicateFlags = this.db.all(
