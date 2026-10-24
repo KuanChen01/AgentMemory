@@ -1626,6 +1626,9 @@ ${WALLPAPER_CSS}
     padding: 0 11px;
     border: 1px solid transparent;
     border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
     cursor: pointer;
     user-select: none;
     transition: background 180ms var(--ease-out), border-color 180ms var(--ease-out), color 180ms var(--ease-out);
@@ -1635,6 +1638,11 @@ ${WALLPAPER_CSS}
     background: var(--shell-hover);
   }
 
+  .policyPill:focus-visible {
+    outline: none;
+  }
+
+  .policyPill:focus-visible,
   .policyPill:focus-within {
     box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.24);
   }
@@ -2475,9 +2483,7 @@ ${WALLPAPER_CSS}
     letter-spacing: -0.015em;
   }
 
-  .placeholderLead,
-  .switchesLead,
-  .switchLead {
+  .placeholderLead {
     max-width: 640px;
     color: var(--text-2);
     font-size: 14.5px;
@@ -2495,43 +2501,6 @@ ${WALLPAPER_CSS}
     color: var(--pill-outcome-ink);
     font-size: 13px;
     font-weight: 600;
-  }
-
-  .settingsGrid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
-    gap: 16px;
-    align-items: start;
-  }
-
-  .settingsGrid .placeholderCard {
-    max-width: none;
-  }
-
-  .switchesCard {
-    display: grid;
-    gap: 14px;
-  }
-
-  .switchRow {
-    padding-top: 14px;
-    border-top: 1px solid var(--shell-line);
-  }
-
-  .switchTitle {
-    margin: 0 0 4px;
-    font-size: 14.5px;
-    font-weight: 650;
-  }
-
-  .switchLead {
-    font-size: 13.5px;
-  }
-
-  .switchMeta {
-    margin-top: 6px;
-    color: var(--text-3);
-    font-size: 12.5px;
   }
 
   /* Developer tools wraps the legacy workbench untouched. */
@@ -2638,6 +2607,7 @@ ${WALLPAPER_CSS}
   /* Activity tokens. Light glass is milky white with a faint periwinkle shadow; dark glass is deep navy with a
      cool rim. The shell's own tokens (--text, --shell-hover, ...) still drive ink, so a user background keeps
      working; these only shape Activity's surfaces. Memory and Pipeline share them. */
+  .settingsView,
   .skillsView,
   .projectsView,
   .activityView,
@@ -2701,6 +2671,7 @@ ${WALLPAPER_CSS}
     --proj-none: #a3a9b6;
   }
 
+  html[data-glass="dark"] .settingsView,
   html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .activityView,
@@ -3698,6 +3669,7 @@ ${WALLPAPER_CSS}
   /* Memory detail drawer: a tall glass sheet from the right. Inside the view, so its blur only runs on Activity.
      A transform animation that keeps filling would make the view the containing block of the fixed drawer and
      scrim, so Activity's entry animation does not fill forwards (its end state is transform: none anyway). */
+  .settingsView.is-active,
   .skillsView.is-active,
   .projectsView.is-active,
   .activityView.is-active,
@@ -4440,6 +4412,7 @@ ${WALLPAPER_CSS}
 
   /* ---------- Memory detail drawer (shared by Activity and Memory) ---------- */
 
+  .settingsView,
   .skillsView,
   .projectsView,
   .activityView,
@@ -4453,6 +4426,7 @@ ${WALLPAPER_CSS}
     --a-concept-ring: rgba(10, 132, 255, 0.20);
   }
 
+  html[data-glass="dark"] .settingsView,
   html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .activityView,
@@ -4743,6 +4717,7 @@ ${WALLPAPER_CSS}
 
   /* ---------- Memory ---------- */
 
+  .settingsView,
   .skillsView,
   .projectsView,
   .memoryView,
@@ -4774,6 +4749,7 @@ ${WALLPAPER_CSS}
     --m-dot-4: #f2697a;
   }
 
+  html[data-glass="dark"] .settingsView,
   html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .memoryView,
@@ -6883,6 +6859,7 @@ ${WALLPAPER_CSS}
      catch-light where it reaches the bottom. --d-edge gives the slab its thickness: a crisp top bevel, a softer
      left one, a soft inner refraction glow and a thin reflection along the bottom edge. --d-sheen is the specular
      wash on the face. Fills multiply --glass-scale like the other views. */
+  .settingsView,
   .skillsView,
   .projectsView,
   .digestsView {
@@ -6930,6 +6907,7 @@ ${WALLPAPER_CSS}
     --d-accent: #2f7cf6;
   }
 
+  html[data-glass="dark"] .settingsView,
   html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .digestsView {
@@ -6981,7 +6959,8 @@ ${WALLPAPER_CSS}
 
   .digestsView .digGlass,
   .projectsView .digGlass,
-  .skillsView .digGlass {
+  .skillsView .digGlass,
+  .settingsView .digGlass {
     position: relative;
     isolation: isolate;
     border: 1px solid transparent;
@@ -6991,7 +6970,8 @@ ${WALLPAPER_CSS}
 
   .digestsView .digGlass::before,
   .projectsView .digGlass::before,
-  .skillsView .digGlass::before {
+  .skillsView .digGlass::before,
+  .settingsView .digGlass::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -7006,7 +6986,8 @@ ${WALLPAPER_CSS}
   .projectsView .digGlass::after,
   .projectsView .actDrawer::after,
   .skillsView .digGlass::after,
-  .skillsView .actDrawer::after {
+  .skillsView .actDrawer::after,
+  .settingsView .digGlass::after {
     content: "";
     position: absolute;
     inset: -1px;
@@ -8787,7 +8768,8 @@ ${WALLPAPER_CSS}
 
   /* A sibling of Projects: the same toolbar, tiles, list card, chips and drawer. Icons stay in the family's blue,
      or neutral once a skill stops matching; only the status chips carry a tone. */
-  .skillsView {
+  .skillsView,
+  .settingsView {
     --skl-cols: 48px minmax(0, 1fr) 132px 124px 56px 112px;
     --skl-ink: #1f6fe8;
     --skl-outline: color-mix(in srgb, var(--d-accent) 62%, transparent);
@@ -8797,7 +8779,8 @@ ${WALLPAPER_CSS}
     --skl-ring: 0 0 0 1.5px color-mix(in srgb, var(--d-accent) 58%, transparent), 0 8px 22px -14px rgba(47, 124, 246, 0.55);
   }
 
-  html[data-glass="dark"] .skillsView {
+  html[data-glass="dark"] .skillsView,
+  html[data-glass="dark"] .settingsView {
     --skl-ink: #8cc2ff;
     --skl-outline: color-mix(in srgb, var(--d-accent) 55%, transparent);
     --skl-button: rgba(255, 255, 255, 0.07);
@@ -9831,5 +9814,823 @@ ${WALLPAPER_CSS}
   .sklDevLinkIcon {
     width: 15px;
     height: 15px;
+  }
+
+  /* ---------- Settings ---------- */
+
+  /* A sibling of Projects and Skills: the same glass material (--d-* tokens, .digGlass), buttons (.sklAction) and
+     chips. A sticky section nav sits beside four cards. Icons stay blue or neutral; only chips carry a tone. */
+  .settingsView {
+    --set-nav-w: 236px;
+    --set-field: linear-gradient(180deg, rgba(255, 255, 255, calc(0.74 * var(--glass-scale))), rgba(255, 255, 255, calc(0.56 * var(--glass-scale))));
+    --set-field-border: rgba(110, 122, 190, 0.20);
+    --set-field-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 1px 2px rgba(60, 70, 150, 0.04);
+    --set-field-ink: var(--text);
+    --set-well: rgba(240, 243, 252, calc(0.52 * var(--glass-scale)));
+    --set-well-border: rgba(110, 122, 190, 0.12);
+    --set-row-on: linear-gradient(180deg, rgba(255, 255, 255, calc(0.70 * var(--glass-scale))), rgba(255, 255, 255, calc(0.46 * var(--glass-scale))));
+    --set-nav-on: linear-gradient(180deg, rgba(226, 238, 255, 0.92), rgba(212, 228, 255, 0.70));
+    --set-nav-on-ink: #1a66e0;
+    --set-switch-on: linear-gradient(180deg, #3d8dff, #1f6ff0);
+    --set-switch-glow: inset 0 0 0 1px rgba(20, 90, 220, 0.10), 0 4px 12px -6px rgba(31, 111, 240, 0.70);
+    --set-code: rgba(244, 246, 252, calc(0.80 * var(--glass-scale)));
+    --set-code-ink: #2a3248;
+  }
+
+  html[data-glass="dark"] .settingsView {
+    --set-field: linear-gradient(180deg, rgba(255, 255, 255, calc(0.08 * var(--glass-scale))), rgba(255, 255, 255, calc(0.05 * var(--glass-scale))));
+    --set-field-border: rgba(150, 175, 255, 0.18);
+    --set-field-shadow: inset 0 1px 0 rgba(200, 215, 255, 0.08);
+    --set-well: rgba(6, 10, 30, calc(0.34 * var(--glass-scale)));
+    --set-well-border: rgba(150, 175, 255, 0.12);
+    --set-row-on: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
+    --set-nav-on: linear-gradient(180deg, rgba(40, 92, 210, 0.40), rgba(22, 58, 160, 0.30));
+    --set-nav-on-ink: #b9d6ff;
+    --set-switch-glow: inset 0 0 0 1px rgba(140, 190, 255, 0.30), 0 0 14px -4px rgba(60, 140, 255, 0.75);
+    --set-code: rgba(4, 8, 26, calc(0.48 * var(--glass-scale)));
+    --set-code-ink: #d6e2ff;
+  }
+
+  .settingsView .pipeLeadRow {
+    margin-bottom: 14px;
+  }
+
+  .policyBanner:not([hidden]) ~ .settingsView .pipeLeadRow {
+    margin-top: 0;
+  }
+
+  .setLayout {
+    display: grid;
+    grid-template-columns: var(--set-nav-w) minmax(0, 1fr);
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  /* Section nav: a tall glass card; its list stays in view while the cards scroll. */
+  .setNav {
+    min-width: 0;
+    padding: 12px 10px;
+    border-radius: 26px;
+  }
+
+  .setNavList {
+    position: sticky;
+    top: 20px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .setNavItem {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15.5px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out), color 160ms var(--ease-out);
+  }
+
+  .setNavItem:hover {
+    background: var(--shell-hover);
+  }
+
+  .setNavItem:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.28);
+  }
+
+  .setNavItem.is-active {
+    background: var(--set-nav-on);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 6px 16px -12px rgba(30, 100, 230, 0.55);
+    color: var(--set-nav-on-ink);
+  }
+
+  .setNavIcon {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    color: var(--text-2);
+  }
+
+  .setNavItem.is-active .setNavIcon {
+    color: var(--set-nav-on-ink);
+  }
+
+  .setCards {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .setCard {
+    min-width: 0;
+    padding: 12px 18px 14px;
+    border-radius: 24px;
+    scroll-margin-top: 20px;
+  }
+
+  .setCardTitle {
+    margin: 0;
+    color: var(--text);
+    font-size: 21px;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+  }
+
+  .setCardLead {
+    margin: 2px 0 0;
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .setCard.is-loading .setInput,
+  .setCard.is-loading .setInfo {
+    opacity: 0.6;
+  }
+
+  /* Chips: the same soft pills as Digests and Skills. Green for on and healthy, amber for attention, red for
+     failures, grey for off. */
+  .setChip {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 0 13px;
+    border-radius: 999px;
+    background: var(--d-muted-fill);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    color: var(--d-muted-ink);
+    font-size: 13.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .setChip[hidden] {
+    display: none;
+  }
+
+  .setChip.is-ok { background: var(--d-ok-fill); color: var(--d-ok-ink); }
+  .setChip.is-warn { background: var(--d-warn-fill); color: var(--d-warn-ink); }
+  .setChip.is-err { background: var(--d-err-fill); color: var(--d-err-ink); }
+  .setChip.is-busy { background: color-mix(in srgb, var(--d-accent) 14%, transparent); color: var(--skl-ink); }
+
+  .setMuted {
+    margin: 0;
+    color: var(--text-3);
+    font-size: 13.5px;
+  }
+
+  .setMuted.is-error,
+  .setNote.is-error,
+  .setHint.is-error {
+    color: var(--d-err-ink);
+  }
+
+  /* Switches: blue when on, the shared iOS switch otherwise. */
+  .setSwitch {
+    width: 50px;
+    height: 30px;
+    flex: 0 0 50px;
+  }
+
+  .setSwitch .track::after {
+    width: 26px;
+    height: 26px;
+  }
+
+  .setSwitch input:checked + .track {
+    background: var(--set-switch-on);
+    box-shadow: var(--set-switch-glow);
+  }
+
+  .setSwitch input:checked + .track::after {
+    transform: translateX(20px);
+  }
+
+  .setSwitch input:disabled {
+    cursor: progress;
+  }
+
+  .setSwitch input:disabled + .track {
+    opacity: 0.6;
+  }
+
+  /* Memory switches: two rows in one inset group. */
+  .setSwitchList {
+    display: grid;
+    margin-top: 10px;
+    border: 1px solid var(--set-well-border);
+    border-radius: 16px;
+    background: var(--set-well);
+    overflow: hidden;
+  }
+
+  .setSwitchRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 170px auto;
+    align-items: center;
+    gap: 18px;
+    min-height: 57px;
+    padding: 6px 12px 6px 14px;
+  }
+
+  .setSwitchRow + .setSwitchRow {
+    border-top: 1px solid var(--d-row-line);
+  }
+
+  .setSwitchRow:first-child {
+    background: var(--set-row-on);
+  }
+
+  .setSwitchTitle {
+    margin: 0;
+    color: var(--text);
+    font-size: 15.5px;
+    font-weight: 650;
+  }
+
+  .setSwitchLead {
+    margin: 1px 0 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 13.5px;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+  }
+
+  .setSwitchLead.is-off {
+    color: var(--d-warn-ink);
+  }
+
+  .setChanged {
+    color: var(--text-3);
+    font-size: 13.5px;
+    white-space: nowrap;
+  }
+
+  /* Fields: soft white wells with a hairline, the same height as the Skills buttons. */
+  .setField {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .setLabel {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .setInput {
+    width: 100%;
+    min-width: 0;
+    height: 36px;
+    padding: 0 14px;
+    border: 1px solid var(--set-field-border);
+    border-radius: 12px;
+    background: var(--set-field);
+    box-shadow: var(--set-field-shadow);
+    color: var(--set-field-ink);
+    font: inherit;
+    font-size: 14.5px;
+    transition: box-shadow 160ms var(--ease-out), border-color 160ms var(--ease-out);
+  }
+
+  .setInput::placeholder {
+    color: var(--text-3);
+    font-family: inherit;
+  }
+
+  .setInput.is-mono::placeholder {
+    font-family: system-ui, sans-serif;
+    letter-spacing: 0;
+  }
+
+  .setInput:focus-visible,
+  .setInput:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--d-accent) 55%, transparent);
+    box-shadow: var(--set-field-shadow), 0 0 0 3px rgba(10, 132, 255, 0.20);
+  }
+
+  .setInput[readonly] {
+    cursor: default;
+  }
+
+  .setInput[readonly]:focus {
+    border-color: var(--set-field-border);
+    box-shadow: var(--set-field-shadow);
+  }
+
+  .setInput:disabled {
+    opacity: 0.7;
+  }
+
+  .setInput[hidden] {
+    display: none;
+  }
+
+  .setInput.is-mono,
+  .setCode {
+    font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+    font-size: 14.5px;
+    letter-spacing: 0.01em;
+  }
+
+  .setTextarea {
+    height: auto;
+    min-height: 76px;
+    padding: 10px 14px;
+    line-height: 1.45;
+    resize: vertical;
+  }
+
+  .setSelectWrap {
+    position: relative;
+    display: block;
+    min-width: 0;
+  }
+
+  .setSelect,
+  .setSelectWrap .setInput {
+    padding-right: 40px;
+    -webkit-appearance: none;
+    appearance: none;
+    cursor: pointer;
+  }
+
+  .setSelectWrap input.setInput {
+    cursor: text;
+  }
+
+  .setSelectWrap .setInput::-webkit-calendar-picker-indicator {
+    opacity: 0;
+  }
+
+  .setSelect option {
+    background: var(--surface, #ffffff);
+    color: #1d2333;
+  }
+
+  .setSelectIcon {
+    position: absolute;
+    top: 50%;
+    right: 14px;
+    width: 18px;
+    height: 18px;
+    color: var(--text-2);
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .setSelectWrap.is-text .setSelectIcon {
+    display: none;
+  }
+
+  .setButton {
+    min-height: 36px;
+    border-radius: 11px;
+    font-size: 14.5px;
+  }
+
+  .setButton.is-primary {
+    min-width: 96px;
+  }
+
+  .sklAction.setButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* LLM connection. */
+  .setLlmGrid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+    gap: 16px;
+    margin-top: 8px;
+  }
+
+  #setLlmCard > .setField {
+    margin-top: 6px;
+  }
+
+  .setKeyRow {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .setKeyRow .setInput {
+    flex: 1 1 auto;
+  }
+
+  .setKeyRow .setButton {
+    flex: 0 0 auto;
+    min-width: 122px;
+  }
+
+  .setHint {
+    margin: 2px 0 0;
+    color: var(--text-3);
+    font-size: 13px;
+  }
+
+  .setHint[hidden] {
+    display: none;
+  }
+
+  .setAdvanced {
+    margin-top: 10px;
+    border: 1px solid var(--set-well-border);
+    border-radius: 12px;
+    background: var(--set-well);
+  }
+
+  .setAdvancedHead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 34px;
+    padding: 0 14px;
+    color: var(--text-2);
+    font-size: 14px;
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .setAdvancedHead::-webkit-details-marker {
+    display: none;
+  }
+
+  .setAdvancedHead:focus-visible {
+    outline: none;
+    border-radius: 12px;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.24);
+  }
+
+  .setAdvancedIcon {
+    width: 16px;
+    height: 16px;
+    color: var(--text-2);
+    transition: transform 160ms var(--ease-out);
+  }
+
+  .setAdvanced[open] .setAdvancedIcon {
+    transform: rotate(90deg);
+  }
+
+  .setAdvancedBody {
+    display: grid;
+    gap: 14px;
+    padding: 4px 16px 16px 40px;
+  }
+
+  .setCheck {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text);
+    font-size: 14.5px;
+    cursor: pointer;
+  }
+
+  .setCheck input {
+    width: 17px;
+    height: 17px;
+    margin: 0;
+    accent-color: #1f6ff0;
+  }
+
+  .setBudgetRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 14px;
+  }
+
+  .setBudget {
+    color: var(--text-2);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .setFoot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px 16px;
+    margin-top: 10px;
+  }
+
+  .setNote {
+    flex: 1 1 200px;
+    min-width: 0;
+    margin: 0;
+    color: var(--text-2);
+    font-size: 13.5px;
+  }
+
+  .setTestChip {
+    max-width: min(420px, 100%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Digest scheduler: one row of inline label + control pairs, then the next-run strip and Save. */
+  .setSchedRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 24px;
+    margin-top: 10px;
+  }
+
+  .setInline {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .setInline .setLabel {
+    font-weight: 400;
+  }
+
+  .setInline.is-grow {
+    flex: 1 1 200px;
+  }
+
+  .setInline.is-grow .setSelectWrap {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .setTime {
+    width: 104px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .setTime:invalid {
+    border-color: color-mix(in srgb, var(--d-err-dot) 60%, transparent);
+  }
+
+  .setDays {
+    width: 160px;
+  }
+
+  .setSchedFoot {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-top: 10px;
+  }
+
+  .setInfo {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    min-height: 36px;
+    margin: 0;
+    padding: 0 14px;
+    border: 1px solid var(--set-well-border);
+    border-radius: 12px;
+    background: var(--set-well);
+    color: var(--text-2);
+    font-size: 14.5px;
+  }
+
+  .setInfo.is-off {
+    color: var(--text-2);
+  }
+
+  .setInfo.is-error {
+    color: var(--d-err-ink);
+  }
+
+  .setInfoIcon {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    color: var(--text-2);
+  }
+
+  /* About: the facts on the left, the check and the upgrade commands on the right. */
+  .setAbout {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 10px 28px;
+    margin-top: 6px;
+  }
+
+  .setFacts {
+    display: grid;
+    align-content: start;
+    gap: 10px;
+    margin: 4px 0 0;
+  }
+
+  .setFact {
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    align-items: center;
+    min-height: 28px;
+  }
+
+  .setFact dt {
+    color: var(--text);
+    font-size: 14.5px;
+  }
+
+  .setFact dd {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 0;
+    min-width: 0;
+  }
+
+  .setVersion {
+    color: var(--text);
+    font-size: 14.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .setVersion.is-muted {
+    color: var(--text-3);
+  }
+
+  .setAboutSide {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .setAboutActions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px 22px;
+  }
+
+  .setAboutActions .setMuted {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: right;
+  }
+
+  .setLink {
+    color: var(--skl-ink);
+    font-size: 14.5px;
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .setLink:hover {
+    text-decoration: underline;
+  }
+
+  .setLink[hidden] {
+    display: none;
+  }
+
+  .setCommands {
+    position: relative;
+    border: 1px solid var(--set-well-border);
+    border-radius: 12px;
+    background: var(--set-code);
+  }
+
+  .setCommands[hidden] {
+    display: none;
+  }
+
+  .setCode {
+    margin: 0;
+    padding: 10px 52px 10px 14px;
+    overflow-x: auto;
+    color: var(--set-code-ink);
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre;
+  }
+
+  .setCopy {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-2);
+    cursor: pointer;
+  }
+
+  .setCopy:hover {
+    background: var(--shell-hover);
+    color: var(--text);
+  }
+
+  .setCopy:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.28);
+  }
+
+  .setCopy.is-copied {
+    color: var(--skl-ink);
+  }
+
+  .setCopyIcon {
+    width: 19px;
+    height: 19px;
+  }
+
+  .setConfirm {
+    width: 320px;
+  }
+
+  /* Narrow windows: the section nav becomes a row above the cards. */
+  @media (max-width: 1360px) {
+    .settingsView {
+      --set-nav-w: 210px;
+    }
+
+    .setNavItem {
+      gap: 12px;
+      padding: 0 12px;
+      font-size: 15px;
+      white-space: nowrap;
+    }
+
+    .setSwitchRow {
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
+      gap: 14px;
+    }
+
+    .setSchedRow {
+      gap: 12px 14px;
+    }
+
+    .setInline {
+      gap: 10px;
+    }
+
+    .setInline.is-grow {
+      flex-basis: 140px;
+    }
+
+    .setTime {
+      width: 90px;
+    }
+
+    .setDays {
+      width: 112px;
+    }
+  }
+
+  @media (max-width: 1100px) {
+    .setLayout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .setNavList {
+      position: static;
+      display: flex;
+      flex-wrap: wrap;
+    }
+
+    .setNavItem {
+      width: auto;
+    }
+
+    .setAbout,
+    .setLlmGrid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .setAboutActions {
+      justify-content: flex-start;
+    }
   }
 `;

@@ -43,6 +43,7 @@ import {
 import {
   loadAgentMemoryEnv,
   readLlmConfig,
+  redactLlmTestPayload,
   saveLlmConfig,
   testLlmConnection,
 } from './llm-config';
@@ -1508,17 +1509,20 @@ app.post('/admin/api/llm-config', adminOnlyGuard, async (req, res) => {
 
 app.post('/admin/api/llm-test', adminOnlyGuard, async (req, res) => {
   const body = req.body || {};
+  const apiKey = typeof body.apiKey === 'string' ? body.apiKey : undefined;
   try {
     const result = await testLlmConnection({
-      apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
+      apiKey,
       apiUrl: typeof body.apiUrl === 'string' ? body.apiUrl : undefined,
       headers: typeof body.headers === 'string' ? body.headers : undefined,
       model: typeof body.model === 'string' ? body.model : undefined,
     });
-    res.json(result);
+    // Redact the key that was sent (typed, or the saved key when the field is empty) from every text field.
+    res.json(redactLlmTestPayload(result, apiKey));
   } catch (err: any) {
-    console.error('Error testing LLM connection:', err);
-    res.status(500).json({ error: err.message });
+    const failure = redactLlmTestPayload({ error: err.message }, apiKey);
+    console.error('Error testing LLM connection:', failure.error);
+    res.status(500).json(failure);
   }
 });
 

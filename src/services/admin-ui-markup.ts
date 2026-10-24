@@ -44,6 +44,8 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.6"/>',
   gauge: '<path d="M4.2 17.5a8.5 8.5 0 1 1 15.6 0"/><path d="m12 13.5 3.6-4.1"/><circle cx="12" cy="13.8" r="1.3"/><path d="M7.3 9.3l.9.9M12 6.4v1.2"/>',
   thumbUp: '<path d="M7.5 10.5v9h-3v-9z"/><path d="M7.5 10.5 11 4.2a1.8 1.8 0 0 1 3.3 1.2l-.6 3.6h5a1.8 1.8 0 0 1 1.8 2.1l-1.3 6.8a2 2 0 0 1-2 1.6H7.5"/>',
+  plug: '<path d="M9 3.5v4M15 3.5v4"/><path d="M6.5 7.5h11v3.5a5.5 5.5 0 0 1-11 0z"/><path d="M12 16.5v4"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r="0.6"/>',
   thumbDown: '<path d="M7.5 13.5v-9h-3v9z"/><path d="M7.5 13.5 11 19.8a1.8 1.8 0 0 0 3.3-1.2l-.6-3.6h5a1.8 1.8 0 0 0 1.8-2.1l-1.3-6.8a2 2 0 0 0-2-1.6H7.5"/>',
 };
 
@@ -227,20 +229,18 @@ function renderTopBar(): string {
       <header class="topBar">
         <h1 id="pageTitle" class="pageTitle" data-i18n="nav.home">Home</h1>
         <div class="topActions">
-          <!-- One compact pill holds both switches; the state word only shows when a switch is off or saving. -->
+          <!-- One compact pill mirrors both switches (they live in Settings); the state word only shows when a switch is off or saving. -->
           <div class="policyGroup glassPill" id="policyGroup" role="group" data-i18n-aria-label="shell.policyGroup" aria-label="Memory access">
-            <label id="readPolicyCard" class="policyPill readPolicy" for="readToggle">
+            <button id="readPolicyCard" class="policyPill readPolicy" type="button" data-nav-target="settingsView" data-set-section="setSwitchesCard">
               <span class="pillDot" aria-hidden="true"></span>
               <span class="pillLabel" data-i18n="shell.read">Read</span>
-              <span id="readPolicyState" class="policyBadge" data-i18n="policy.loading">Loading</span>
-              <input id="readToggle" class="visuallyHidden" type="checkbox" role="switch" />
-            </label>
-            <label id="writePolicyCard" class="policyPill writePolicy" for="writeToggle">
+              <span class="policyBadge" data-i18n="policy.loading">Loading</span>
+            </button>
+            <button id="writePolicyCard" class="policyPill writePolicy" type="button" data-nav-target="settingsView" data-set-section="setSwitchesCard">
               <span class="pillDot" aria-hidden="true"></span>
               <span class="pillLabel" data-i18n="shell.write">Write</span>
-              <span id="writePolicyState" class="policyBadge" data-i18n="policy.loading">Loading</span>
-              <input id="writeToggle" class="visuallyHidden" type="checkbox" role="switch" />
-            </label>
+              <span class="policyBadge" data-i18n="policy.loading">Loading</span>
+            </button>
           </div>
           <!-- Language listbox: the trigger's name is the label plus the current language, not a menu. -->
           <div id="localeToggle" class="localeMenu">
@@ -972,29 +972,169 @@ function renderPlaceholderViews(): string {
       </section>`).join('');
 }
 
-function renderSettingsView(): string {
+// Model suggestions shared by the Settings LLM card and the legacy LLM panel.
+const LLM_MODEL_OPTIONS = ['deepseek-chat', 'deepseek-reasoner', 'gpt-4.1', 'gpt-5', 'mimo-v2.5-pro', 'llama3.1'];
+
+function renderModelOptions(indent: string): string {
+  return LLM_MODEL_OPTIONS.map((model) => `\n${indent}<option value="${model}"></option>`).join('');
+}
+
+// Sections of the Settings page, in order: the left nav scrolls to each card.
+export const ADMIN_UI_SETTINGS_SECTIONS: Array<{ card: string; icon: string; key: string; label: string }> = [
+  { card: 'setSwitchesCard', icon: 'settings', key: 'settings.navSwitches', label: 'Memory switches' },
+  { card: 'setLlmCard', icon: 'plug', key: 'settings.navLlm', label: 'LLM connection' },
+  { card: 'setDigestCard', icon: 'clock', key: 'settings.navDigest', label: 'Digest scheduler' },
+  { card: 'setAboutCard', icon: 'info', key: 'settings.navAbout', label: 'About' },
+];
+
+function renderSettingsSwitch(kind: 'read' | 'write', title: string, lead: string): string {
   return `
-      <section id="settingsView" class="appView" aria-labelledby="pageTitle">
-        <div class="settingsGrid">
-          <div class="glassCard glassBlur placeholderCard">
-            <div class="placeholderIcon">${renderAdminIcon('settings', 'placeholderGlyph')}</div>
-            <h2 class="placeholderTitle" data-i18n="nav.settings">Settings</h2>
-            <p class="placeholderLead" data-i18n="shell.settingsLead">Memory switches, LLM connection, digest scheduler and version information.</p>
-            <span class="soonChip" data-i18n="shell.comingSoon">Coming in the next phase</span>
+              <div class="setSwitchRow" id="set${kind === 'read' ? 'Read' : 'Write'}Row">
+                <div class="setSwitchText">
+                  <h3 class="setSwitchTitle" id="set${kind === 'read' ? 'Read' : 'Write'}Title" data-i18n="settings.${kind}Title">${title}</h3>
+                  <p class="setSwitchLead" id="${kind}PolicyMeta">${lead}</p>
+                </div>
+                <span id="${kind}PolicyState" class="setChip" data-i18n="settings.loading">Loading…</span>
+                <span class="setChanged" id="set${kind === 'read' ? 'Read' : 'Write'}Changed"></span>
+                <span class="iosSwitch setSwitch"><input id="${kind}Toggle" type="checkbox" role="switch" aria-labelledby="set${kind === 'read' ? 'Read' : 'Write'}Title" /><span class="track" aria-hidden="true"></span></span>
+              </div>`;
+}
+
+function renderSettingsCardHead(id: string, titleKey: string, title: string, leadKey: string, lead: string): string {
+  return `
+            <h2 class="setCardTitle" id="${id}Title" data-i18n="${titleKey}">${title}</h2>${leadKey ? `
+            <p class="setCardLead" data-i18n="${leadKey}">${lead}</p>` : ''}`;
+}
+
+// Settings: a sticky section nav beside four glass cards (switches, LLM, digest scheduler, About). The client
+// fills every value from the real APIs; the legacy LLM, scheduler and release panels stay under Developer tools.
+function renderSettingsView(): string {
+  const nav = ADMIN_UI_SETTINGS_SECTIONS.map((item, index) => `
+            <button class="setNavItem${index === 0 ? ' is-active' : ''}" type="button" data-set-section="${item.card}"${index === 0 ? ' aria-current="true"' : ''}>
+              ${renderAdminIcon(item.icon, 'setNavIcon')}<span data-i18n="${item.key}">${item.label}</span>
+            </button>`).join('');
+  const days = Array.from({ length: 14 }, (_, index) => index + 1).map((n) => `
+                    <option value="${n}">${n === 1 ? '1 day' : `${n} days`}</option>`).join('');
+  return `
+      <section id="settingsView" class="appView settingsView" aria-labelledby="pageTitle">
+        <div class="pipeLeadRow prjLeadRow">
+          <p class="memLead pipeLead" id="setLead" data-i18n="settings.lead">Memory switches, LLM connection, digest scheduler and version information.</p>
+          <span class="memUpdated" id="setUpdated"></span>
+        </div>
+
+        <div class="setLayout">
+          <nav class="setNav digGlass glassCard glassBlur" id="setNav" data-i18n-aria-label="settings.sectionsLabel" aria-label="Settings sections">
+            <div class="setNavList">${nav}
+            </div>
+          </nav>
+
+          <div class="setCards">
+          <section class="setCard digGlass glassCard glassBlur" id="setSwitchesCard" aria-labelledby="setSwitchesCardTitle">${renderSettingsCardHead('setSwitchesCard', 'settings.switchesTitle', 'Memory switches', 'settings.switchesLead', 'Read and Write apply to every connected agent. The pills in the top bar mirror these switches.')}
+            <div class="setSwitchList">${renderSettingsSwitch('read', 'Read memory', 'Startup context, state reads, hybrid search and MCP read tools.')}${renderSettingsSwitch('write', 'Write memory', 'Observation writes, state writes, session updates and MCP record tools.')}
+            </div>
+            <p class="setHint" id="setPolicyNote" role="status" hidden></p>
+          </section>
+
+          <section class="setCard digGlass glassCard glassBlur" id="setLlmCard" aria-labelledby="setLlmCardTitle" aria-busy="true">${renderSettingsCardHead('setLlmCard', 'settings.llmTitle', 'LLM connection', 'settings.llmLead', 'Used for observation summaries and daily digests.')}
+            <div class="setLlmGrid">
+              <label class="setField">
+                <span class="setLabel" data-i18n="settings.llmEndpoint">Endpoint</span>
+                <input class="setInput" id="setLlmApiUrl" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+              </label>
+              <label class="setField">
+                <span class="setLabel" data-i18n="settings.llmModel">Model</span>
+                <span class="setSelectWrap">
+                  <input class="setInput" id="setLlmModel" type="text" list="setLlmModelOptions" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" />${renderAdminIcon('chevronDown', 'setSelectIcon')}
+                </span>
+                <datalist id="setLlmModelOptions">${renderModelOptions('                  ')}
+                </datalist>
+              </label>
+            </div>
+            <div class="setField">
+              <span class="setLabel" id="setLlmKeyLabel" data-i18n="settings.llmKey">API key</span>
+              <div class="setKeyRow">
+                <input class="setInput is-mono" id="setLlmKeyMasked" type="text" readonly tabindex="-1" aria-labelledby="setLlmKeyLabel" />
+                <input class="setInput" id="setLlmKeyInput" type="password" autocomplete="new-password" spellcheck="false" aria-labelledby="setLlmKeyLabel" data-i18n-placeholder="settings.llmNewKeyPlaceholder" placeholder="Paste the new key" hidden />
+                <span class="setChip" id="setLlmKeyChip"></span>
+                <button class="sklAction is-secondary setButton" id="setLlmReplaceKey" type="button" aria-controls="setLlmKeyInput" aria-expanded="false" data-i18n="settings.llmReplaceKey">Replace key</button>
+              </div>
+              <p class="setHint" id="setLlmKeyHint" hidden></p>
+            </div>
+            <details class="setAdvanced" id="setLlmAdvanced">
+              <summary class="setAdvancedHead">${renderAdminIcon('chevronRight', 'setAdvancedIcon')}<span data-i18n="settings.llmAdvanced">Advanced: JSON mode, output budgets</span></summary>
+              <div class="setAdvancedBody">
+                <label class="setCheck"><input id="setLlmDisableJson" type="checkbox" /><span data-i18n="settings.llmDisableJson">Disable JSON mode (for providers that reject response_format)</span></label>
+                <label class="setField">
+                  <span class="setLabel" data-i18n="settings.llmHeaders">Custom headers (JSON)</span>
+                  <textarea class="setInput setTextarea is-mono" id="setLlmHeaders" rows="3" spellcheck="false" placeholder='{"X-Custom-Auth":"value"}'></textarea>
+                </label>
+                <div class="setBudgetRow"><span class="setLabel" data-i18n="settings.llmBudget">Output budgets</span><span class="setBudget" id="setLlmBudget">—</span></div>
+                <p class="setMuted" id="setLlmEnvPath"></p>
+              </div>
+            </details>
+            <div class="setFoot">
+              <p class="setNote" id="setLlmNote" role="status" aria-live="polite"></p>
+              <span class="setChip" id="setLlmTestChip" hidden></span>
+              <span class="setMuted" id="setLlmTestedAt"></span>
+              <button class="sklAction is-outline setButton" id="setLlmTest" type="button" data-i18n="settings.llmTest">Test connection</button>
+              <button class="sklAction is-primary setButton" id="setLlmSave" type="button" data-i18n="settings.llmSave">Save</button>
+            </div>
+          </section>
+
+          <section class="setCard digGlass glassCard glassBlur" id="setDigestCard" aria-labelledby="setDigestCardTitle" aria-busy="true">${renderSettingsCardHead('setDigestCard', 'settings.digestTitle', 'Digest scheduler', 'settings.digestLead', 'Builds one digest per project each night.')}
+            <div class="setSchedRow">
+              <label class="setInline">
+                <span class="setLabel" data-i18n="settings.digestEnabled">Enabled</span>
+                <span class="iosSwitch setSwitch"><input id="setDigestEnabled" type="checkbox" role="switch" /><span class="track" aria-hidden="true"></span></span>
+              </label>
+              <label class="setInline">
+                <span class="setLabel" data-i18n="settings.digestRunTime">Run time</span>
+                <input class="setInput setTime" id="setDigestTime" type="text" inputmode="numeric" maxlength="5" pattern="([01][0-9]|2[0-3]):[0-5][0-9]" autocomplete="off" spellcheck="false" placeholder="HH:mm" />
+              </label>
+              <label class="setInline is-grow">
+                <span class="setLabel" data-i18n="settings.digestTimeZone">Time zone</span>
+                <span class="setSelectWrap" id="setDigestZoneWrap"><select class="setInput setSelect" id="setDigestZone"></select><input class="setInput" id="setDigestZoneText" type="text" autocomplete="off" spellcheck="false" data-i18n-placeholder="settings.digestZonePlaceholder" placeholder="Area/City" hidden />${renderAdminIcon('chevronDown', 'setSelectIcon')}</span>
+              </label>
+              <label class="setInline">
+                <span class="setLabel" data-i18n="settings.digestCatchUp">Catch-up</span>
+                <span class="setSelectWrap"><select class="setInput setSelect setDays" id="setDigestLookback">${days}
+                </select>${renderAdminIcon('chevronDown', 'setSelectIcon')}</span>
+              </label>
+            </div>
+            <div class="setSchedFoot">
+              <p class="setInfo" id="setDigestInfo" role="status">${renderAdminIcon('clock', 'setInfoIcon')}<span id="setDigestNext" data-i18n="settings.loading">Loading…</span></p>
+              <button class="sklAction is-primary setButton" id="setDigestSave" type="button" data-i18n="settings.digestSave">Save</button>
+            </div>
+          </section>
+
+          <section class="setCard digGlass glassCard glassBlur" id="setAboutCard" aria-labelledby="setAboutCardTitle">${renderSettingsCardHead('setAboutCard', 'settings.aboutTitle', 'About', '', '')}
+            <div class="setAbout">
+              <dl class="setFacts">
+                <div class="setFact"><dt data-i18n="settings.aboutVersion">Version</dt><dd><span class="setVersion" id="setVersion">—</span></dd></div>
+                <div class="setFact"><dt data-i18n="settings.aboutLatest">Latest release</dt><dd><span class="setVersion" id="setLatest">—</span><span class="setChip" id="setReleaseChip" hidden></span></dd></div>
+              </dl>
+              <div class="setAboutSide">
+                <div class="setAboutActions">
+                  <span class="setMuted" id="setReleaseNote"></span>
+                  <button class="sklAction is-secondary setButton" id="setReleaseCheck" type="button" data-i18n="settings.aboutCheck">Check for updates</button>
+                  <a class="setLink" id="setReleaseLink" href="#" target="_blank" rel="noopener noreferrer" data-i18n="settings.aboutViewRelease" hidden>View release</a>
+                </div>
+                <div class="setCommands" id="setReleaseCommands" hidden>
+                  <pre class="setCode" id="setReleaseCode" data-i18n-aria-label="settings.aboutCommands" aria-label="Upgrade commands"></pre>
+                  <button class="setCopy" id="setReleaseCopy" type="button" data-i18n-title="settings.aboutCopy" title="Copy commands" data-i18n-aria-label="settings.aboutCopy" aria-label="Copy commands">${renderAdminIcon('copy', 'setCopyIcon')}</button>
+                </div>
+              </div>
+            </div>
+          </section>
           </div>
-          <div class="glassCard glassBlur homeCard switchesCard">
-            <h2 class="cardTitle" data-i18n="shell.switchesTitle">Memory switches</h2>
-            <p class="switchesLead" data-i18n="shell.switchesLead">Read and Write apply to every connected agent. Change them with the pills in the top bar.</p>
-            <div class="switchRow">
-              <h3 class="switchTitle" data-i18n="policy.readTitle">Read Memory</h3>
-              <p class="switchLead" data-i18n="policy.readLead">Controls startup context, state reads, hybrid search, and MCP read tools.</p>
-              <div id="readPolicyMeta" class="switchMeta" data-i18n="policy.loadingCurrentState">Loading current state...</div>
-            </div>
-            <div class="switchRow">
-              <h3 class="switchTitle" data-i18n="policy.writeTitle">Write Memory</h3>
-              <p class="switchLead" data-i18n="policy.writeLead">Controls observation writes, state writes, session updates, and MCP record tools.</p>
-              <div id="writePolicyMeta" class="switchMeta" data-i18n="policy.loadingCurrentState">Loading current state...</div>
-            </div>
+        </div>
+
+        <!-- Outside the blurred cards so its own blur sees the page. -->
+        <div class="actPopover sklConfirm setConfirm" id="setConfirm" role="alertdialog" aria-labelledby="setConfirmText" hidden>
+          <p class="sklConfirmText" id="setConfirmText"></p>
+          <div class="sklConfirmActions">
+            <button class="sklAction is-quiet" id="setConfirmCancel" type="button" data-i18n="settings.confirmCancel">Cancel</button>
+            <button class="sklAction is-primary" id="setConfirmGo" type="button" data-i18n="settings.confirmGo">Turn off</button>
           </div>
         </div>
       </section>`;
@@ -1406,13 +1546,7 @@ export function renderAdminWorkbenchMarkup(): string {
               <label>
                 <span class="fieldLabel" data-i18n="llm.modelName">Model</span>
                 <input id="llmModelInput" class="textInput" type="text" list="llmModelOptions" data-i18n-placeholder="llm.placeholderModel" placeholder="deepseek-chat" />
-                <datalist id="llmModelOptions">
-                  <option value="deepseek-chat"></option>
-                  <option value="deepseek-reasoner"></option>
-                  <option value="gpt-4.1"></option>
-                  <option value="gpt-5"></option>
-                  <option value="mimo-v2.5-pro"></option>
-                  <option value="llama3.1"></option>
+                <datalist id="llmModelOptions">${renderModelOptions('                  ')}
                 </datalist>
               </label>
               <label>

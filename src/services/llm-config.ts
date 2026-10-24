@@ -239,6 +239,36 @@ function buildChatCompletionsUrl(apiUrl: string): string {
   return `${apiUrl.replace(/\/+$/, '')}/chat/completions`;
 }
 
+// The key a connection test actually sends: a nonempty typed key, otherwise the saved env key.
+export function effectiveLlmTestApiKey(apiKey?: unknown, env: NodeJS.ProcessEnv = process.env): string {
+  if (typeof apiKey === 'string' && apiKey.trim()) return apiKey.trim();
+  return env.AGENTMEM_LLM_API_KEY || env.DEEPSEEK_API_KEY || '';
+}
+
+// Replace every occurrence of a nonempty key. Length does not matter: a short typed key is still a secret.
+export function redactLlmSecret(text: string, secret?: string): string {
+  const raw = String(text ?? '');
+  const key = String(secret ?? '');
+  if (!key || raw.indexOf(key) < 0) return raw;
+  return raw.split(key).join('••••');
+}
+
+const LLM_TEST_REDACTED_FIELDS = ['error', 'message', 'detail', 'contentPreview', 'requestUrl'] as const;
+
+export function redactLlmTestPayload<T extends Record<string, any>>(
+  payload: T,
+  apiKey?: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): T {
+  const secret = effectiveLlmTestApiKey(apiKey, env);
+  if (!secret || !payload || typeof payload !== 'object') return payload;
+  const next: Record<string, any> = { ...payload };
+  for (const field of LLM_TEST_REDACTED_FIELDS) {
+    if (typeof next[field] === 'string') next[field] = redactLlmSecret(next[field], secret);
+  }
+  return next as T;
+}
+
 function parseCustomHeaders(headersText: string): Record<string, string> {
   if (!headersText) return {};
   const parsed = JSON.parse(headersText);
@@ -256,25 +286,24 @@ export async function testLlmConnection(
   const saved = readLlmConfig();
   const apiUrl = normalizeApiUrl(override.apiUrl || saved.apiUrl);
   const model = normalizeModel(override.model || saved.model);
-  const apiKey = typeof override.apiKey === 'string' && override.apiKey.trim()
-    ? override.apiKey.trim()
-    : process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY || '';
+  const apiKey = effectiveLlmTestApiKey(override.apiKey);
   const headersText = normalizeHeaders(override.headers ?? saved.headers);
   const requestUrl = buildChatCompletionsUrl(apiUrl);
   const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
+  const seal = (result: LlmConnectionTestResult): LlmConnectionTestResult => redactLlmTestPayload(result, apiKey);
 
   try {
     if (!apiKey && !isLocalEndpoint(apiUrl)) {
-      return {
+      return seal({
         error: 'AGENTMEM_LLM_API_KEY is required for non-local endpoints.',
         latencyMs: Date.now() - startedAt,
         model,
         ok: false,
         requestUrl,
         testedAt: new Date().toISOString(),
-      };
+      });
     }
 
     const headers: Record<string, string> = {
@@ -303,7 +332,7 @@ export async function testLlmConnection(
     const text = await response.text();
     const latencyMs = Date.now() - startedAt;
     if (!response.ok) {
-      return {
+      return seal({
         error: text.slice(0, 500) || response.statusText,
         latencyMs,
         model,
@@ -311,7 +340,7 @@ export async function testLlmConnection(
         requestUrl,
         status: response.status,
         testedAt: new Date().toISOString(),
-      };
+      });
     }
 
     let contentPreview = text.slice(0, 160);
@@ -323,7 +352,7 @@ export async function testLlmConnection(
       // Keep the raw preview when the provider returns non-JSON success content.
     }
 
-    return {
+    return seal({
       contentPreview,
       latencyMs,
       model,
@@ -331,16 +360,16 @@ export async function testLlmConnection(
       requestUrl,
       status: response.status,
       testedAt: new Date().toISOString(),
-    };
+    });
   } catch (error: any) {
-    return {
+    return seal({
       error: error.name === 'AbortError' ? 'Connection test timed out after 15 seconds.' : error.message,
       latencyMs: Date.now() - startedAt,
       model,
       ok: false,
       requestUrl,
       testedAt: new Date().toISOString(),
-    };
+    });
   } finally {
     clearTimeout(timeout);
   }
