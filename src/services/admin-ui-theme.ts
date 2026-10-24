@@ -605,9 +605,30 @@ ${WALLPAPER_CSS}
   }
 
   .policyBadge.saving,
-  .statusChip.warning {
+  .statusChip.warning,
+  .statusChip.is-warning {
     background: rgba(180, 111, 8, 0.13);
     color: var(--warning);
+  }
+
+  .statusChip.is-success {
+    background: rgba(20, 133, 93, 0.13);
+    color: var(--success);
+  }
+
+  .statusChip.is-danger {
+    background: rgba(185, 59, 66, 0.12);
+    color: var(--danger);
+  }
+
+  .statusChip.is-neutral {
+    background: rgba(120, 130, 150, 0.12);
+    color: var(--muted);
+  }
+
+  .statusChip.is-info {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
   }
 
   .switch {
@@ -917,6 +938,57 @@ ${WALLPAPER_CSS}
     text-align: center;
     color: var(--muted);
     background: rgba(255, 255, 255, 0.30);
+  }
+
+  .emptyState,
+  .actNotice.emptyState,
+  .sklEmpty.emptyState {
+    width: min(100%, 480px);
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .emptyStateIcon {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(10, 132, 255, 0.16), rgba(10, 132, 255, 0.06)), var(--chip-fill);
+    box-shadow: inset 0 1px 0 var(--chip-highlight), 0 8px 20px -12px rgba(10, 132, 255, 0.5);
+    color: var(--shell-accent);
+  }
+
+  .emptyStateIcon .placeholderGlyph,
+  .emptyStateIcon svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .emptyStateLine {
+    margin: 6px 0 0;
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .emptyStateHint {
+    max-width: 460px;
+    margin: 0;
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .emptyStateActions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
   }
 
   .statusLine {
@@ -2749,6 +2821,70 @@ ${WALLPAPER_CSS}
     margin-top: 0;
   }
 
+  .pageHead {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px 24px;
+    margin: -14px 0 16px 2px;
+  }
+
+  .pageHeadCopy {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .pageSub {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .pageHead .pageSub {
+    margin: 0;
+  }
+
+  .pageStamp {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--text-3);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .pageStamp.is-warn {
+    color: var(--a-warn, var(--warning));
+  }
+
+  .pageHead .actSummary,
+  .pageHead .pageMeta {
+    margin: 6px 0 0;
+    font-size: 13.5px;
+  }
+
+  .rangeControl {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .devStatusStrip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    margin: 0 0 16px;
+  }
+
+  .devStatusNote {
+    flex: 1 1 240px;
+    margin: 0;
+    color: var(--text-3);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
   .actSum strong {
     color: var(--text);
     font-weight: 600;
@@ -3416,6 +3552,7 @@ ${WALLPAPER_CSS}
     align-items: center;
     gap: 10px;
     padding: 48px 32px;
+    border: 0;
     text-align: center;
   }
 
@@ -3426,7 +3563,8 @@ ${WALLPAPER_CSS}
     box-shadow: var(--a-glass-shadow);
   }
 
-  .actNotice.is-error .placeholderIcon {
+  .actNotice.is-error .placeholderIcon,
+  .actNotice.is-error .emptyStateIcon {
     background: rgba(255, 69, 58, 0.12);
     box-shadow: inset 0 1px 0 var(--chip-highlight);
     color: var(--err-ink);
@@ -4317,6 +4455,12 @@ ${WALLPAPER_CSS}
     --nav-active-fill: linear-gradient(180deg, rgba(48, 120, 255, 0.55), rgba(22, 76, 210, 0.42));
     --nav-active-shadow: inset 0 0 0 1px rgba(160, 190, 255, 0.50);
     --shell-accent: #ffffff;
+  }
+
+  html[data-act-bg="dark"] .sidebar.glassSurface,
+  html[data-glass="dark"] .sidebar.glassSurface {
+    background: linear-gradient(180deg, rgba(40, 48, 90, 0.34), rgba(20, 24, 56, 0.22));
+    box-shadow: var(--glass-shadow);
   }
 
   html[data-act-bg="light"] .navIcon {
@@ -5880,6 +6024,12 @@ ${WALLPAPER_CSS}
   .pipePill.state-duplicate { background: var(--p-dup-fill); color: var(--p-dup-ink); }
   .pipePill.state-duplicate::before { background: var(--p-dup-dot); }
 
+  .pipePill.statusChip.is-success { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ring-ok-ink); }
+  .pipePill.statusChip.is-warning { background: var(--p-warn-fill); color: var(--p-warn-ink); }
+  .pipePill.statusChip.is-danger { background: var(--p-err-fill); color: var(--p-err-ink); }
+  .pipePill.statusChip.is-neutral { background: var(--p-muted-fill); color: var(--p-muted-ink); }
+  .pipePill.statusChip.is-info { background: var(--p-neutral-fill); color: var(--a-link, var(--text)); }
+
   .pipeOptDot {
     width: 8px;
     height: 8px;
@@ -7001,24 +7151,35 @@ ${WALLPAPER_CSS}
     mask-composite: exclude;
   }
 
-  /* Toolbar: the two pickers (and the Failed chip from Home) on the left, the range on the right. */
+  /* Toolbar: Project and Agent stay on one row between search and the range, same as Pipeline. */
+  .digToolbar {
+    flex-wrap: nowrap;
+  }
+
   .digFilters {
     display: flex;
     flex: 1 1 auto;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 8px;
     min-width: 0;
   }
 
   .digToolbar .actPopup {
-    flex: 0 1 250px;
-    min-width: 150px;
-    max-width: 260px;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 230px;
   }
 
   .digToolbar .actPopupIcon {
     margin-left: auto;
+  }
+
+  @media (max-width: 860px) {
+    .digToolbar,
+    .digFilters {
+      flex-wrap: wrap;
+    }
   }
 
   .digStatusChip {
@@ -9219,6 +9380,8 @@ ${WALLPAPER_CSS}
     justify-items: center;
     gap: 6px;
     padding: 46px 24px 50px;
+    border: 0;
+    background: transparent;
     text-align: center;
   }
 
@@ -9282,6 +9445,37 @@ ${WALLPAPER_CSS}
   .sklEmpty.is-quiet .sklEmptyGlyph {
     width: 18px;
     height: 18px;
+  }
+
+  .sklEmpty.emptyState,
+  .sklEmpty.is-quiet {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: min(100%, 480px);
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 48px 32px;
+    text-align: center;
+  }
+
+  .sklEmpty.is-quiet .emptyStateIcon,
+  .sklEmpty .emptyStateIcon {
+    width: 56px;
+    height: 56px;
+    margin: 0;
+    border-radius: 18px;
+  }
+
+  .sklEmpty.is-quiet .emptyStateLine,
+  .sklEmpty .emptyStateLine {
+    margin: 6px 0 0;
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 650;
   }
 
   .sklEmpty.is-quiet .sklEmptyTitle {
@@ -10858,21 +11052,34 @@ ${WALLPAPER_CSS}
   }
 
   .devToolsView .statusChip.success,
+  .devToolsView .statusChip.is-success,
   .devToolsView .policyBadge.enabled {
     background: rgba(20, 133, 93, 0.13);
     color: var(--success);
   }
 
   .devToolsView .statusChip.error,
+  .devToolsView .statusChip.is-danger,
   .devToolsView .policyBadge.disabled {
     background: rgba(185, 59, 66, 0.12);
     color: var(--danger);
   }
 
   .devToolsView .statusChip.warning,
+  .devToolsView .statusChip.is-warning,
   .devToolsView .policyBadge.saving {
     background: rgba(180, 111, 8, 0.13);
     color: var(--warning);
+  }
+
+  .devToolsView .statusChip.is-info {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+  }
+
+  .devToolsView .statusChip.is-neutral {
+    background: var(--chip-fill);
+    color: var(--glass-text-2);
   }
 
   .devToolsView .segmentButton {
@@ -11135,21 +11342,29 @@ ${WALLPAPER_CSS}
   }
 
   html[data-glass="dark"] .devToolsView .statusChip.success,
+  html[data-glass="dark"] .devToolsView .statusChip.is-success,
   html[data-glass="dark"] .devToolsView .policyBadge.enabled {
     background: color-mix(in srgb, var(--ok) 22%, transparent);
     color: var(--ok);
   }
 
   html[data-glass="dark"] .devToolsView .statusChip.error,
+  html[data-glass="dark"] .devToolsView .statusChip.is-danger,
   html[data-glass="dark"] .devToolsView .policyBadge.disabled {
     background: color-mix(in srgb, var(--err) 22%, transparent);
     color: var(--err-ink);
   }
 
   html[data-glass="dark"] .devToolsView .statusChip.warning,
+  html[data-glass="dark"] .devToolsView .statusChip.is-warning,
   html[data-glass="dark"] .devToolsView .policyBadge.saving {
     background: color-mix(in srgb, var(--warn) 22%, transparent);
     color: var(--warn-ink);
+  }
+
+  html[data-glass="dark"] .devToolsView .statusChip.is-info {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent);
   }
 
   html[data-glass="dark"] .devToolsView .statusDot {

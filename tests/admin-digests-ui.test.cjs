@@ -167,6 +167,7 @@ function rowRenderer() {
     ${uiClientFunction('formatCount')}
     ${uiClientFunction('parseTimestamp')}
     ${uiClientFunction('localDayKey')}
+    ${uiClientFunction('formatUiDate')}
     ${uiClientFunction('formatClock')}
     ${uiClientFunction('formatShortDate')}
     ${uiClientFunction('formatPipelineStamp')}
@@ -301,6 +302,7 @@ test('Home last-digest headline uses the covered local_date, not generated_at', 
     const state = { locale: "en" };
     ${uiClientFunction('parseLocalDay')}
     ${uiClientFunction('parseTimestamp')}
+    ${uiClientFunction('formatUiDate')}
     ${uiClientFunction('formatShortDate')}
     const latest = { local_date: "2026-10-16", generated_at: "2026-10-17T01:54:00+08:00" };
     const covered = parseLocalDay(latest.local_date);
@@ -400,6 +402,7 @@ test('digest written time adds the short date only when it falls on another loca
     ${uiClientFunction('formatCount')}
     ${uiClientFunction('parseTimestamp')}
     ${uiClientFunction('localDayKey')}
+    ${uiClientFunction('formatUiDate')}
     ${uiClientFunction('formatClock')}
     ${uiClientFunction('formatShortDate')}
     ${uiClientFunction('formatPipelineStamp')}
@@ -460,28 +463,28 @@ test('digest day headers lead with Today or Yesterday like Memory', () => {
     ${uiClientFunction('calendarDaysAgo')}
     ${uiClientFunction('localDayKey')}
     ${uiClientFunction('shiftDays')}
+    ${uiClientFunction('formatUiDate')}
     ${uiClientFunction('memoryDayLabel')}
     ${uiClientFunction('digestDayLabel')}
     const today = localDayKey(shiftDays(new Date(), 0));
     const yesterday = localDayKey(shiftDays(new Date(), -1));
     const olderKey = localDayKey(shiftDays(new Date(), -3));
     const olderDate = parseLocalDay(olderKey);
-    const withYear = olderDate.getFullYear() !== new Date().getFullYear();
     ({
       todayLabel: digestDayLabel(today),
       yesterdayLabel: digestDayLabel(yesterday),
       olderLabel: digestDayLabel(olderKey),
       memoryToday: memoryDayLabel(today),
       memoryYesterday: memoryDayLabel(yesterday),
-      olderName: olderDate.toLocaleDateString(state.locale, { month: "short", day: "numeric", year: withYear ? "numeric" : undefined }),
-      olderWeekday: olderDate.toLocaleDateString(state.locale, { weekday: "short" }),
+      olderName: formatUiDate(olderDate, "day"),
+      olderWeekday: formatUiDate(olderDate, "weekday"),
     });
   `);
   const en = run('en', ADMIN_UI_TRANSLATIONS.en);
   assert.equal(en.todayLabel.name, 'Today');
   assert.equal(en.todayLabel.relative, true);
   assert.equal(en.todayLabel.date, en.memoryToday.date);
-  assert.match(en.todayLabel.date, /\w+, \w+ \d+/);
+  assert.match(en.todayLabel.date, /^[A-Z][a-z]{2} \d{1,2}/);
   assert.equal(en.yesterdayLabel.name, 'Yesterday');
   assert.equal(en.yesterdayLabel.relative, true);
   assert.equal(en.yesterdayLabel.date, en.memoryYesterday.date);
