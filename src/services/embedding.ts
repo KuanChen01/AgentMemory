@@ -1,3 +1,4 @@
+import { extractCjkBigrams } from './cjk';
 import { resolveEmbeddingConfig } from './embedding-config';
 
 const LOCAL_EMBEDDING_DIMENSIONS = 1024;
@@ -36,7 +37,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
 }
 
 export function getLocalHashingEmbedding(text: string): number[] {
-  const words = text.toLowerCase().match(/\b\w+\b/g) || [];
+  const words = [...(text.toLowerCase().match(/\b\w+\b/g) || []), ...extractCjkBigrams(text)];
   const vector = new Array(LOCAL_EMBEDDING_DIMENSIONS).fill(0);
 
   for (const word of words) {
