@@ -377,6 +377,33 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       rowNodes: new Map(),
       signatures: {},
     },
+    // Settings: its own copies of llm-config and digest-scheduler (the legacy panels keep theirs). llmError and
+    // digestError hold a failed load; llmSaveError and digestSaveError are inline write failures; llmTest is the
+    // last test result; keyEditing shows the empty Replace-key input; confirm is "read" or "write" while the
+    // switch-off confirm is open. policyError is the calm note after a switch save fails.
+    settings: {
+      llm: null,
+      llmLoading: false,
+      llmSaving: false,
+      llmError: "",
+      llmSaveError: "",
+      llmSaved: false,
+      llmFormKey: "",
+      llmTest: null,
+      llmTesting: false,
+      keyEditing: false,
+      digest: null,
+      digestLoading: false,
+      digestSaving: false,
+      digestError: "",
+      digestSaveError: "",
+      digestFormKey: "",
+      policyError: "",
+      loadedAt: 0,
+      confirm: "",
+      copiedAt: 0,
+      section: "setSwitchesCard",
+    },
     // The one detail drawer. host is the view that opened it; the drawer node moves into that view. id is the memory
     // on show; task is the Pipeline task it was opened from (task alone shows the task body, taskItem its last copy).
     // digest is the Digests row it was opened from (digestPayload its detail); a source memory opened from it keeps
@@ -773,6 +800,54 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     sklConfirmText: document.getElementById("sklConfirmText"),
     sklConfirmGo: document.getElementById("sklConfirmGo"),
     sklDrawerFoot: null,
+    settingsView: document.getElementById("settingsView"),
+    setUpdated: document.getElementById("setUpdated"),
+    setNav: document.getElementById("setNav"),
+    setNavItems: Array.from(document.querySelectorAll(".setNavItem")),
+    setCards: Array.from(document.querySelectorAll(".setCard")),
+    setReadChanged: document.getElementById("setReadChanged"),
+    setWriteChanged: document.getElementById("setWriteChanged"),
+    setPolicyNote: document.getElementById("setPolicyNote"),
+    setLlmCard: document.getElementById("setLlmCard"),
+    setLlmApiUrl: document.getElementById("setLlmApiUrl"),
+    setLlmModel: document.getElementById("setLlmModel"),
+    setLlmKeyMasked: document.getElementById("setLlmKeyMasked"),
+    setLlmKeyInput: document.getElementById("setLlmKeyInput"),
+    setLlmKeyChip: document.getElementById("setLlmKeyChip"),
+    setLlmKeyHint: document.getElementById("setLlmKeyHint"),
+    setLlmReplaceKey: document.getElementById("setLlmReplaceKey"),
+    setLlmDisableJson: document.getElementById("setLlmDisableJson"),
+    setLlmHeaders: document.getElementById("setLlmHeaders"),
+    setLlmBudget: document.getElementById("setLlmBudget"),
+    setLlmEnvPath: document.getElementById("setLlmEnvPath"),
+    setLlmNote: document.getElementById("setLlmNote"),
+    setLlmTestChip: document.getElementById("setLlmTestChip"),
+    setLlmTestedAt: document.getElementById("setLlmTestedAt"),
+    setLlmTest: document.getElementById("setLlmTest"),
+    setLlmSave: document.getElementById("setLlmSave"),
+    setDigestCard: document.getElementById("setDigestCard"),
+    setDigestEnabled: document.getElementById("setDigestEnabled"),
+    setDigestTime: document.getElementById("setDigestTime"),
+    setDigestZoneWrap: document.getElementById("setDigestZoneWrap"),
+    setDigestZone: document.getElementById("setDigestZone"),
+    setDigestZoneText: document.getElementById("setDigestZoneText"),
+    setDigestLookback: document.getElementById("setDigestLookback"),
+    setDigestInfo: document.getElementById("setDigestInfo"),
+    setDigestNext: document.getElementById("setDigestNext"),
+    setDigestSave: document.getElementById("setDigestSave"),
+    setVersion: document.getElementById("setVersion"),
+    setLatest: document.getElementById("setLatest"),
+    setReleaseChip: document.getElementById("setReleaseChip"),
+    setReleaseNote: document.getElementById("setReleaseNote"),
+    setReleaseCheck: document.getElementById("setReleaseCheck"),
+    setReleaseLink: document.getElementById("setReleaseLink"),
+    setReleaseCommands: document.getElementById("setReleaseCommands"),
+    setReleaseCode: document.getElementById("setReleaseCode"),
+    setReleaseCopy: document.getElementById("setReleaseCopy"),
+    setConfirm: document.getElementById("setConfirm"),
+    setConfirmText: document.getElementById("setConfirmText"),
+    setConfirmGo: document.getElementById("setConfirmGo"),
+    setConfirmCancel: document.getElementById("setConfirmCancel"),
   };
 
   // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
@@ -1009,6 +1084,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderPipeline();
     renderDigests();
     renderProjects();
+    renderSettings();
     renderMemoryDrawer();
     renderProceduralWorkspace();
     renderLlmConfig();
@@ -1075,17 +1151,37 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const badge = isRead ? els.readPolicyState : els.writePolicyState;
     const meta = isRead ? els.readPolicyMeta : els.writePolicyMeta;
     const variant = isRead ? "readPolicy" : "writePolicy";
-    // The Read/Write controls share one compact pill in the top bar; the long explanation lives in Settings.
+    const saving = state.isSavingPolicy;
+    // The top-bar pill mirrors the switch and opens Settings; the switch itself lives in the Settings card.
     setClass(card, "policyPill " + variant + " " +
       (enabled ? "is-enabled" : "is-disabled") +
-      (state.isSavingPolicy ? " is-saving" : ""));
-    if (toggle.checked !== !!enabled) toggle.checked = !!enabled;
-    if (toggle.disabled !== state.isSavingPolicy) toggle.disabled = state.isSavingPolicy;
-    setText(badge, state.isSavingPolicy ? t("common.saving") : enabled ? t("shell.on") : t("shell.off"));
-    setClass(badge, "policyBadge " + (state.isSavingPolicy ? "saving" : enabled ? "enabled" : "disabled"));
-    const metaText = getPolicyMeta(kind, enabled);
-    setText(meta, metaText);
-    setAttr(card, "title", metaText);
+      (saving ? " is-saving" : ""));
+    const pillBadge = card ? card.querySelector(".policyBadge") : null;
+    setText(pillBadge, saving ? t("common.saving") : enabled ? t("shell.on") : t("shell.off"));
+    setClass(pillBadge, "policyBadge " + (saving ? "saving" : enabled ? "enabled" : "disabled"));
+    setAttr(card, "title", getPolicyMeta(kind, enabled));
+    // An open confirm keeps the switch on until the user answers it.
+    const confirming = state.settings.confirm === kind;
+    if (!confirming && toggle.checked !== !!enabled) toggle.checked = !!enabled;
+    if (toggle.disabled !== saving) toggle.disabled = saving;
+    setText(badge, saving ? t("settings.saving") : enabled ? t("settings.on") : t("settings.off"));
+    setClass(badge, "setChip " + (saving ? "is-busy" : enabled ? "is-ok" : "is-off"));
+    setText(meta, enabled || saving ? t(isRead ? "settings.readLead" : "settings.writeLead") : t(isRead ? "settings.readOffLead" : "settings.writeOffLead"));
+    setClass(meta, "setSwitchLead" + (!enabled && !saving ? " is-off" : ""));
+    const row = isRead ? document.getElementById("setReadRow") : document.getElementById("setWriteRow");
+    if (row) row.classList.toggle("is-off", !enabled && !saving);
+    const policy = getDisplayedPolicy();
+    const changedAt = parseTimestamp(policy.updatedAt);
+    setText(isRead ? els.setReadChanged : els.setWriteChanged, saving ? "" : changedAt ? t("settings.changed", { time: formatShortDate(changedAt) + ", " + formatClock(changedAt) }) : "");
+    renderPolicyNote();
+  }
+
+  function renderPolicyNote() {
+    if (!els.setPolicyNote || !state.settings) return;
+    const message = state.settings.policyError || "";
+    setText(els.setPolicyNote, message);
+    setHidden(els.setPolicyNote, !message);
+    els.setPolicyNote.classList.toggle("is-error", !!message);
   }
 
   function renderPolicyBanner(policy) {
@@ -1182,6 +1278,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderDailyDigest();
     renderPolicyBanner(policy);
     renderHome();
+    renderSettingsAbout();
   }
 
   function getReleaseStatusPresentation(result) {
@@ -9399,6 +9496,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!state.overview || !state.overview.release) return;
     state.isCheckingRelease = true;
     renderReleaseCheck();
+    renderSettingsAbout();
     try {
       state.releaseCheck = await fetchJson("/admin/api/release-check");
     } catch (error) {
@@ -9422,6 +9520,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     } finally {
       state.isCheckingRelease = false;
       renderReleaseCheck();
+      renderSettingsAbout();
     }
   }
 
@@ -10154,6 +10253,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     };
     state.pendingPolicy = nextPolicy;
     state.isSavingPolicy = true;
+    if (state.settings) state.settings.policyError = "";
     renderOverview();
 
     try {
@@ -10171,6 +10271,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       state.pendingPolicy = null;
       state.isSavingPolicy = false;
       state.overview.policy = previousPolicy;
+      if (state.settings) state.settings.policyError = t("settings.policySaveFailed");
       renderOverview();
       throw error;
     }
@@ -10232,7 +10333,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // It shows while the user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
   function usesActivityBackdrop() {
     const settings = bg.settings;
-    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView" || state.activeView === "projectsView" || state.activeView === "skillsView") && !!settings && !settings.pinned &&
+    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView" || state.activeView === "projectsView" || state.activeView === "skillsView" || state.activeView === "settingsView") && !!settings && !settings.pinned &&
       settings.preset === bg.api.defaults.preset && settings.tone === "auto";
   }
 
@@ -10562,6 +10663,688 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setText(els.pageTitle, t(key));
   }
 
+  // ---------- Settings ----------
+
+  // Opening the page re-reads llm-config and digest-scheduler; the release check only runs on click (a result
+  // the legacy panel already loaded is reused).
+  function showSettingsView() {
+    const set = state.settings;
+    renderSettings();
+    if (!set.llmLoading) void loadSettingsLlm();
+    if (!set.digestLoading) void loadSettingsDigest();
+    window.requestAnimationFrame(syncSettingsSection);
+  }
+
+  async function loadSettingsLlm(options) {
+    const set = state.settings;
+    const quiet = !!(options && options.quiet);
+    set.llmLoading = true;
+    if (!quiet) renderSettingsLlm();
+    try {
+      const payload = await fetchJson("/admin/api/llm-config");
+      set.llm = payload.config || null;
+      set.llmError = "";
+      set.loadedAt = Date.now();
+    } catch (error) {
+      if (!quiet) set.llmError = settingsRedacted(error.message || String(error), settingsTypedKey());
+    } finally {
+      set.llmLoading = false;
+      renderSettingsLlm();
+      renderSettingsUpdated();
+    }
+  }
+
+  async function loadSettingsDigest() {
+    const set = state.settings;
+    set.digestLoading = true;
+    renderSettingsDigest();
+    try {
+      set.digest = await fetchJson("/admin/api/digest-scheduler");
+      set.digestError = "";
+      set.loadedAt = Date.now();
+    } catch (error) {
+      set.digestError = error.message || String(error);
+    } finally {
+      set.digestLoading = false;
+      renderSettingsDigest();
+      renderSettingsUpdated();
+    }
+  }
+
+  // Drop a typed key out of any server text before it can reach the DOM, a title, or an error.
+  function settingsRedacted(text, secret) {
+    let raw = String(text || "");
+    const key = String(secret || "").trim();
+    if (key.length >= 8 && raw.indexOf(key) >= 0) raw = raw.split(key).join("••••");
+    return raw;
+  }
+
+  function settingsTypedKey() {
+    if (!state.settings.keyEditing || !els.setLlmKeyInput) return "";
+    return String(els.setLlmKeyInput.value || "");
+  }
+
+  function settingsHttpUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  // apiKey is included only when Replace key is open and the field is non-empty.
+  function settingsLlmPayload() {
+    const body = {
+      apiUrl: els.setLlmApiUrl.value.trim(),
+      model: els.setLlmModel.value.trim(),
+      headers: els.setLlmHeaders.value.trim(),
+      disableJsonMode: !!els.setLlmDisableJson.checked,
+    };
+    const apiKey = state.settings.keyEditing ? els.setLlmKeyInput.value.trim() : "";
+    if (apiKey) body.apiKey = apiKey;
+    return body;
+  }
+
+  function settingsLlmProblem(body) {
+    if (!settingsHttpUrl(body.apiUrl)) return t("settings.llmUrlInvalid");
+    if (!String(body.model || "").trim()) return t("settings.llmModelRequired");
+    return "";
+  }
+
+  // Keep only the fields the chip renders, with the typed key scrubbed out of every string.
+  function settingsLlmTestView(result, secret) {
+    if (!result) return null;
+    return {
+      ok: !!result.ok,
+      latencyMs: result.latencyMs,
+      status: result.status,
+      error: settingsRedacted(result.error || "", secret),
+      requestUrl: settingsRedacted(result.requestUrl || "", secret),
+      testedAt: result.testedAt || "",
+    };
+  }
+
+  async function saveSettingsLlm() {
+    const set = state.settings;
+    if (set.llmSaving || !set.llm) return;
+    const body = settingsLlmPayload();
+    const problem = settingsLlmProblem(body);
+    set.llmSaved = false;
+    if (problem) {
+      set.llmSaveError = problem;
+      renderSettingsLlm();
+      return;
+    }
+    const secret = body.apiKey || settingsTypedKey();
+    set.llmSaving = true;
+    set.llmSaveError = "";
+    renderSettingsLlm();
+    try {
+      const payload = await fetchJson("/admin/api/llm-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      set.llm = payload.config || set.llm;
+      set.llmFormKey = "";
+      set.keyEditing = false;
+      els.setLlmKeyInput.value = "";
+      set.llmError = "";
+      set.llmSaved = true;
+      set.llmSaving = false;
+      renderSettingsLlm();
+      await loadSettingsLlm({ quiet: true });
+      set.llmSaved = true;
+    } catch (error) {
+      set.llmSaveError = settingsRedacted(error && error.message ? error.message : "", secret) || t("settings.saveFailed", { error: "" });
+    } finally {
+      set.llmSaving = false;
+      renderSettingsLlm();
+    }
+  }
+
+  // A real outbound call: the form's endpoint and model, the saved key unless a new one was typed.
+  async function runSettingsLlmTest() {
+    const set = state.settings;
+    if (set.llmTesting || !set.llm) return;
+    set.llmTesting = true;
+    renderSettingsLlmTest();
+    const typed = settingsTypedKey();
+    const body = {
+      apiUrl: els.setLlmApiUrl.value.trim(),
+      model: els.setLlmModel.value.trim(),
+      headers: els.setLlmHeaders.value.trim(),
+    };
+    if (set.keyEditing && typed.trim()) body.apiKey = typed.trim();
+    try {
+      set.llmTest = settingsLlmTestView(await fetchJson("/admin/api/llm-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }), typed);
+    } catch (error) {
+      set.llmTest = settingsLlmTestView({
+        ok: false,
+        error: error && error.message ? error.message : String(error || ""),
+        status: error && error.status,
+        testedAt: new Date().toISOString(),
+      }, typed);
+    } finally {
+      set.llmTesting = false;
+      renderSettingsLlmTest();
+    }
+  }
+
+  function renderSettings() {
+    if (!els.settingsView) return;
+    renderSettingsLlm();
+    renderSettingsDigest();
+    renderSettingsAbout();
+    renderSettingsUpdated();
+    renderSettingsDayOptions();
+  }
+
+  function renderSettingsUpdated() {
+    const at = state.settings.loadedAt;
+    setText(els.setUpdated, at ? t("settings.updated", { time: formatClock(new Date(at)) }) : "");
+  }
+
+  // Short local stamp ("Oct 22, 09:14") for the switch rows, the scheduler and the release check.
+  function formatSettingsStamp(date) {
+    return formatShortDate(date) + ", " + formatClock(date);
+  }
+
+  function renderSettingsLlm() {
+    if (!els.setLlmCard) return;
+    const set = state.settings;
+    const config = set.llm;
+    const loading = !config && !set.llmError;
+    setAttr(els.setLlmCard, "aria-busy", loading ? "true" : "");
+    els.setLlmCard.classList.toggle("is-loading", loading);
+    if (config) {
+      // Fill the form when the saved config changes, so a poll never wipes what the user is typing.
+      const formKey = JSON.stringify([config.apiUrl, config.model, config.headers, !!config.disableJsonMode]);
+      if (set.llmFormKey !== formKey) {
+        set.llmFormKey = formKey;
+        els.setLlmApiUrl.value = String(config.apiUrl || "");
+        els.setLlmModel.value = String(config.model || "");
+        els.setLlmHeaders.value = String(config.headers || "");
+        els.setLlmDisableJson.checked = !!config.disableJsonMode;
+      }
+    }
+    const hasKey = !!(config && config.hasApiKey);
+    const local = !!(config && config.isLocalEndpoint);
+    // Only the masked string ever reaches the DOM; the Replace-key input starts empty.
+    const masked = hasKey ? String(config.apiKeyMasked || "") : "";
+    if (els.setLlmKeyMasked.value !== masked) els.setLlmKeyMasked.value = masked;
+    setAttr(els.setLlmKeyMasked, "placeholder", loading ? t("settings.loading") : t("settings.llmKeyEmpty"));
+    setHidden(els.setLlmKeyMasked, set.keyEditing);
+    setHidden(els.setLlmKeyInput, !set.keyEditing);
+    setText(els.setLlmKeyChip, hasKey ? t("settings.llmKeySaved") : t("settings.llmKeyNotSet"));
+    setClass(els.setLlmKeyChip, "setChip " + (hasKey ? "is-ok" : local ? "is-muted" : "is-warn"));
+    setHidden(els.setLlmKeyChip, !config || set.keyEditing);
+    setText(els.setLlmReplaceKey, set.keyEditing ? t("settings.confirmCancel") : t(hasKey ? "settings.llmReplaceKey" : "settings.llmSetKey"));
+    setAttr(els.setLlmReplaceKey, "aria-expanded", set.keyEditing ? "true" : "false");
+    const locked = !!(set.llmSaving || set.llmTesting || !config);
+    els.setLlmReplaceKey.disabled = locked;
+    if (els.setLlmKeyInput) els.setLlmKeyInput.disabled = !!set.llmSaving;
+    setText(els.setLlmKeyHint, t("settings.llmKeyLocal"));
+    setHidden(els.setLlmKeyHint, !(local && !hasKey && !set.keyEditing));
+    if (config) {
+      setText(els.setLlmBudget, config.outputBudgetEnabled
+        ? t("settings.llmBudgetOn", { observation: Number(config.observationMaxTokens || 0).toLocaleString(state.locale), digest: Number(config.digestMaxTokens || 0).toLocaleString(state.locale) })
+        : t("settings.llmBudgetOff"));
+      setText(els.setLlmEnvPath, config.envPath ? t(config.exists === false ? "settings.llmEnvMissing" : "settings.llmEnvPath", { path: settingsRedacted(String(config.envPath), settingsTypedKey()) }) : "");
+    }
+    const note = set.llmSaveError
+      ? set.llmSaveError
+      : set.llmError
+        ? t("settings.loadFailed", { error: settingsRedacted(set.llmError, settingsTypedKey()) })
+        : set.llmSaved
+          ? t("settings.llmSaved")
+          : "";
+    setText(els.setLlmNote, note);
+    setClass(els.setLlmNote, "setNote" + (set.llmSaveError || set.llmError ? " is-error" : ""));
+    [els.setLlmApiUrl, els.setLlmModel, els.setLlmHeaders, els.setLlmDisableJson, els.setLlmSave].forEach((control) => {
+      if (control && control.disabled !== locked) control.disabled = locked;
+    });
+    renderSettingsLlmTest();
+  }
+
+  function renderSettingsLlmTest() {
+    const set = state.settings;
+    if (els.setLlmTest) {
+      setText(els.setLlmTest, set.llmTesting ? t("settings.llmTesting") : t("settings.llmTest"));
+      setAttr(els.setLlmTest, "aria-busy", set.llmTesting ? "true" : "");
+      els.setLlmTest.disabled = !!(set.llmTesting || set.llmSaving || !set.llm);
+    }
+    if (!els.setLlmTestChip) return;
+    const result = set.llmTest;
+    setHidden(els.setLlmTestChip, !result || set.llmTesting);
+    if (result) {
+      const error = String(result.error || "").trim();
+      const label = result.ok
+        ? t("settings.llmConnected", { latency: String(Math.round(Number(result.latencyMs) || 0)) })
+        : result.status && error.indexOf(String(result.status)) !== 0
+          ? t("settings.llmFailedStatus", { status: String(result.status), error: error })
+          : t("settings.llmFailed", { error: error || String(result.status || "") });
+      setText(els.setLlmTestChip, label);
+      setClass(els.setLlmTestChip, "setChip setTestChip " + (result.ok ? "is-ok" : "is-err"));
+      setAttr(els.setLlmTestChip, "title", settingsRedacted(result.ok ? String(result.requestUrl || "") : error, settingsTypedKey()));
+    }
+    const testedAt = result ? parseTimestamp(result.testedAt) : null;
+    let tested = "";
+    if (set.llmTesting) {
+      tested = "";
+    } else if (testedAt) {
+      const minutes = Math.floor((Date.now() - testedAt.getTime()) / 60000);
+      tested = minutes < 1 ? t("settings.testedNow") : minutes < 60 ? t("settings.testedMinutes", { n: minutes }) : t("settings.testedAt", { time: formatSettingsStamp(testedAt) });
+    } else if (state.settings.llm) {
+      tested = t("settings.llmNotTested");
+    }
+    setText(els.setLlmTestedAt, tested);
+  }
+
+  function renderSettingsDayOptions() {
+    if (!els.setDigestLookback) return;
+    Array.from(els.setDigestLookback.options).forEach((option) => {
+      const n = Number(option.value);
+      setText(option, n === 1 ? t("settings.digestDay") : t("settings.digestDays", { n: n }));
+    });
+  }
+
+  // Every IANA zone the browser knows, plus the configured one (kept even if the browser lacks it).
+  function getSettingsTimeZones(current) {
+    let zones = [];
+    try {
+      zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+    } catch (_error) {
+      zones = [];
+    }
+    const list = zones.slice();
+    ["UTC", current].forEach((zone) => {
+      if (zone && list.indexOf(zone) < 0) list.push(zone);
+    });
+    return list.sort();
+  }
+
+  // Every IANA zone the browser knows. Without Intl.supportedValuesOf the card uses a text field instead.
+  function settingsZonesAvailable() {
+    try {
+      return typeof Intl.supportedValuesOf === "function" && Array.isArray(Intl.supportedValuesOf("timeZone"));
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function settingsDigestPayload() {
+    const zone = settingsZonesAvailable()
+      ? els.setDigestZone.value
+      : (els.setDigestZoneText ? els.setDigestZoneText.value : els.setDigestZone.value);
+    return {
+      enabled: !!els.setDigestEnabled.checked,
+      schedule_time: String(els.setDigestTime.value || "").trim(),
+      time_zone: String(zone || "").trim(),
+      lookback_days: Number(els.setDigestLookback.value),
+    };
+  }
+
+  function settingsDigestProblem(body) {
+    if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(body.schedule_time)) return t("settings.digestTimeInvalid");
+    if (!String(body.time_zone || "").trim()) return t("settings.digestZoneRequired");
+    if (!Number.isInteger(body.lookback_days) || body.lookback_days < 1 || body.lookback_days > 14) return t("settings.digestDaysInvalid");
+    return "";
+  }
+
+  async function saveSettingsDigest() {
+    const set = state.settings;
+    if (set.digestSaving || !(set.digest && set.digest.config)) return;
+    const body = settingsDigestPayload();
+    const problem = settingsDigestProblem(body);
+    if (problem) {
+      set.digestSaveError = problem;
+      renderSettingsDigest();
+      return;
+    }
+    set.digestSaving = true;
+    set.digestSaveError = "";
+    renderSettingsDigest();
+    try {
+      const payload = await fetchJson("/admin/api/digest-scheduler", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      set.digest = payload;
+      set.digestFormKey = "";
+      set.digestError = "";
+      set.digestSaveError = "";
+      set.loadedAt = Date.now();
+    } catch (error) {
+      const message = settingsRedacted(error && error.message ? error.message : "", "");
+      set.digestSaveError = message || t("settings.saveFailed", { error: String(error && error.status || "") });
+    } finally {
+      set.digestSaving = false;
+      renderSettingsDigest();
+      renderSettingsUpdated();
+    }
+  }
+
+  function renderSettingsDigest() {
+    if (!els.setDigestCard) return;
+    const set = state.settings;
+    const payload = set.digest;
+    const config = payload && payload.config;
+    const runtime = (payload && payload.runtime) || {};
+    const loading = !config && !set.digestError;
+    setAttr(els.setDigestCard, "aria-busy", loading ? "true" : "");
+    els.setDigestCard.classList.toggle("is-loading", loading);
+    const zonesOk = settingsZonesAvailable();
+    setHidden(els.setDigestZone, !zonesOk);
+    setHidden(els.setDigestZoneText, zonesOk);
+    if (els.setDigestZoneWrap) els.setDigestZoneWrap.classList.toggle("is-text", !zonesOk);
+    if (config) {
+      const zone = String(config.time_zone || "");
+      if (zonesOk) syncSelect(els.setDigestZone, getSettingsTimeZones(zone), "", zone, false);
+      const formKey = JSON.stringify([!!config.enabled, config.schedule_time, zone, config.lookback_days]);
+      if (set.digestFormKey !== formKey) {
+        set.digestFormKey = formKey;
+        els.setDigestEnabled.checked = !!config.enabled;
+        els.setDigestTime.value = String(config.schedule_time || "");
+        if (zonesOk) els.setDigestZone.value = zone;
+        if (els.setDigestZoneText) els.setDigestZoneText.value = zone;
+        els.setDigestLookback.value = String(Math.max(1, Math.min(14, Number(config.lookback_days) || 1)));
+      }
+    }
+    const digestLocked = !!(set.digestSaving || !config);
+    [els.setDigestEnabled, els.setDigestTime, els.setDigestZone, els.setDigestZoneText, els.setDigestLookback, els.setDigestSave].forEach((control) => {
+      if (control && control.disabled !== digestLocked) control.disabled = digestLocked;
+    });
+    let info = "";
+    let tone = "";
+    if (set.digestSaveError) {
+      info = set.digestSaveError;
+      tone = "is-error";
+    } else if (set.digestError) {
+      info = t("settings.loadFailed", { error: set.digestError });
+      tone = "is-error";
+    } else if (loading) {
+      info = t("settings.loading");
+    } else if (!config.enabled) {
+      info = t("settings.digestOff");
+      tone = "is-off";
+    } else {
+      const next = parseTimestamp(runtime.next_run_at);
+      if (next) {
+        const delay = Number(runtime.next_run_delay_ms);
+        const ms = Number.isFinite(delay) && delay >= 0 ? delay : next.getTime() - Date.now();
+        info = ms > 0
+          ? t("settings.digestNextRun", { time: formatSettingsStamp(next), duration: formatDuration(ms) })
+          : t("settings.digestNextRunAt", { time: formatSettingsStamp(next) });
+      } else {
+        info = t("settings.digestPending");
+      }
+    }
+    setText(els.setDigestNext, info);
+    setClass(els.setDigestInfo, "setInfo" + (tone ? " " + tone : ""));
+  }
+
+  function getSettingsReleasePresentation(result) {
+    switch (result && result.status) {
+      case "up_to_date": return { chip: t("settings.aboutUpToDate"), tone: "is-ok" };
+      case "update_available": return { chip: t("settings.aboutUpdate"), tone: "is-warn" };
+      case "invalid_latest_tag": return { note: String(result.message || "") || t("settings.aboutInvalidTag") };
+      case "network_error": return { note: String(result.message || "") || t("settings.aboutNetworkError") };
+      default: return {};
+    }
+  }
+
+  function renderSettingsAbout() {
+    if (!els.setVersion) return;
+    const release = (state.overview && state.overview.release) || {};
+    const result = state.releaseCheck;
+    setText(els.setVersion, release.version ? String(release.version) : "—");
+    const view = getSettingsReleasePresentation(result);
+    setText(els.setLatest, result && result.latestVersion ? String(result.latestVersion) : result ? "—" : t("settings.aboutNotChecked"));
+    els.setLatest.classList.toggle("is-muted", !(result && result.latestVersion));
+    setHidden(els.setReleaseChip, !view.chip || state.isCheckingRelease);
+    setText(els.setReleaseChip, view.chip || "");
+    setClass(els.setReleaseChip, "setChip " + (view.tone || ""));
+    const checkedAt = result ? parseTimestamp(result.checkedAt) : null;
+    let note = "";
+    if (view.note) note = view.note;
+    else if (checkedAt && !state.isCheckingRelease) note = t("settings.aboutCheckedAt", { time: formatClock(checkedAt) });
+    setText(els.setReleaseNote, note);
+    setClass(els.setReleaseNote, "setMuted");
+    setAttr(els.setReleaseNote, "title", view.note && result && result.message ? String(result.message) : "");
+    setText(els.setReleaseCheck, state.isCheckingRelease ? t("settings.aboutChecking") : t("settings.aboutCheck"));
+    setAttr(els.setReleaseCheck, "aria-busy", state.isCheckingRelease ? "true" : "");
+    els.setReleaseCheck.disabled = !!state.isCheckingRelease;
+    const releaseUrl = result && result.releaseUrl ? String(result.releaseUrl) : "";
+    setHidden(els.setReleaseLink, !releaseUrl || !/^https?:/i.test(releaseUrl));
+    if (releaseUrl && els.setReleaseLink.getAttribute("href") !== releaseUrl) els.setReleaseLink.setAttribute("href", releaseUrl);
+    const guidance = result && result.upgradeGuidance;
+    const commands = result && result.status === "update_available" && guidance && Array.isArray(guidance.commands) ? guidance.commands.map(String) : [];
+    setHidden(els.setReleaseCommands, commands.length === 0);
+    setText(els.setReleaseCode, commands.join(String.fromCharCode(10)));
+    setAttr(els.setReleaseCommands, "title", guidance && guidance.summary ? String(guidance.summary) : "");
+    const copied = Date.now() - state.settings.copiedAt < 1600;
+    els.setReleaseCopy.classList.toggle("is-copied", copied);
+    els.setReleaseCopy.innerHTML = svgIcon(copied ? "check" : "copy", "setCopyIcon");
+    setAttr(els.setReleaseCopy, "aria-label", copied ? t("settings.aboutCopied") : t("settings.aboutCopy"));
+  }
+
+  // The small confirm under the switch being turned off. kind is "read", "write" or "" (closed).
+  function setSettingsConfirm(kind, anchor) {
+    const set = state.settings;
+    set.confirm = kind || "";
+    if (!els.setConfirm) return;
+    setHidden(els.setConfirm, !set.confirm);
+    els.settingsView.classList.toggle("is-confirming", !!set.confirm);
+    if (!set.confirm) return;
+    setText(els.setConfirmText, t(kind === "read" ? "settings.confirmReadOff" : "settings.confirmWriteOff"));
+    setText(els.setConfirmGo, t("settings.confirmGo"));
+    if (anchor) {
+      const view = els.settingsView.getBoundingClientRect();
+      const rect = (anchor.closest(".iosSwitch") || anchor).getBoundingClientRect();
+      const width = els.setConfirm.offsetWidth;
+      const height = els.setConfirm.offsetHeight;
+      const left = Math.max(8, Math.min(rect.right - width - view.left, view.width - width - 8));
+      const below = rect.bottom + 10 + height <= window.innerHeight - 8;
+      els.setConfirm.style.left = Math.round(left) + "px";
+      els.setConfirm.style.top = Math.round((below ? rect.bottom + 10 : rect.top - 10 - height) - view.top) + "px";
+    }
+    els.setConfirmGo.focus({ preventScroll: true });
+  }
+
+  function policyToggleKind(toggle) {
+    return toggle === els.writeToggle ? "write" : "read";
+  }
+
+  function policyToggleKey(kind) {
+    return kind === "write" ? "writeEnabled" : "readEnabled";
+  }
+
+  function savedPolicyEnabled(kind) {
+    const policy = state.overview && state.overview.policy;
+    return !!(policy && policy[policyToggleKey(kind)]);
+  }
+
+  // Turning off is cancelled here (browsers disagree about whether checked has already flipped).
+  // Turning on is left for the change event, which sends immediately.
+  function onPolicyToggleClick(event) {
+    const toggle = event.currentTarget || event.target;
+    const kind = policyToggleKind(toggle);
+    if (state.isSavingPolicy) {
+      event.preventDefault();
+      toggle.checked = !!getDisplayedPolicy()[policyToggleKey(kind)];
+      return;
+    }
+    if (!savedPolicyEnabled(kind)) return;
+    event.preventDefault();
+    toggle.checked = true;
+    setSettingsConfirm(kind, toggle);
+  }
+
+  function onPolicyToggleChange(toggle) {
+    const kind = policyToggleKind(toggle);
+    // A browser that already flipped the box still must not save while the confirm is open.
+    if (state.settings.confirm === kind) {
+      toggle.checked = true;
+      return;
+    }
+    if (state.isSavingPolicy) {
+      toggle.checked = !!getDisplayedPolicy()[policyToggleKey(kind)];
+      return;
+    }
+    if (!!toggle.checked === savedPolicyEnabled(kind)) return;
+    if (state.settings.confirm) setSettingsConfirm("");
+    return commitPolicySave();
+  }
+
+  async function commitPolicySave() {
+    try {
+      await savePolicy();
+    } catch (error) {
+      setRawStatusLine("runtime", els.runtimeStatusLine, error && error.message ? error.message : t("status.policySaveFailed"), "error");
+    }
+  }
+
+  async function confirmSettingsSwitchOff() {
+    const kind = state.settings.confirm;
+    if (!kind || state.isSavingPolicy) return;
+    const toggle = kind === "read" ? els.readToggle : els.writeToggle;
+    setSettingsConfirm("");
+    toggle.checked = false;
+    if (toggle.focus) toggle.focus();
+    await commitPolicySave();
+  }
+
+  function cancelSettingsConfirm() {
+    const kind = state.settings.confirm;
+    if (!kind) return;
+    setSettingsConfirm("");
+    const toggle = kind === "read" ? els.readToggle : els.writeToggle;
+    toggle.checked = !!getDisplayedPolicy()[kind === "read" ? "readEnabled" : "writeEnabled"];
+    toggle.focus();
+  }
+
+  function setSettingsSection(card) {
+    state.settings.section = card;
+    els.setNavItems.forEach((item) => {
+      const on = item.getAttribute("data-set-section") === card;
+      item.classList.toggle("is-active", on);
+      setAttr(item, "aria-current", on ? "true" : "");
+    });
+  }
+
+  // Scroll-spy: the last card whose top has passed the upper third of the window is the current section.
+  function syncSettingsSection() {
+    if (state.activeView !== "settingsView" || !els.setCards.length) return;
+    let current = els.setCards[0].id;
+    const line = Math.min(window.innerHeight * 0.33, 260);
+    els.setCards.forEach((card) => {
+      if (card.getBoundingClientRect().top <= line) current = card.id;
+    });
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) current = els.setCards[els.setCards.length - 1].id;
+    if (current !== state.settings.section) setSettingsSection(current);
+  }
+
+  function bindSettingsEvents() {
+    if (!els.settingsView) return;
+    els.setNavItems.forEach((item) => {
+      item.addEventListener("click", () => {
+        const card = document.getElementById(item.getAttribute("data-set-section") || "");
+        if (!card) return;
+        setSettingsSection(card.id);
+        const top = card.getBoundingClientRect().top + window.scrollY - 20;
+        window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      });
+    });
+    window.addEventListener("scroll", () => {
+      if (state.activeView === "settingsView") syncSettingsSection();
+      if (state.settings.confirm) cancelSettingsConfirm();
+    }, { passive: true });
+    els.setConfirmGo.addEventListener("click", () => {
+      void confirmSettingsSwitchOff();
+    });
+    els.setConfirmCancel.addEventListener("click", cancelSettingsConfirm);
+    els.setConfirm.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") cancelSettingsConfirm();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.settings.confirm) {
+        event.preventDefault();
+        cancelSettingsConfirm();
+      }
+    });
+    document.addEventListener("click", (event) => {
+      if (!state.settings.confirm) return;
+      if (els.setConfirm.contains(event.target) || event.target === els.readToggle || event.target === els.writeToggle) return;
+      cancelSettingsConfirm();
+    });
+    els.setLlmReplaceKey.addEventListener("click", () => {
+      const set = state.settings;
+      set.keyEditing = !set.keyEditing;
+      set.llmSaved = false;
+      els.setLlmKeyInput.value = "";
+      renderSettingsLlm();
+      if (set.keyEditing) els.setLlmKeyInput.focus();
+    });
+    els.setLlmSave.addEventListener("click", () => {
+      void saveSettingsLlm();
+    });
+    els.setDigestSave.addEventListener("click", () => {
+      void saveSettingsDigest();
+    });
+    [els.setLlmApiUrl, els.setLlmModel, els.setLlmHeaders, els.setLlmKeyInput].forEach((input) => {
+      if (!input) return;
+      input.addEventListener("input", () => {
+        const set = state.settings;
+        if (!set.llmSaved && !set.llmSaveError) return;
+        set.llmSaved = false;
+        set.llmSaveError = "";
+        renderSettingsLlm();
+      });
+    });
+    if (els.setLlmDisableJson) {
+      els.setLlmDisableJson.addEventListener("change", () => {
+        state.settings.llmSaved = false;
+        state.settings.llmSaveError = "";
+        renderSettingsLlm();
+      });
+    }
+    const clearDigestError = () => {
+      if (!state.settings.digestSaveError) return;
+      state.settings.digestSaveError = "";
+      renderSettingsDigest();
+    };
+    [els.setDigestTime, els.setDigestZoneText].forEach((input) => {
+      if (input) input.addEventListener("input", clearDigestError);
+    });
+    [els.setDigestEnabled, els.setDigestLookback, els.setDigestZone].forEach((input) => {
+      if (input) input.addEventListener("change", clearDigestError);
+    });
+    els.setLlmTest.addEventListener("click", () => {
+      void runSettingsLlmTest();
+    });
+    els.setReleaseCheck.addEventListener("click", () => {
+      if (!state.isCheckingRelease) void loadReleaseCheck();
+    });
+    els.setReleaseCopy.addEventListener("click", async () => {
+      const text = els.setReleaseCode.textContent || "";
+      try {
+        await navigator.clipboard.writeText(text);
+        state.settings.copiedAt = Date.now();
+        renderSettingsAbout();
+        window.setTimeout(renderSettingsAbout, 1700);
+      } catch (_error) {
+        // Clipboard can be blocked; the commands stay selectable.
+      }
+    });
+  }
+
   function activateView(viewId) {
     let nextView = VIEW_TITLE_KEYS[viewId] ? viewId : "homeView";
     if (nextView === "devToolsView" && !state.devToolsEnabled) nextView = "homeView";
@@ -10610,6 +11393,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     } else {
       if (state.skills.openPopover) setSkillPopover("");
       if (state.skills.confirm) setSkillConfirm(null);
+    }
+    if (nextView === "settingsView") {
+      showSettingsView();
+    } else if (state.settings.confirm) {
+      setSettingsConfirm("");
     }
     if (isMemoryDrawerOpen() && state.drawer.host !== nextView) closeMemoryDrawer(false);
     if (nextView === "devToolsView") {
@@ -10730,6 +11518,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (!state.digests.readsDisabled) await loadDigestCards(false);
       return;
     }
+    if (state.activeView === "settingsView") {
+      // The overview poll already refreshed the switches; keep the relative times honest.
+      renderSettingsLlmTest();
+      renderSettingsDigest();
+      return;
+    }
     if (!overviewOk) return;
     if (state.activeView === "homeView") {
       await refreshHomeData(false);
@@ -10804,6 +11598,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       // Activity's search button lands in the Memory search field.
       const focusTarget = document.getElementById(trigger.getAttribute("data-focus-target") || "");
       if (focusTarget) focusTarget.focus({ preventScroll: true });
+      // The top-bar Read/Write pills land on the switches card.
+      if (trigger.hasAttribute("data-set-section") && state.activeView === "settingsView") setSettingsSection(trigger.getAttribute("data-set-section"));
     });
 
     els.devToolsToggle.addEventListener("change", () => {
@@ -10814,16 +11610,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       els.homeHealthRing.addEventListener("animationend", () => els.homeHealthRing.classList.remove("is-pulsing"));
     }
 
-    // Turning a memory switch off affects every agent, so it needs an explicit confirmation.
+    // Turning a memory switch off affects every agent, so it asks first in a small confirm under the switch.
+    // The click is cancelled (the switch stays on); "Turn off" flips it and saves. Turning on saves at once.
     [els.readToggle, els.writeToggle].forEach((toggle) => {
-      toggle.addEventListener("click", (event) => {
-        if (toggle.checked) return;
-        const key = toggle === els.readToggle ? "shell.confirmReadOff" : "shell.confirmWriteOff";
-        if (!window.confirm(t(key))) {
-          event.preventDefault();
-        }
-      });
+      toggle.addEventListener("click", onPolicyToggleClick);
+      toggle.addEventListener("change", () => onPolicyToggleChange(toggle));
     });
+    bindSettingsEvents();
 
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
@@ -11075,20 +11868,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }
     });
 
-    els.readToggle.addEventListener("change", async () => {
-      try {
-        await savePolicy();
-      } catch (error) {
-        setRawStatusLine("runtime", els.runtimeStatusLine, error.message || t("status.policySaveFailed"), "error");
-      }
-    });
-    els.writeToggle.addEventListener("change", async () => {
-      try {
-        await savePolicy();
-      } catch (error) {
-        setRawStatusLine("runtime", els.runtimeStatusLine, error.message || t("status.policySaveFailed"), "error");
-      }
-    });
   }
 
   async function initialize() {
