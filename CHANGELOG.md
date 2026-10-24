@@ -28,7 +28,7 @@ Upgrade note: back up the AgentMemory DB, then run `npm ci && npm run build` and
   - `skills-summary`
   - `skill-detail`
   
-  `activity` and `memory-detail` respect the memory read switch. The pipeline, projects and skills responses redact keys, emails and local paths from their free-text fields.
+  `activity` and `memory-detail` respect the memory read switch; with reads off, `home-summary` keeps its counts but drops recent memories and project paths. The pipeline, projects and skills responses, and stored task and digest errors, redact keys, emails, local paths and JSON-style credential pairs from their free-text fields; state facts with a credential-named key show `<redacted>`.
 - `agentmem install --claude-capture` / `--no-claude-capture` choose whether the Claude Code `PostToolUse` capture hook is installed. With neither flag, the installer keeps the current choice: an existing managed setup without the hook stays without it, and a fresh install enables capture as before.
 
 ### Changed
@@ -45,7 +45,7 @@ Upgrade note: back up the AgentMemory DB, then run `npm ci && npm run build` and
   - Path redaction handles quoted paths.
   - Facet queries are SQL-capped.
   - A covering index was added for task-buffer lookups.
-- Admin `llm-test` redacts the effective API key (saved or typed) from every text field of its response and errors. Settings load and save can no longer race.
+- Admin `llm-test` redacts the effective API key (saved or typed) and the values of custom auth headers from every text field of its response and errors, before clipping. A malformed headers JSON no longer echoes its input. Settings load and save can no longer race.
 - Memory search matches JSON-escaped text; Memory stats are cheaper on large databases.
 - `start-workbench.ps1` writes UTF-8 when its output is redirected, so piped or logged status lines are readable on zh-CN Windows.
 
