@@ -463,3 +463,13 @@ test('vault days mark the days the review ran (superseded runs included) with la
   assert.equal(body.checkpoints.length, 4);
   assert.equal(body.checkpoints.filter((c) => c.current).length, 1);
 }));
+
+test('vault days are all "not run" on a database with no checkpoints, runs or reads', withDb(async (db) => {
+  const now = Date.parse('2026-10-24T02:00:00.000Z');
+  const body = reviews(db, { tzOffsetMinutes: 480 }, now);
+  assert.equal(body.days.length, 14);
+  assert.equal(body.days[13].day, '2026-10-24');
+  assert.ok(body.days.every((d) => d.ran === false && d.runs === 0 && d.reads === 0));
+  assert.equal(body.last_checkpoint_at, null);
+  assert.deepEqual(body.checkpoints, []);
+}));
