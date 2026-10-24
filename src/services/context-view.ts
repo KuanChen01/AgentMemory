@@ -522,6 +522,91 @@ export function renderProjectContextView(view: ProjectContextView): string {
   return sections.join('\n');
 }
 
+const COMPACT_MAX_SUMMARY_BLOCKS = 6;
+const COMPACT_MAX_DAILY_DIGESTS = 3;
+// Fallback title written by task-consolidation when memory synthesis failed; carries no usable summary.
+const SYNTHESIS_FAILED_TITLE_PREFIX = 'Task capture incomplete:';
+
+// For hosts that cap injected hook output (Claude Code moves stdout over 10,000 chars into a file
+// and shows only a short preview). Drops the diagnostics and bounded-context package, keeps only the
+// newest summary blocks (skipping failed-synthesis stubs) and digests, and cuts at a line boundary to
+// stay under maxChars. Older memory stays reachable through search_memory / query_memory.
+export function renderCompactProjectContextView(view: ProjectContextView, maxChars: number = 9000): string {
+  if (view.disabled || !hasProjectContextData(view)) {
+    return renderProjectContextView(view);
+  }
+
+  const lines: string[] = ['\n=== AgentMemory: Project Context (compact) ===', `Project: ${view.project_path}`];
+  if (view.as_of) {
+    lines.push(`As of: ${view.as_of}`);
+  }
+  const metadata = view.memory_layers.metadata;
+  lines.push(
+    `Memory layers: state_facts=${metadata.state_fact_count}, daily_digests=${metadata.daily_digest_count}, summary_blocks=${view.summary_blocks.length}, procedural_skills=${metadata.procedural_skill_count}`
+  );
+
+  if (view.current_state.length > 0) {
+    lines.push('\nCurrent structured state:');
+    for (const fact of view.current_state) {
+      lines.push(`- [${fact.entity_type}:${fact.entity_key}] ${fact.fact_key} = ${trimSummary(formatStateFactValue(fact.value), 200)}`);
+    }
+  }
+
+  const summaryBlocks = view.summary_blocks
+    .filter((block) => !block.title.startsWith(SYNTHESIS_FAILED_TITLE_PREFIX))
+    .slice(0, COMPACT_MAX_SUMMARY_BLOCKS);
+  if (summaryBlocks.length > 0) {
+    lines.push('\nRecent summary blocks:');
+    for (const block of summaryBlocks) {
+      lines.push(`- ${block.title} [${block.agent_id}] (${formatTimestamp(block.created_at)})`);
+      for (const line of block.lines) {
+        lines.push(`  ${trimSummary(line, 240)}`);
+      }
+    }
+  }
+
+  const dailyDigests = view.daily_digests.slice(0, COMPACT_MAX_DAILY_DIGESTS);
+  if (dailyDigests.length > 0) {
+    lines.push('\nRecent daily digests:');
+    for (const digest of dailyDigests) {
+      lines.push(`- ${digest.local_date}: ${trimSummary(digest.summary, 240)}`);
+      if (digest.next_actions.length > 0) {
+        lines.push(`  Next actions: ${digest.next_actions[0]}`);
+      }
+    }
+  }
+
+  const omittedBlocks = view.summary_blocks.length - summaryBlocks.length;
+  const omittedDigests = view.daily_digests.length - dailyDigests.length;
+  if (omittedBlocks > 0 || omittedDigests > 0) {
+    lines.push(`\n(${omittedBlocks} older/low-value summary blocks and ${omittedDigests} older daily digests omitted; use search_memory to look them up.)`);
+  }
+
+  if (view.procedural_skills.length > 0) {
+    lines.push('\nProcedural memory:');
+    for (const skill of view.procedural_skills) {
+      lines.push(`- ${skill.title} [${skill.status}] trigger="${skill.trigger_text}": ${trimSummary(skill.summary, 200)}`);
+    }
+  }
+
+  const footer = [
+    '\nFull layered view (diagnostics, policy trace, bounded context): call get_project_context or query_memory.',
+    '======================================\n',
+  ];
+  const footerLength = footer.join('\n').length + 1;
+  const kept: string[] = [];
+  let length = 0;
+  for (const line of lines) {
+    if (length + line.length + 1 + footerLength > maxChars) {
+      kept.push('[... truncated to fit host context limit]');
+      break;
+    }
+    kept.push(line);
+    length += line.length + 1;
+  }
+  return [...kept, ...footer].join('\n');
+}
+
 export function formatStateFactValue(value: unknown): string {
   if (typeof value === 'string') {
     return value;
