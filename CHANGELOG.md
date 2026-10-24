@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.1] - 2026-10-25
+
+Upgrade note: run `npm ci && npm run build`, then **re-run `agentmem install`** so Grok's `~/.grok/config.toml` gets `AGENTMEM_AGENT_ID = "grok-build"` (`agentmem install --strict` now checks for it). No schema change and no data is rewritten.
+
+### Changed
+- The Grok CLI is now recorded as agent `grok-build` (hook, installer and Grok agent notes). Reinstalling replaces an old `AGENTMEM_AGENT_ID = "grok"` entry.
+- Existing `grok` rows stay as stored. The admin panel and admin APIs show `grok` and `grok-build` as **Grok Build**, and filtering by either (or by "Grok Build") includes both. Agent facets merge them into one `grok-build` option.
+
+### Added
+- `agent_labels` (id → display name) next to agent facet lists, and `agent_label` on agent rows, in the admin APIs. Existing `agents` arrays keep their string type.
+- Reserved agent id `grok-bot`, shown as **Grok Bot**.
+
 ## [2.2.0] - 2026-10-24
 
 Upgrade note: back up the AgentMemory DB, then run `npm ci && npm run build` and **re-run `agentmem install` on every machine**. The installer now writes `AGENTMEM_AGENT_ID=claudecode` into the Claude Code MCP server `env`, and `agentmem install --strict` reports any machine that is missing it. The only schema changes are new indexes (`CREATE INDEX IF NOT EXISTS`); they are built automatically on first start, and no data is rewritten.
