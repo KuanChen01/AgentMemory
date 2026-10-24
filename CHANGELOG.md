@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.2.2] - 2026-10-25
+
+### Changed
+- Admin UI: the Background setting is now **Theme** (主题). The sidebar row is a navigation row showing the current mode with a chevron and a new theme icon.
+- Theme has a Mode (Auto follows the system, Light, Dark) and two sets, Light and Dark. Each set has its own wallpaper (preset or uploaded image), glass tone, blur, dim and glass opacity; an upload replaces only that set's image.
+- Built-in wallpapers reduced to Mist (Light default) and Graphite (Dark default).
+
+### Fixed
+- Home and the other sections no longer render different themes; one theme applies to every view, including on first paint.
+
+### Migration
+- Saved `am.bg` settings migrate once to `am.theme`. Removed presets fall back to the mode default. An existing uploaded image is copied to the set of the mode it was shown in. `am.bg` and the original stored image are never removed.
+
 ## [2.2.1] - 2026-10-25
 
 Upgrade note: run `npm ci && npm run build`, then **re-run `agentmem install`** so Grok's `~/.grok/config.toml` gets `AGENTMEM_AGENT_ID = "grok-build"` (`agentmem install --strict` now checks for it). No schema change and no data is rewritten.
