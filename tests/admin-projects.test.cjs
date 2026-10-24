@@ -252,47 +252,52 @@ test('days 7/30/90 range filters and invalid days', withDb(async (db) => {
   }
 }));
 
+// Paths written by the worker are path.resolve()d with forward slashes (db/worker normalizeProjectPath),
+// and the startup-context read re-normalizes the same way. On win32 a bare POSIX fixture like /work/DemoAlpha
+// resolves to <drive>:/work/DemoAlpha, so fixtures that go through that read must be stored in normalized form.
+const STORED_ALPHA = path.resolve(ALPHA).replace(/\\/g, '/');
+
 test('tz day buckets, 14-day bars, superseded facts, recent digests, sanitized startup preview', withDb(async (db) => {
   const longValue = `note ${'word '.repeat(40)}`;
   await write(db, (tx) => {
-    insertObservation(tx, { id: 'o-local', project: ALPHA, agent: 'team/bot-1', title: 'local', createdAt: '2026-10-23T16:00:00.000Z' });
-    insertObservation(tx, { id: 'o-prev', project: ALPHA, title: 'prev', createdAt: '2026-10-23T15:59:59.000Z' });
+    insertObservation(tx, { id: 'o-local', project: STORED_ALPHA, agent: 'team/bot-1', title: 'local', createdAt: '2026-10-23T16:00:00.000Z' });
+    insertObservation(tx, { id: 'o-prev', project: STORED_ALPHA, title: 'prev', createdAt: '2026-10-23T15:59:59.000Z' });
     insertObservation(tx, {
-      id: 'o-secret', project: ALPHA,
+      id: 'o-secret', project: STORED_ALPHA,
       title: 'see /work/DemoAlpha/secret.ts and dev@example.com token=supersecret sk-abcdefghijklmnopqrstuvwxyz0123',
       narrative: 'keep going', createdAt: '2026-10-24T00:00:00.000Z',
     });
     insertFact(tx, {
-      id: 'f-cur', project: ALPHA, entityKey: 'app /work/DemoAlpha/secret', factKey: 'owner',
+      id: 'f-cur', project: STORED_ALPHA, entityKey: 'app /work/DemoAlpha/secret', factKey: 'owner',
       value: 'dev@example.com owns /work/DemoAlpha/secret token=supersecret',
       recordedAt: '2026-10-24T01:00:00.000Z',
     });
     insertFact(tx, {
-      id: 'f-old', project: ALPHA, entityKey: 'app', factKey: 'owner', value: 'old',
+      id: 'f-old', project: STORED_ALPHA, entityKey: 'app', factKey: 'owner', value: 'old',
       recordedAt: '2026-10-01T00:00:00.000Z', supersededAt: '2026-10-24T01:00:00.000Z',
     });
     for (let i = 0; i < 40; i += 1) {
       insertFact(tx, {
-        id: `f-long-${i}`, project: ALPHA, entityKey: `k${i}`, factKey: 'blob', value: longValue,
+        id: `f-long-${i}`, project: STORED_ALPHA, entityKey: `k${i}`, factKey: 'blob', value: longValue,
         recordedAt: `2026-10-10T00:00:${String(i).padStart(2, '0')}.000Z`,
       });
     }
     insertDigest(tx, {
-      id: 'd-new', project: ALPHA, day: '2026-10-23', status: 'success',
+      id: 'd-new', project: STORED_ALPHA, day: '2026-10-23', status: 'success',
       digest: {
         summary: 'Shipped. contact dev@example.com about /work/DemoAlpha/secret token=supersecret',
         facts: [], decisions: [], next_actions: [], skill_candidates: [],
       },
       generatedAt: '2026-10-23T12:00:00.000Z',
     });
-    insertDigest(tx, { id: 'd-skip', project: ALPHA, day: '2026-10-22', status: 'skipped_no_observations' });
-    insertDigest(tx, { id: 'd-fail', project: ALPHA, day: '2026-10-21', status: 'failed' });
+    insertDigest(tx, { id: 'd-skip', project: STORED_ALPHA, day: '2026-10-22', status: 'skipped_no_observations' });
+    insertDigest(tx, { id: 'd-fail', project: STORED_ALPHA, day: '2026-10-21', status: 'failed' });
     insertDigest(tx, {
-      id: 'd-old-success', project: ALPHA, day: '2026-09-01', status: 'success',
+      id: 'd-old-success', project: STORED_ALPHA, day: '2026-09-01', status: 'success',
       digest: { summary: 'old', facts: [], decisions: [], next_actions: [] },
     });
     insertDigest(tx, {
-      id: 'd-cand', project: ALPHA, day: '2026-10-20', status: 'success',
+      id: 'd-cand', project: STORED_ALPHA, day: '2026-10-20', status: 'success',
       digest: {
         summary: 'candidates',
         facts: [], decisions: [], next_actions: [],
@@ -302,10 +307,10 @@ test('tz day buckets, 14-day bars, superseded facts, recent digests, sanitized s
         }],
       },
     });
-    insertSkill(tx, { id: 's-en', project: ALPHA, title: 'Enabled flow', status: 'enabled', steps: ['one'] });
-    insertSkill(tx, { id: 's-draft', project: ALPHA, title: 'Draft flow', status: 'draft' });
-    insertSkill(tx, { id: 's-dis', project: ALPHA, title: 'Disabled flow', status: 'disabled' });
-    insertSkill(tx, { id: 's-ret', project: ALPHA, title: 'Retired flow', status: 'retired', retiredAt: '2026-10-01T00:00:00.000Z' });
+    insertSkill(tx, { id: 's-en', project: STORED_ALPHA, title: 'Enabled flow', status: 'enabled', steps: ['one'] });
+    insertSkill(tx, { id: 's-draft', project: STORED_ALPHA, title: 'Draft flow', status: 'draft' });
+    insertSkill(tx, { id: 's-dis', project: STORED_ALPHA, title: 'Disabled flow', status: 'disabled' });
+    insertSkill(tx, { id: 's-ret', project: STORED_ALPHA, title: 'Retired flow', status: 'retired', retiredAt: '2026-10-01T00:00:00.000Z' });
   });
 
   const tzList = list(db, { days: 7, tzOffsetMinutes: 480 });
@@ -315,9 +320,9 @@ test('tz day buckets, 14-day bars, superseded facts, recent digests, sanitized s
   assert.equal(alpha.state_facts_count, 41);
   assert.equal(alpha.candidates_count, 2);
 
-  const body = await detail(db, { project: ALPHA, days: 7, tzOffsetMinutes: 480 });
+  const body = await detail(db, { project: STORED_ALPHA, days: 7, tzOffsetMinutes: 480 });
   assert.equal(body.status, 'ok');
-  assert.equal(body.project.project_key, expectedKey(ALPHA));
+  assert.equal(body.project.project_key, expectedKey(STORED_ALPHA));
   assert.equal(body.project.agents.some((agent) => agent.agent_id === 'team/bot-1'), true);
   assert.equal(body.state_facts_total, 41);
   assert.equal(body.state_facts.length, 41 > 50 ? 50 : 41);
