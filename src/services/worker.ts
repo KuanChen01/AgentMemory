@@ -634,6 +634,8 @@ app.get('/admin/api/pipeline', adminOnlyGuard, async (req, res) => {
       cursor: cursor ?? null,
       stats: statsRaw === undefined ? undefined : statsRaw === '1',
       flagged: flaggedRaw === undefined ? undefined : flaggedRaw === '1',
+      fallbackFrom: given(readQuery('fallback_from')),
+      fallbackTo: given(readQuery('fallback_to')),
     }, {
       inflight: inflightTaskIds(),
       consolidating: activeConsolidations,
