@@ -61,6 +61,7 @@ import {
 } from './task-consolidation';
 import { getAdminPipeline } from './pipeline-query';
 import { getAdminDigestDetail, getAdminDigestList, getAdminVaultReviews } from './digest-query';
+import { getAdminProjectDetail, getAdminProjectList } from './project-query';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -246,6 +247,10 @@ const ADMIN_DIGEST_LIST_DISABLED_FIELDS = ['generated_at', 'filters', 'items', '
 const ADMIN_DIGEST_DETAIL_DISABLED_FIELDS = ['digest', 'sources', 'sources_truncated'] as const;
 
 const ADMIN_VAULT_REVIEWS_DISABLED_FIELDS = ['generated_at', 'filters', 'checkpoints', 'next_cursor', 'last_checkpoint_at', 'last_checkpoint_age_ms', 'days', 'reads_total', 'runs', 'schedule'] as const;
+
+const ADMIN_PROJECT_LIST_DISABLED_FIELDS = ['generated_at', 'filters', 'summary', 'items', 'next_cursor'] as const;
+
+const ADMIN_PROJECT_DETAIL_DISABLED_FIELDS = ['generated_at', 'project', 'startup_context', 'state_facts', 'state_facts_total', 'recent_digests', 'skills', 'days'] as const;
 
 function sendAdminReadsDisabled(res: Response, fields: readonly string[]) {
   const body: { [key: string]: unknown } = {
@@ -700,6 +705,62 @@ app.get('/admin/api/digest-detail', adminOnlyGuard, async (req, res) => {
       return;
     }
     console.error('Error fetching admin digest detail:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/project-list', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_PROJECT_LIST_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = adminReadQuery(req, 'project-list');
+    const tz = adminGiven(readQuery('tz_offset_minutes'));
+    const limit = adminGiven(readQuery('limit'));
+    const cursor = adminGiven(readQuery('cursor'));
+    res.json(getAdminProjectList(dbManager, {
+      days: adminStrictInteger('project-list', adminGiven(readQuery('days')), 'days'),
+      q: adminGiven(readQuery('q')),
+      sort: adminGiven(readQuery('sort')),
+      tzOffsetMinutes: adminStrictInteger('project-list', tz, 'tz_offset_minutes'),
+      limit: adminStrictInteger('project-list', limit, 'limit'),
+      cursor: cursor ?? null,
+    }));
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid project-list request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin project list:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/project-detail', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_PROJECT_DETAIL_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = adminReadQuery(req, 'project-detail');
+    const tz = adminGiven(readQuery('tz_offset_minutes'));
+    const detail = await getAdminProjectDetail(dbManager, {
+      project: readQuery('project'),
+      days: adminStrictInteger('project-detail', adminGiven(readQuery('days')), 'days'),
+      tzOffsetMinutes: adminStrictInteger('project-detail', tz, 'tz_offset_minutes'),
+    });
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown project' });
+      return;
+    }
+    res.json(detail);
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid project-detail request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin project detail:', err);
     res.status(500).json({ error: err.message });
   }
 });
