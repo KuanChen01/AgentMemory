@@ -132,6 +132,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     homeFallbackTaskCount: null,
     homeFallbackFrom: "",
     homeFallbackSeq: 0,
+    homeFallbackInFlight: null,
     digestSchedulerAt: 0,
     digestSchedulerAppliedStamp: "",
     homeSignatures: {},
@@ -2877,34 +2878,49 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   async function loadHomeFallbackTaskCount() {
     const from = localMidnightIso();
+    const running = state.homeFallbackInFlight;
+    if (running && running.from === from) return running.promise;
     const seq = (state.homeFallbackSeq || 0) + 1;
     state.homeFallbackSeq = seq;
-    const pages = [];
-    let cursor = "";
-    try {
-      for (let page = 0; page < 20; page += 1) {
-        const params = new URLSearchParams({
-          tz_offset_minutes: String(-new Date().getTimezoneOffset()),
-          limit: "100",
-          stats: "0",
-          fallback_from: from,
-        });
-        if (cursor) params.set("cursor", cursor);
-        const payload = await fetchJson("/admin/api/pipeline?" + params.toString());
+    const job = (async () => {
+      const pages = [];
+      let cursor = "";
+      try {
+        let complete = false;
+        for (let page = 0; page < 20; page += 1) {
+          const params = new URLSearchParams({
+            tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+            limit: "100",
+            stats: "0",
+            fallback_from: from,
+          });
+          if (cursor) params.set("cursor", cursor);
+          const payload = await fetchJson("/admin/api/pipeline?" + params.toString());
+          if (seq !== state.homeFallbackSeq) return;
+          if (!payload || payload.disabled) return;
+          pages.push(Array.isArray(payload.items) ? payload.items : []);
+          const next = payload.next_cursor || "";
+          if (!next || next === cursor) {
+            complete = true;
+            break;
+          }
+          cursor = next;
+        }
         if (seq !== state.homeFallbackSeq) return;
-        if (!payload || payload.disabled) return;
-        pages.push(Array.isArray(payload.items) ? payload.items : []);
-        const next = payload.next_cursor || "";
-        if (!next || next === cursor) break;
-        cursor = next;
+        // Twenty pages still left a cursor, so the distinct total is short. Keep the summary row count.
+        if (!complete) return;
+        state.homeFallbackTaskCount = countDistinctFallbackTasks(pages);
+        state.homeFallbackFrom = from;
+        renderHome();
+      } catch (error) {
+        // Keep the summary row count until a later poll.
       }
-      if (seq !== state.homeFallbackSeq) return;
-      state.homeFallbackTaskCount = countDistinctFallbackTasks(pages);
-      state.homeFallbackFrom = from;
-      renderHome();
-    } catch (error) {
-      // Keep the summary row count until a later poll.
-    }
+    })();
+    const tracked = job.finally(() => {
+      if (state.homeFallbackInFlight && state.homeFallbackInFlight.promise === tracked) state.homeFallbackInFlight = null;
+    });
+    state.homeFallbackInFlight = { from, promise: tracked };
+    return tracked;
   }
 
   async function loadHomeSummary() {
@@ -2917,14 +2933,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     state.homeSummaryInFlight = fetchJson("/admin/api/home-summary?" + params.toString())
       .then((payload) => {
         state.homeSummary = payload;
-        renderHome();
         const rowFallback = Number(payload && payload.tasks_today && payload.tasks_today.fallback || 0);
-        if (rowFallback > 0) void loadHomeFallbackTaskCount();
-        else {
+        if (!(rowFallback > 0)) {
           state.homeFallbackSeq = (state.homeFallbackSeq || 0) + 1;
           state.homeFallbackTaskCount = null;
           state.homeFallbackFrom = "";
+          state.homeFallbackInFlight = null;
         }
+        renderHome();
+        if (rowFallback > 0) void loadHomeFallbackTaskCount();
       })
       .finally(() => {
         state.homeSummaryInFlight = null;
@@ -5664,7 +5681,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   // Keep every loaded task when the refresh page still contains the tail. New rows before that tail are prepended,
-  // rows the page skipped stay in their previous order, and the scroll position is put back after render.
+  // rows the page skipped stay in their previous order, and the visible row is held in place after render.
   function mergePipelineRefresh(previous, incoming, anchorId) {
     if (!anchorId) return incoming.slice();
     const anchorAt = incoming.findIndex((item) => item && String(item.task_id || "") === anchorId);
@@ -5680,6 +5697,25 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
     const kept = previous.map((item) => (item && fresh.get(String(item.task_id))) || item);
     return newer.concat(kept, older);
+  }
+
+  // The task row the reader is on: the first [data-task-id] row still at or below the top of the viewport.
+  // Pass a task id to measure that same row again after the list renders.
+  function pipelineTaskAnchor(taskId) {
+    const list = els.pipelineList;
+    if (!list || typeof list.querySelectorAll !== "function") return null;
+    const wantId = taskId ? String(taskId) : "";
+    const rows = list.querySelectorAll("[data-task-id]");
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      if (!row || typeof row.getBoundingClientRect !== "function" || typeof row.getAttribute !== "function") continue;
+      const id = row.getAttribute("data-task-id");
+      if (!id || (wantId && String(id) !== wantId)) continue;
+      const top = row.getBoundingClientRect().top;
+      if (typeof top !== "number" || (!wantId && top < 0)) continue;
+      return { id: String(id), top };
+    }
+    return null;
   }
 
   // mode: "reset" loads page 1, "more" appends the next page, "refresh" merges when the last loaded task is still
@@ -5806,11 +5842,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (pipe.moreSeq === seq) pipe.moreSeq = 0;
       if (seq === pipe.seq) {
         pipe.stale = false;
-        const scrollX = restoreScroll ? (Number(window.scrollX) || 0) : 0;
-        const scrollY = restoreScroll ? (Number(window.scrollY) || 0) : 0;
         renderPipelinePauseHint();
+        // At the top, prepended rows should simply appear. Otherwise hold the first visible task row.
+        const anchor = restoreScroll && (Number(window.scrollY) || 0) > 0 ? pipelineTaskAnchor() : null;
         renderPipeline();
-        if (restoreScroll && window && window.scrollTo) window.scrollTo(scrollX, scrollY);
+        if (anchor && window && typeof window.scrollBy === "function") {
+          const next = pipelineTaskAnchor(anchor.id);
+          if (next) window.scrollBy(0, next.top - anchor.top);
+        }
       }
     }
   }
