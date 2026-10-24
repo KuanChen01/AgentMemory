@@ -60,8 +60,9 @@ test('Grok hook maps session, success, failure, and close events to AgentMemory 
     await runHook('stop', base, port);
 
     assert.deepEqual(calls.map((entry) => entry.url), ['/sessions', '/tools', '/tools', '/sessions/close']);
-    assert.equal(calls[0].payload.agent_id, 'grok');
+    assert.equal(calls[0].payload.agent_id, 'grok-build');
     assert.equal(calls[0].payload.project_path, 'E:/Repo/Grok');
+    assert.equal(calls[1].payload.agent_id, 'grok-build');
     assert.equal(calls[1].payload.success, true);
     assert.equal(calls[2].payload.success, false);
     assert.equal(calls[3].payload.id, 'grok-session');

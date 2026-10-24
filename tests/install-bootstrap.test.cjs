@@ -154,11 +154,12 @@ test('Grok config upsert preserves unrelated settings and enables the managed id
   assert.match(updated, /skills = true/);
   assert.match(updated, /hooks = false/);
   assert.match(updated, /name = "agentmem"/);
-  assert.match(updated, /AGENTMEM_AGENT_ID = "grok"/);
+  assert.match(updated, /AGENTMEM_AGENT_ID = "grok-build"/);
   assert.match(updated, /tool_timeout_sec = 30/);
   assert.equal((updated.match(/\[mcp_servers\.agentmem\]/g) || []).length, 1);
   assert.doesNotMatch(updated, /\[mcp_servers\.agentmem\.env\]/);
-  assert.equal((updated.match(/AGENTMEM_AGENT_ID\s*=\s*"grok"/g) || []).length, 1);
+  assert.equal((updated.match(/AGENTMEM_AGENT_ID\s*=\s*"grok-build"/g) || []).length, 1);
+  assert.equal((updated.match(/AGENTMEM_AGENT_ID\s*=\s*"grok"/g) || []).length, 0);
 
   const cleaned = removeGrokAgentMemoryConfig(updated);
   assert.doesNotMatch(cleaned, /mcp_servers\.agentmem/);

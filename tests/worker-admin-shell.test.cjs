@@ -1193,7 +1193,10 @@ test('home summary aggregates days by kind in the caller time zone', withDb(asyn
     [3, 2, 1, 0]
   );
   assert.deepEqual(shanghai.daily[28], { day: '2026-10-16', outcome: 0, context: 0, legacy: 1 });
-  assert.deepEqual(shanghai.today.agents, [{ agent_id: 'codex', n: 2 }, { agent_id: 'grok', n: 1 }]);
+  assert.deepEqual(shanghai.today.agents, [
+    { agent_id: 'codex', n: 2, agent_label: 'codex' },
+    { agent_id: 'grok-build', n: 1, agent_label: 'Grok Build' },
+  ]);
   assert.equal(shanghai.today.projects[0].project_path, projectA);
 
   assert.equal(shanghai.recent.length, 5);

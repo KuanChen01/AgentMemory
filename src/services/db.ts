@@ -9,7 +9,7 @@ import {
   isTimestampOnOrBefore,
   timestampsEqual,
 } from './timestamps';
-import { normalizeAgentId } from './agent-id';
+import { agentMatchSql, collapseListedAgents, normalizeAgentId, presentAgentIds } from './agent-id';
 import { sanitizeText } from './redact';
 
 // Stored errors can echo provider responses: redact the whole text first, then clip.
@@ -617,8 +617,9 @@ function activityScope(project?: string, agent?: string): { sql: string; params:
     params.push(project);
   }
   if (agent !== undefined) {
-    sql += ' AND LOWER(o.agent_id)=LOWER(?)';
-    params.push(agent);
+    const match = agentMatchSql('o.agent_id', agent);
+    sql += ` AND ${match.sql}`;
+    params.push(...match.params);
   }
   return { sql, params };
 }
@@ -1918,8 +1919,9 @@ export class DatabaseManager {
     }
 
     if (filters.agent) {
-      whereParts.push(`LOWER(agent_id) = LOWER(?)`);
-      params.push(filters.agent);
+      const match = agentMatchSql('agent_id', filters.agent);
+      whereParts.push(match.sql);
+      params.push(...match.params);
     }
 
     if (filters.query) {
@@ -2754,7 +2756,7 @@ export class DatabaseManager {
        WHERE agent_id != ''
        ORDER BY agent_id COLLATE NOCASE ASC`
     ) as any[];
-    return rows.map((row) => row.agent_id as string);
+    return presentAgentIds(rows.map((row) => row.agent_id as string)).map((agent) => agent.agent_id);
   }
 
   // Cosine similarity in pure TS
@@ -3079,8 +3081,14 @@ export class DatabaseManager {
     const daily = dayList.map(day => byDay.get(day)!);
     const todayCounts = daily[daily.length - 1];
 
-    const agents = this.db.all(`SELECT agent_id, COUNT(*) AS n FROM observations
-      WHERE datetime(created_at) >= datetime(?) GROUP BY agent_id ORDER BY n DESC, agent_id LIMIT 6`, [todayStart]);
+    const agentRows: Array<{ agent_id: string; n: number }> = this.db.all(`SELECT agent_id, COUNT(*) AS n FROM observations
+        WHERE datetime(created_at) >= datetime(?) GROUP BY agent_id`, [todayStart]).map((row: any) => ({
+        agent_id: String(row.agent_id ?? ''),
+        n: Number(row.n) || 0,
+      }));
+    const agents = collapseListedAgents(agentRows, { sum: ['n'] })
+      .sort((a, b) => b.n - a.n || (a.agent_id < b.agent_id ? -1 : a.agent_id > b.agent_id ? 1 : 0))
+      .slice(0, 6);
     const projects = this.db.all(`SELECT project_path, COUNT(*) AS n FROM observations
       WHERE datetime(created_at) >= datetime(?) GROUP BY project_path ORDER BY n DESC, project_path LIMIT 4`, [todayStart]);
     const recent = this.db.all(`SELECT o.id, o.created_at, o.agent_id, o.project_path, substr(o.title, 1, 200) AS title,
@@ -3198,19 +3206,33 @@ export class DatabaseManager {
       }
     }
 
+    const breakdownRows: Array<{
+      project_path: string; agent_id: string; outcome: number; context: number; fallback: number; legacy: number;
+    }> = rowsOf('breakdown').map((row: any) => ({
+      project_path: String(row.project_path ?? ''),
+      agent_id: String(row.agent_id ?? ''),
+      outcome: Number(row.outcome) || 0,
+      context: Number(row.context) || 0,
+      fallback: Number(row.fallback) || 0,
+      legacy: Number(row.legacy) || 0,
+    }));
+    const breakdown = collapseListedAgents(breakdownRows, {
+      groupBy: (row) => row.project_path,
+      sum: ['outcome', 'context', 'fallback', 'legacy'],
+    }).sort((a, b) => {
+      const left = a.outcome + a.context + a.legacy;
+      const right = b.outcome + b.context + b.legacy;
+      if (left !== right) return right - left;
+      if (a.project_path !== b.project_path) return a.project_path < b.project_path ? -1 : 1;
+      return a.agent_id < b.agent_id ? -1 : a.agent_id > b.agent_id ? 1 : 0;
+    });
+
     return {
       from: normalized.fromIso,
       to: normalized.toIso,
       tz_offset_minutes: normalized.offset,
       totals,
-      breakdown: rowsOf('breakdown').map((row: any) => ({
-        project_path: row.project_path,
-        agent_id: row.agent_id,
-        outcome: Number(row.outcome) || 0,
-        context: Number(row.context) || 0,
-        fallback: Number(row.fallback) || 0,
-        legacy: Number(row.legacy) || 0,
-      })),
+      breakdown,
       days: dayList.map((day) => byDay.get(day)!),
       cards,
       next_cursor: nextCursor,

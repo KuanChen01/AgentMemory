@@ -575,7 +575,10 @@ test('agent filter matches source memories; items carry agents; stats name the l
   assert.deepEqual(byId['d-a'].agents, ['Claude', 'codex']);
   assert.deepEqual(byId['d-b'].agents, ['Claude']);
   assert.deepEqual(byId['d-c'].agents, []);
-  assert.deepEqual(all.facets.agents, ['Claude', 'codex']);
+  assert.deepEqual(all.facets.agents, [
+    { agent_id: 'Claude', agent_label: 'Claude' },
+    { agent_id: 'codex', agent_label: 'codex' },
+  ]);
   assert.equal(all.stats.latest_covered_day, '2026-10-18');
   assert.deepEqual(all.stats.latest_covered_day_projects, ['/work/DemoAlpha', '/work/SampleBeta']);
   assert.deepEqual(idsOf(list(db, { agent: 'CLAUDE' })), ['d-b', 'd-a']);

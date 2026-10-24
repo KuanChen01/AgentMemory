@@ -88,7 +88,7 @@ async function main() {
     await postJson('/sessions', {
       id: resolveGrokSessionId(payload),
       project_path: resolveGrokProjectPath(payload),
-      agent_id: 'grok',
+      agent_id: 'grok-build',
       status: 'active',
     });
     return;
@@ -111,7 +111,7 @@ async function main() {
     await postJson('/tools', {
       session_id: resolveGrokSessionId(payload),
       project_path: resolveGrokProjectPath(payload),
-      agent_id: 'grok',
+      agent_id: 'grok-build',
       tool_name: event.toolName,
       input: event.input,
       output: serialize(event.output),

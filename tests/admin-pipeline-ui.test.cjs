@@ -249,6 +249,8 @@ test('Pipeline rows and the task drawer escape hostile titles and errors', () =>
     const setText = (el, value) => { el.text = value; };
     const setAttr = () => {};
     const els = { activityDrawerMeta: {}, activityDrawerSub: {}, activityDrawerTitle: {}, activityDrawerBody: {} };
+    ${uiClientFunction('agentIdOf')}
+    ${uiClientFunction('agentLabel')}
     ${helpers}
     ${uiClientFunction('renderPipelineRowBody')}
     ${uiClientFunction('renderPipelineTaskDrawer')}
@@ -360,6 +362,8 @@ test('Pipeline drawer summary stops on a word boundary and zero attempts show a 
     const setText = (el, value) => { el.text = value; };
     const setAttr = () => {};
     const els = { activityDrawerMeta: {}, activityDrawerSub: {}, activityDrawerTitle: {}, activityDrawerBody: {} };
+    ${uiClientFunction('agentIdOf')}
+    ${uiClientFunction('agentLabel')}
     ${helpers}
     ${uiClientFunction('renderPipelineRowBody')}
     ${uiClientFunction('renderPipelineTaskDrawer')}
@@ -841,6 +845,11 @@ test('pipeline pickers merge overview lists with facets, and overview spelling w
         facets: { projects: ["/work/harbor-sync", "/work/Lumen-Notes"], agents: ["quay-agent", "lumen-agent"] },
       },
     };
+    ${uiClientFunction('agentIdOf')}
+    ${uiClientFunction('agentLabel')}
+    ${uiClientFunction('agentOptionKey')}
+    ${uiClientFunction('sameAgent')}
+    ${uiClientFunction('canonicalAgentOption')}
     ${uiClientFunction('projectBasename')}
     ${uiClientFunction('isActivitySelected')}
     ${uiClientFunction('pipelineFacetValues')}

@@ -178,7 +178,7 @@ test('flagged=1 limits items to needs_confirmation and leaves stages and facets 
   assert.deepEqual(open.facets.projects, [
     '/work/brindle-ledger', '/work/harbor-sync', '/work/lumen-notes', '/work/quay-notes',
   ]);
-  assert.deepEqual(open.facets.agents, ['brindle-agent', 'lumen-agent', 'quay-agent', 'queued-only']);
+  assert.deepEqual(open.facets.agents, ['brindle-agent', 'lumen-agent', 'quay-agent', 'queued-only'].map((agent_id) => ({ agent_id, agent_label: agent_id })));
   const scoped = getAdminPipeline(db, { project: '/work/harbor-sync' }, rt);
   assert.deepEqual(ids(scoped), ['task-saved-flagged', 'task-dup-plain']);
   assert.deepEqual(scoped.facets, open.facets);
@@ -222,7 +222,8 @@ test('pipeline facets are the whole task universe, sorted and capped at 200', wi
   assert.equal(body.items.length, 1);
   assert.equal(body.items[0].task_id, 'cap-000');
   for (const key of ['projects', 'agents']) {
-    const values = body.facets[key];
+    const raw = body.facets[key];
+    const values = key === 'agents' ? raw.map((row) => row.agent_id) : raw;
     const prefix = key === 'projects' ? 'p-' : 'a-';
     assert.equal(values.length, 200);
     assert.equal(values[0], `${prefix}000`);
@@ -230,6 +231,7 @@ test('pipeline facets are the whole task universe, sorted and capped at 200', wi
     assert.equal(values.includes(`${prefix}200`), false);
     assert.equal(values.includes(`${prefix}204`), false);
     assert.deepEqual(values, [...values].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })));
+    if (key === 'agents') assert.equal(raw[0].agent_label, 'a-000');
   }
 }));
 
@@ -269,7 +271,7 @@ test('GET /admin/api/pipeline accepts flagged=1 and returns facets on page 1', a
     assert.equal(Object.prototype.hasOwnProperty.call(flagged.body.filters, 'flagged'), false);
     assert.ok(flagged.body.facets.projects.includes('/work/harbor-sync'));
     assert.ok(flagged.body.facets.projects.includes('/work/quay-notes'));
-    assert.ok(flagged.body.facets.agents.includes('brindle-agent'));
+    assert.ok(flagged.body.facets.agents.some((agent) => agent.agent_id === 'brindle-agent'));
 
     const off = await getJson(base, '/admin/api/pipeline?flagged=0');
     assert.equal(off.status, 200);

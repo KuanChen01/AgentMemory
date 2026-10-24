@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db';
+import { agentMatchSql, presentAgentIds } from './agent-id';
 import { stuckStaleMs, taskPipelineSql } from './task-consolidation';
 
 const PIPELINE_STATES = ['queued', 'processing', 'saved', 'skipped', 'duplicate', 'fallback', 'failed', 'stuck'] as const;
@@ -305,7 +306,11 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
   const built = taskPipelineSql({ nowMs, inflightJson: JSON.stringify(inflight), staleMs: stuckStaleMs(runtime?.env ?? process.env) });
   const where: string[] = []; const params: any[] = [];
   if (normalized.project !== undefined) { where.push('LOWER(project_path) = LOWER(?)'); params.push(normalized.project); }
-  if (normalized.agent !== undefined) { where.push('LOWER(agent_id) = LOWER(?)'); params.push(normalized.agent); }
+  if (normalized.agent !== undefined) {
+    const match = agentMatchSql('agent_id', normalized.agent);
+    where.push(match.sql);
+    params.push(...match.params);
+  }
   if (normalized.fromIso) { where.push('created_ms >= ?'); params.push(Date.parse(normalized.fromIso)); }
   if (normalized.toIso) { where.push('created_ms < ?'); params.push(Date.parse(normalized.toIso)); }
   const scoped = db.sqlAll(`WITH ${built.sql} SELECT * FROM pipeline_tasks${where.length ? ` WHERE ${where.join(' AND ')}` : ''}`,
@@ -316,9 +321,9 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
   if (stages) for (const row of scoped) if (STATE_SET.has(row.state)) (stages as any)[row.state]++;
 
   // Facets ignore every filter, including flagged and state; they never rerun the classifier.
-  let facets: { projects: string[]; agents: string[] } | undefined;
+  let facets: { projects: string[]; agents: Array<{ agent_id: string; agent_label: string }> } | undefined;
   if (wantStages) {
-    facets = { projects: facetValues(db, 'project_path'), agents: facetValues(db, 'agent_id') };
+    facets = { projects: facetValues(db, 'project_path'), agents: presentAgentIds(facetValues(db, 'agent_id')) };
   }
 
   const allStates = normalized.states.length === PIPELINE_STATES.length;

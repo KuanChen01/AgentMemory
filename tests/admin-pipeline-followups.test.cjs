@@ -141,7 +141,7 @@ test('facets come from every task source, are trimmed, sorted case-insensitively
   });
   const open = getAdminPipeline(db, { limit: 5 }, rt(at + 1000));
   assert.deepEqual(open.facets.projects, ['/work/Alpha', '/work/beta', '/work/delta', '/work/gamma']);
-  assert.deepEqual(open.facets.agents, ['alpha', 'buffer-agent', 'evidence-agent', 'Zeta']);
+  assert.deepEqual(open.facets.agents, ['alpha', 'buffer-agent', 'evidence-agent', 'Zeta'].map((agent_id) => ({ agent_id, agent_label: agent_id })));
   const scoped = getAdminPipeline(db, { project: '/work/beta', state: 'saved' }, rt(at + 1000));
   assert.deepEqual(scoped.facets, open.facets);
 

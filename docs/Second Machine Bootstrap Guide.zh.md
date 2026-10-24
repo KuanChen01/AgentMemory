@@ -172,7 +172,7 @@ bootstrap 成功后，再做以下 live acceptance：
 2. `ChatGPT desktop（Codex runtime）` 新开一个会话，确认能看到 `SessionStart` 恢复内容；提交实质性任务时确认 `UserPromptSubmit` 自动查找相关记忆。配置仍位于 `%USERPROFILE%\.codex\config.toml` 与 `%USERPROFILE%\.codex\hooks.json`
 3. `OpenCode` 重启后新开会话，确认项目上下文和任务相关记忆进入模型上下文；执行普通工具后在 AgentMemory Observation Ledger 中确认 `agent_id=opencode` 且 `project_path` 对应当前工作区。连续两次出现同类工具失败后，插件会尝试补充一次相关记忆。
 4. `agy plugin list` 能看到已导入的 `agentmem` plugin；MCP 列表中只有一个 `agentmem`。新开 Antigravity 会话后，`PreInvocation` 自动检索当前任务、`PostToolUse` 自动写入且记录的 `agent_id` / `project_path` 分别为 `antigravity` 和当前 workspace，`Stop` 会关闭 session
-5. `grok mcp doctor agentmem` 通过，`grok inspect --json` 显示默认 `agentmem` profile、Grok lifecycle hooks 与本机 MCP server；实质性任务会预查记忆，首次工具结果后注入。执行一次非 AgentMemory 工具后，Observation Ledger 仅产生 `agent_id=grok` 的记录
+5. `grok mcp doctor agentmem` 通过，`grok inspect --json` 显示默认 `agentmem` profile、Grok lifecycle hooks 与本机 MCP server；实质性任务会预查记忆，首次工具结果后注入。执行一次非 AgentMemory 工具后，Observation Ledger 仅产生 `agent_id=grok-build` 的记录
 6. 对任意受管理 repo，确认 Antigravity 与 Grok 会把 `agentmem` search/timeline 结果视为未验证工作记忆，并在 durable use 前用当前 workspace 文件、diff、命令、测试或产物验证
 
 ## Troubleshooting

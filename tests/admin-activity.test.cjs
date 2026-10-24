@@ -308,8 +308,8 @@ test('activity project and agent filters are case-insensitive and do not change 
   assert.deepEqual(all.totals, { memories: 3, outcome: 2, context: 1, fallback: 1, legacy: 2 });
   assert.deepEqual(all.breakdown.map((row) => [row.project_path, row.agent_id, row.outcome, row.context, row.fallback, row.legacy]), [
     ['/Work/App', 'Codex', 2, 0, 1, 1],
-    ['/Work/App', 'Grok', 0, 0, 0, 1],
-    ['/Work/Other', 'Grok', 0, 1, 0, 0],
+    ['/Work/App', 'grok-build', 0, 0, 0, 1],
+    ['/Work/Other', 'grok-build', 0, 1, 0, 0],
   ]);
 
   const filtered = await db.getAdminActivity({ ...base, kind: 'all', project: '/work/app', agent: 'cOdEx' });

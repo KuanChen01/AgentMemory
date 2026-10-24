@@ -1843,8 +1843,8 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   }
 
   const grokToml = fs.existsSync(paths.grokConfigPath) ? fs.readFileSync(paths.grokConfigPath, 'utf8') : '';
-  if (!grokToml.includes(paths.mcpServerPath) || !/AGENTMEM_AGENT_ID\s*=\s*"grok"/.test(grokToml)) {
-    issues.push(`Grok config.toml is missing the AgentMemory MCP server or AGENTMEM_AGENT_ID=grok (${paths.grokConfigPath}).`);
+  if (!grokToml.includes(paths.mcpServerPath) || !/AGENTMEM_AGENT_ID\s*=\s*"grok-build"/.test(grokToml)) {
+    issues.push(`Grok config.toml is missing the AgentMemory MCP server or AGENTMEM_AGENT_ID=grok-build (${paths.grokConfigPath}).`);
   }
   if (!/^\s*name\s*=\s*"agentmem"\s*$/m.test(grokToml) || !/^\s*hooks\s*=\s*false\s*(?:#.*)?$/m.test(grokToml)) {
     issues.push(`Grok config.toml is missing the default agentmem profile or compat.claude hooks=false (${paths.grokConfigPath}).`);
