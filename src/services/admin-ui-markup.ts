@@ -787,14 +787,16 @@ export const ADMIN_UI_PROJECT_RANGES: Array<{ id: string; days: number; key: str
   { id: 'prjRange90', days: 90, key: 'projects.range90', label: '90 days' },
 ];
 
-// One summary tile: an icon tile, a quiet label over the value, and an optional chip or note beside the value.
-function renderProjectStat(id: string, icon: string, labelKey: string, label: string): string {
+// One summary tile: an icon, a quiet label over the value, an optional chip beside it, and an optional sub-label
+// under it for totals that only cover the rows loaded so far.
+function renderProjectStat(id: string, icon: string, labelKey: string, label: string, sub = false): string {
+  const subLabel = sub ? `<span class="prjStatSub" id="${id}Sub" hidden></span>` : '';
   return `
           <div class="prjStat digGlass glassCard glassBlur" id="${id}">
             <span class="prjStatIcon" aria-hidden="true">${renderAdminIcon(icon, 'prjStatGlyph')}</span>
             <span class="prjStatText">
               <span class="prjStatLabel" id="${id}Label" data-i18n="${labelKey}">${label}</span>
-              <span class="prjStatLine"><span class="prjStatValue" id="${id}Value">—</span><span class="prjStatNote" id="${id}Note" hidden></span></span>
+              <span class="prjStatLine"><span class="prjStatValue" id="${id}Value">—</span><span class="prjStatNote" id="${id}Note" hidden></span></span>${subLabel}
             </span>
           </div>`;
 }
@@ -828,7 +830,7 @@ function renderProjectsView(): string {
           </div>
         </div>
 
-        <div class="prjStats" id="prjStats">${renderProjectStat('prjStatProjects', 'projects', 'projects.statProjects', 'Projects')}${renderProjectStat('prjStatActive', 'pulse', 'projects.statActive', 'Active in 30 days')}${renderProjectStat('prjStatDigests', 'digestDoc', 'projects.statDigestDays', 'Digest days')}${renderProjectStat('prjStatSkills', 'star', 'projects.statSkills', 'Skills')}
+        <div class="prjStats" id="prjStats">${renderProjectStat('prjStatProjects', 'projects', 'projects.statProjects', 'Projects')}${renderProjectStat('prjStatActive', 'pulse', 'projects.statActive', 'Active in 30 days')}${renderProjectStat('prjStatDigests', 'digestDoc', 'projects.statDigestDays', 'Digest days', true)}${renderProjectStat('prjStatSkills', 'star', 'projects.statSkills', 'Skills', true)}
         </div>
 
         <div class="prjBoard" id="prjBoard">

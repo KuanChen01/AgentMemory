@@ -8085,6 +8085,17 @@ ${WALLPAPER_CSS}
     font-size: 13.5px;
   }
 
+  .prjStatSub {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 12.5px;
+    line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* List card: one glass card, column headers, rows on the card itself. */
   .prjBoard {
     margin-top: 16px;

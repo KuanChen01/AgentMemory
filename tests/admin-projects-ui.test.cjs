@@ -352,3 +352,176 @@ test('Projects joins the shared glass tokens in light and dark and docks the dra
   }
   assert.match(css, /\.appView\.is-active \.actScrim \{\s*-webkit-backdrop-filter: blur\(2px\);\s*backdrop-filter: blur\(2px\);/);
 });
+
+test('partial project pages mark summed tiles with a plus and a loaded-count sub-label', () => {
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  assert.equal(en['projects.statLoaded'], 'in {n} loaded projects');
+  assert.equal(en['projects.statLoadedOne'], 'in 1 loaded project');
+  assert.equal(zh['projects.statLoaded'], '已加载 {n} 个项目');
+  assert.equal(zh['projects.statLoadedOne'], '已加载 1 个项目');
+  assert.equal(en['projects.statCandidatesOne'], '{n} candidate');
+  assert.equal(zh['projects.statCandidatesOne'], '{n} 个候选');
+  const view = projectsSection();
+  assert.deepEqual([...view.matchAll(/id="(prjStat\w*Sub)"/g)].map((match) => match[1]), ['prjStatDigestsSub', 'prjStatSkillsSub']);
+  assert.match(ADMIN_UI_THEME, /\.prjStatSub \{[^}]*font-size:\s*12\.5px;/);
+  assert.match(ADMIN_UI_THEME, /\.prjStatSub \{[^}]*color:\s*var\(--text-3\)/);
+
+  const elements = {};
+  const make = (id, className, hidden) => {
+    const el = { id, textContent: '', hidden: !!hidden, className: className || '' };
+    el.classList = {
+      toggle(name, on) {
+        const parts = new Set(el.className.split(/\s+/).filter(Boolean));
+        if (on) parts.add(name);
+        else parts.delete(name);
+        el.className = [...parts].join(' ');
+      },
+    };
+    elements[id] = el;
+    return el;
+  };
+  make('prjStats');
+  make('prjStatActiveLabel');
+  for (const id of ['prjStatProjects', 'prjStatActive', 'prjStatDigests', 'prjStatSkills']) {
+    make(`${id}Value`, 'prjStatValue', false);
+    make(`${id}Note`, 'prjStatNote', true);
+    make(`${id}Sub`, 'prjStatSub', true);
+  }
+  const i18n = { UI: en };
+  const context = vm.createContext({
+    i18n,
+    state: {
+      locale: 'en',
+      projects: { days: 30, items: [], summary: null, nextCursor: null, loaded: false, readsDisabled: false, error: '' },
+    },
+    document: { getElementById: (id) => elements[id] || null },
+    els: { prjStats: elements.prjStats },
+  });
+  vm.runInContext(`
+    function t(key, vars) { return String(i18n.UI[key] || key).replace(/\\{(\\w+)\\}/g, (_m, name) => (vars && name in vars ? String(vars[name]) : "")); }
+    ${uiClientFunction('formatCount')}
+    ${uiClientFunction('setText')}
+    ${uiClientFunction('setHidden')}
+    ${uiClientFunction('setClass')}
+    ${uiClientFunction('projectPlural')}
+    ${uiClientFunction('renderProjectStats')}
+  `, context);
+  const show = (patch) => {
+    const prj = context.state.projects;
+    prj.loaded = patch.loaded;
+    prj.summary = patch.summary;
+    prj.nextCursor = patch.nextCursor;
+    prj.items = patch.items;
+    prj.days = 30;
+    prj.readsDisabled = false;
+    prj.error = '';
+    i18n.UI = patch.ui || en;
+    context.state.locale = patch.locale || 'en';
+    vm.runInContext('renderProjectStats()', context);
+  };
+  const row = (digest, skills, candidates) => ({ digest_days_in_range: digest, skills_count: skills, candidates_count: candidates });
+  const summary = { projects_total: 120, active_in_range: 80 };
+
+  show({ loaded: true, summary, nextCursor: 'page-2', items: [row(40, 4, 2), row(27, 1, 1)], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatProjectsValue.textContent, '120');
+  assert.equal(elements.prjStatProjectsValue.className, 'prjStatValue');
+  assert.equal(elements.prjStatActiveValue.textContent, '80');
+  assert.equal(elements.prjStatActiveLabel.textContent, 'Active in 30 days');
+  assert.equal(elements.prjStatDigestsValue.textContent, '67+');
+  assert.equal(elements.prjStatDigestsValue.className, 'prjStatValue');
+  assert.equal(elements.prjStatDigestsSub.hidden, false);
+  assert.equal(elements.prjStatDigestsSub.textContent, 'in 2 loaded projects');
+  assert.equal(elements.prjStatSkillsValue.textContent, '5+');
+  assert.equal(elements.prjStatSkillsSub.hidden, false);
+  assert.equal(elements.prjStatSkillsSub.textContent, 'in 2 loaded projects');
+  assert.equal(elements.prjStatSkillsNote.hidden, false);
+  assert.equal(elements.prjStatSkillsNote.textContent, '3+ candidates');
+  assert.equal(elements.prjStatSkillsNote.className, 'prjStatNote is-candidates');
+  assert.equal(elements.prjStats.hidden, false);
+
+  show({ loaded: true, summary, nextCursor: 'page-2', items: [row(40, 4, 2), row(27, 1, 1)], ui: zh, locale: 'zh-CN' });
+  assert.equal(elements.prjStatDigestsValue.textContent, '67+');
+  assert.equal(elements.prjStatDigestsSub.textContent, '已加载 2 个项目');
+  assert.equal(elements.prjStatSkillsSub.textContent, '已加载 2 个项目');
+  assert.equal(elements.prjStatSkillsNote.textContent, '3+ 个候选');
+  assert.equal(elements.prjStatActiveLabel.textContent, '30 天内活跃');
+  assert.equal(elements.prjStatProjectsValue.textContent, '120');
+
+  show({ loaded: true, summary, nextCursor: 'page-3', items: [row(40, 4, 2), row(27, 1, 1), row(10, 1, 0)], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatDigestsValue.textContent, '77+');
+  assert.equal(elements.prjStatSkillsValue.textContent, '6+');
+  assert.equal(elements.prjStatSkillsNote.textContent, '3+ candidates');
+  assert.equal(elements.prjStatDigestsSub.textContent, 'in 3 loaded projects');
+  assert.equal(elements.prjStatSkillsSub.hidden, false);
+  assert.equal(elements.prjStatProjectsValue.textContent, '120');
+
+  show({ loaded: true, summary: { projects_total: 120, active_in_range: 0 }, nextCursor: 'page-2', items: [row(0, 0, 0)], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatActiveValue.textContent, '0');
+  assert.equal(elements.prjStatActiveValue.className, 'prjStatValue is-zero');
+  assert.equal(elements.prjStatDigestsValue.textContent, '0+');
+  assert.equal(elements.prjStatDigestsValue.className, 'prjStatValue is-zero');
+  assert.equal(elements.prjStatSkillsValue.textContent, '0+');
+  assert.equal(elements.prjStatSkillsValue.className, 'prjStatValue is-zero');
+  assert.equal(elements.prjStatSkillsNote.hidden, false);
+  assert.equal(elements.prjStatSkillsNote.textContent, 'None yet');
+  assert.equal(elements.prjStatSkillsNote.className, 'prjStatNote is-quiet');
+  assert.equal(elements.prjStatDigestsSub.textContent, 'in 1 loaded project');
+  assert.equal(elements.prjStatSkillsSub.textContent, 'in 1 loaded project');
+
+  show({ loaded: true, summary, nextCursor: 'page-2', items: [row(3, 2, 0)], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatDigestsValue.textContent, '3+');
+  assert.equal(elements.prjStatDigestsValue.className, 'prjStatValue');
+  assert.equal(elements.prjStatSkillsValue.textContent, '2+');
+  assert.equal(elements.prjStatSkillsValue.className, 'prjStatValue');
+  assert.equal(elements.prjStatSkillsNote.hidden, true);
+  assert.equal(elements.prjStatSkillsNote.textContent, '');
+  assert.equal(elements.prjStatSkillsSub.hidden, false);
+  assert.equal(elements.prjStatSkillsSub.textContent, 'in 1 loaded project');
+
+  show({ loaded: true, summary, nextCursor: 'page-2', items: [row(4, 1, 1)], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatDigestsValue.textContent, '4+');
+  assert.equal(elements.prjStatSkillsValue.textContent, '1+');
+  assert.equal(elements.prjStatSkillsNote.textContent, '1+ candidate');
+  assert.equal(elements.prjStatSkillsNote.className, 'prjStatNote is-candidates');
+  assert.equal(elements.prjStatDigestsSub.textContent, 'in 1 loaded project');
+
+  show({ loaded: true, summary, nextCursor: 'page-2', items: [row(4, 1, 1)], ui: zh, locale: 'zh-CN' });
+  assert.equal(elements.prjStatSkillsNote.textContent, '1+ 个候选');
+  assert.equal(elements.prjStatDigestsSub.textContent, '已加载 1 个项目');
+  assert.equal(elements.prjStatSkillsSub.textContent, '已加载 1 个项目');
+
+  show({ loaded: true, summary, nextCursor: null, items: [row(4, 1, 1)], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatProjectsValue.textContent, '120');
+  assert.equal(elements.prjStatActiveValue.textContent, '80');
+  assert.equal(elements.prjStatDigestsValue.textContent, '4');
+  assert.equal(elements.prjStatSkillsValue.textContent, '1');
+  assert.equal(elements.prjStatSkillsNote.hidden, false);
+  assert.equal(elements.prjStatSkillsNote.textContent, '1 candidate');
+  assert.equal(elements.prjStatSkillsNote.className, 'prjStatNote is-candidates');
+  assert.equal(elements.prjStatDigestsSub.hidden, true);
+  assert.equal(elements.prjStatDigestsSub.textContent, '');
+  assert.equal(elements.prjStatSkillsSub.hidden, true);
+  assert.equal(elements.prjStatSkillsSub.textContent, '');
+
+  show({ loaded: true, summary, nextCursor: null, items: [row(40, 4, 2), row(27, 1, 1)], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatDigestsValue.textContent, '67');
+  assert.equal(elements.prjStatSkillsValue.textContent, '5');
+  assert.equal(elements.prjStatSkillsNote.textContent, '3 candidates');
+  assert.equal(elements.prjStatDigestsSub.hidden, true);
+  assert.equal(elements.prjStatSkillsSub.hidden, true);
+  assert.equal(elements.prjStatProjectsValue.textContent, '120');
+  assert.equal(elements.prjStatActiveValue.textContent, '80');
+
+  show({ loaded: false, summary: null, nextCursor: 'page-2', items: [], ui: en, locale: 'en' });
+  assert.equal(elements.prjStatProjectsValue.textContent, '—');
+  assert.equal(elements.prjStatActiveValue.textContent, '—');
+  assert.equal(elements.prjStatDigestsValue.textContent, '—');
+  assert.equal(elements.prjStatSkillsValue.textContent, '—');
+  assert.equal(elements.prjStatSkillsNote.hidden, true);
+  assert.equal(elements.prjStatSkillsNote.textContent, '');
+  assert.equal(elements.prjStatDigestsSub.hidden, true);
+  assert.equal(elements.prjStatDigestsSub.textContent, '');
+  assert.equal(elements.prjStatSkillsSub.hidden, true);
+  assert.equal(elements.prjStatSkillsSub.textContent, '');
+});

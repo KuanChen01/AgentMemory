@@ -7457,27 +7457,39 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncProjectRows(list, prj.items);
   }
 
-  // Summary tiles: Projects and Active come from the server summary (they ignore q); Digest days and Skills add up
-  // the loaded rows. Zeros stay calm: the value dims and Skills says "None yet" instead of an empty chip.
+  // Summary tiles: Projects and Active come from the server summary (they ignore q). Digest days, Skills and the
+  // candidates chip add up the loaded rows. While the latest page left a next_cursor, those three are partial: the
+  // number wears a trailing "+" and the tile names how many projects are loaded. A finished list shows the plain totals.
+  // Zeros stay calm: the value dims and Skills says "None yet" instead of an empty chip.
   function renderProjectStats() {
     const prj = state.projects;
     setHidden(els.prjStats, !!prj.readsDisabled || (!prj.loaded && !!prj.error));
     const summary = prj.loaded ? prj.summary || {} : null;
+    const partial = !!(summary && prj.nextCursor);
     const sum = (field) => prj.items.reduce((total, item) => total + Number(item[field] || 0), 0);
-    const tile = (id, value) => {
+    const tile = (id, value, withPlus) => {
       const valueEl = document.getElementById(id + "Value");
-      setText(valueEl, value === null ? "—" : formatCount(value));
+      setText(valueEl, value === null ? "—" : formatCount(value) + (withPlus ? "+" : ""));
       if (valueEl) valueEl.classList.toggle("is-zero", !value);
     };
+    const setPartialSub = (id) => {
+      const el = document.getElementById(id + "Sub");
+      setHidden(el, !partial);
+      setText(el, partial ? projectPlural("projects.statLoaded", prj.items.length) : "");
+    };
     setText(document.getElementById("prjStatActiveLabel"), t("projects.statActive", { n: formatCount(prj.days) }));
-    tile("prjStatProjects", summary ? Number(summary.projects_total || 0) : null);
-    tile("prjStatActive", summary ? Number(summary.active_in_range || 0) : null);
-    tile("prjStatDigests", summary ? sum("digest_days_in_range") : null);
+    tile("prjStatProjects", summary ? Number(summary.projects_total || 0) : null, false);
+    tile("prjStatActive", summary ? Number(summary.active_in_range || 0) : null, false);
+    tile("prjStatDigests", summary ? sum("digest_days_in_range") : null, partial);
+    setPartialSub("prjStatDigests");
     const skills = summary ? sum("skills_count") : null;
-    tile("prjStatSkills", skills);
+    tile("prjStatSkills", skills, partial);
+    setPartialSub("prjStatSkills");
     const candidates = summary ? sum("candidates_count") : 0;
     const note = document.getElementById("prjStatSkillsNote");
-    const text = candidates > 0 ? projectPlural("projects.statCandidates", candidates) : skills === 0 ? t("projects.statNoSkills") : "";
+    const text = candidates > 0
+      ? t(Number(candidates) === 1 ? "projects.statCandidatesOne" : "projects.statCandidates", { n: formatCount(candidates) + (partial ? "+" : "") })
+      : skills === 0 ? t("projects.statNoSkills") : "";
     setHidden(note, !text);
     setText(note, text);
     setClass(note, "prjStatNote" + (candidates > 0 ? " is-candidates" : " is-quiet"));
