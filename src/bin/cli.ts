@@ -47,6 +47,7 @@ interface ParsedOptions {
   since?: string;
   until?: string;
   apply?: boolean;
+  claudeToolCapture?: boolean;
 }
 
 function parseOptions(tokens: string[]): ParsedOptions {
@@ -62,6 +63,10 @@ function parseOptions(tokens: string[]): ParsedOptions {
         break;
       case '--no-open':
         parsed.noOpen = true;
+        break;
+      case '--claude-capture':
+      case '--no-claude-capture':
+        parsed.claudeToolCapture = token === '--claude-capture';
         break;
       case '--antigravity-config':
         parsed.antigravityConfigPath = nextToken;
@@ -186,7 +191,7 @@ Usage:
   agentmem stop
   agentmem status
   agentmem version
-  agentmem install [--strict] [--antigravity-config <path>]
+  agentmem install [--strict] [--antigravity-config <path>] [--claude-capture | --no-claude-capture]
   agentmem uninstall [--strict] [--antigravity-config <path>] [--purge-all]
   agentmem bootstrap-win [--strict] [--no-open] [--antigravity-config <path>] [--api-key <key>] [--api-url <url>] [--model <name>] [--port <number>]
   agentmem release-manifest [--json]
@@ -294,6 +299,7 @@ async function runInstaller(options: ParsedOptions) {
   const repoRoot = path.resolve(__dirname, '../..');
   const results = installAgentMemory({
     antigravityConfigPath: options.antigravityConfigPath,
+    claudeToolCapture: options.claudeToolCapture,
     repoRoot,
     strict: options.strict,
   });
