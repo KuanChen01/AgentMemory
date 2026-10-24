@@ -246,6 +246,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     // Pipeline: page 1 carries the stage counts; later pages follow next_cursor, which is bound to the filters and
     // to the from/to of the request that issued it (kept in window, since Today, 7 and 30 days end now).
     pipeline: {
+      query: "",
       project: "",
       agent: "",
       // One state, or "" for all. flagged limits the list to needs_confirmation duplicate flags.
@@ -284,6 +285,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     // Digests & Reviews: the list pages through digest-list by covered day (window holds the from/to days the cursor
     // was issued under). scheduler and vault feed the two status cards and load on their own slower cadence.
     digests: {
+      query: "",
       project: "",
       agent: "",
       // Comma list of succeeded|skipped|failed, or "" for all (Home's failed-digest link sets "failed").
@@ -562,6 +564,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pageTitle: document.getElementById("pageTitle"),
     devToolsToggle: document.getElementById("devToolsToggle"),
     devToolsNavGroup: document.getElementById("devToolsNavGroup"),
+    devToolsUpdated: document.getElementById("devToolsUpdated"),
     policyBanner: document.getElementById("policyBanner"),
     policyBannerText: document.getElementById("policyBannerText"),
     homeWorkerCard: document.getElementById("homeWorkerCard"),
@@ -585,6 +588,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     homeStatusTitle: document.getElementById("homeStatusTitle"),
     homeStatusLead: document.getElementById("homeStatusLead"),
     homeStatusUpdated: document.getElementById("homeStatusUpdated"),
+    homeUpdated: document.getElementById("homeUpdated"),
     homeHealthRing: document.getElementById("homeHealthRing"),
     homeHealthRingChip: document.getElementById("homeHealthRingChip"),
     homeRecentRows: document.getElementById("homeRecentRows"),
@@ -619,6 +623,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     activityAgentValue: document.getElementById("activityAgentValue"),
     activityRangeLabel: document.getElementById("activityRangeLabel"),
     activityUpdated: document.getElementById("activityUpdated"),
+    activitySearchInput: document.getElementById("activitySearchInput"),
     activityChips: document.getElementById("activityChips"),
     activityColumns: document.getElementById("activityColumns"),
     activityNotice: document.getElementById("activityNotice"),
@@ -683,6 +688,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipelineView: document.getElementById("pipelineView"),
     pipelineUpdated: document.getElementById("pipelineUpdated"),
     pipelineToolbar: document.getElementById("pipelineToolbar"),
+    pipelineSearchInput: document.getElementById("pipelineSearchInput"),
+    pipelineSearchClear: document.getElementById("pipelineSearchClear"),
     pipelineRangeButtons: Array.from(document.querySelectorAll("[data-pipeline-range]")),
     pipelineRangeCustom: document.getElementById("pipelineRangeCustom"),
     pipelineRangeAll: document.getElementById("pipelineRangeAll"),
@@ -713,6 +720,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     digestsView: document.getElementById("digestsView"),
     digUpdated: document.getElementById("digUpdated"),
     digToolbar: document.getElementById("digToolbar"),
+    digSearchInput: document.getElementById("digSearchInput"),
+    digSearchClear: document.getElementById("digSearchClear"),
     digRangeButtons: Array.from(document.querySelectorAll("[data-digest-range]")),
     digRangeCustom: document.getElementById("digRangeCustom"),
     digProjectButton: document.getElementById("digProjectButton"),
@@ -901,11 +910,95 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return interpolate(template, vars);
   }
 
-  function formatDate(value) {
+  // Day is "Oct 24" / "10月24日". dateTime is "Oct 24, 16:36" / "10月24日 16:36". full (year and seconds) is for Developer tools tables only.
+  function formatUiDate(date, variant) {
+    if (!date || Number.isNaN(date.getTime())) return "";
+    const locale = state.locale === "zh-CN" ? "zh-CN" : "en-US";
+    const kind = variant || "day";
+    const pad = (n) => (n < 10 ? "0" + n : String(n));
+    if (kind === "time") return pad(date.getHours()) + ":" + pad(date.getMinutes());
+    if (kind === "dayNum") return String(date.getDate());
+    if (kind === "weekday" || kind === "weekdayLong") {
+      return new Intl.DateTimeFormat(locale, { weekday: kind === "weekdayLong" ? "long" : "short" }).format(date);
+    }
+    if (kind === "month") {
+      const monthYear = date.getFullYear() !== new Date().getFullYear();
+      return new Intl.DateTimeFormat(locale, { month: "long", year: monthYear ? "numeric" : undefined }).format(date);
+    }
+    const withYear = kind === "full" || date.getFullYear() !== new Date().getFullYear();
+    const monthPart = new Intl.DateTimeFormat(locale, { month: "short" }).formatToParts(date).filter((part) => part.type === "month")[0];
+    const monthName = String(monthPart && monthPart.value || "").replace(/\\.$/, "");
+    const dayNum = String(date.getDate());
+    const monthNum = String(date.getMonth() + 1);
+    const dayText = locale === "zh-CN"
+      ? (withYear ? date.getFullYear() + "年" : "") + monthNum + "月" + dayNum + "日"
+      : monthName + " " + dayNum + (withYear ? ", " + date.getFullYear() : "");
+    if (kind === "day") return dayText;
+    const clock = pad(date.getHours()) + ":" + pad(date.getMinutes());
+    if (kind === "dateTime") return locale === "zh-CN" ? dayText + " " + clock : dayText + ", " + clock;
+    if (kind === "full") return locale === "zh-CN" ? dayText + " " + clock + ":" + pad(date.getSeconds()) : dayText + ", " + clock + ":" + pad(date.getSeconds());
+    return dayText;
+  }
+
+  function formatDate(value, kind) {
     if (!value) return t("common.unknownTimestamp");
     const parsed = new Date(String(value).replace(" ", "T") + (String(value).includes("T") ? "" : "Z"));
     if (Number.isNaN(parsed.getTime())) return String(value);
-    return parsed.toLocaleString(state.locale);
+    return formatUiDate(parsed, kind || "dateTime");
+  }
+
+  function statusVariantClass(variant) {
+    const map = { success: "is-success success", warning: "is-warning warning", error: "is-danger error", danger: "is-danger", neutral: "is-neutral", info: "is-info" };
+    return "statusChip " + (map[variant] || "is-neutral");
+  }
+
+  function statusChip(label, variant, extra) {
+    const known = { success: 1, warning: 1, danger: 1, neutral: 1, info: 1 };
+    const tone = known[variant] ? variant : "neutral";
+    const dot = extra && String(extra).indexOf("digChip") >= 0 ? '<span class="digChipDot" aria-hidden="true"></span>' : "";
+    return '<span class="' + statusVariantClass(tone) + (extra ? " " + extra : "") + '">' + dot + escapeHtml(label) + "</span>";
+  }
+
+  function renderEmptyState(icon, line, hint, actionLabel, options) {
+    const opts = options || {};
+    const iconHtml = icon ? '<div class="emptyStateIcon" aria-hidden="true">' + icon + "</div>" : "";
+    const hintHtml = hint ? '<p class="emptyStateHint">' + escapeHtml(hint) + "</p>" : "";
+    const buttons = [];
+    const primary = actionLabel || "";
+    if (primary || opts.actionId) {
+      const id = opts.actionId ? ' id="' + escapeHtml(opts.actionId) + '"' : "";
+      const attr = opts.actionAttr && opts.actionValue ? " " + opts.actionAttr + '="' + escapeHtml(opts.actionValue) + '"' : "";
+      buttons.push('<button class="bgButton is-primary emptyStateAction" type="button"' + id + attr + (primary ? "" : " hidden") + ">" + escapeHtml(primary) + "</button>");
+    }
+    if (opts.secondaryId || opts.secondaryLabel) {
+      const id = opts.secondaryId ? ' id="' + escapeHtml(opts.secondaryId) + '"' : "";
+      const attr = opts.secondaryAttr && opts.secondaryValue ? " " + opts.secondaryAttr + '="' + escapeHtml(opts.secondaryValue) + '"' : "";
+      buttons.push('<button class="bgButton emptyStateAction" type="button"' + id + attr + (opts.secondaryLabel ? "" : " hidden") + ">" + escapeHtml(opts.secondaryLabel || "") + "</button>");
+    }
+    const wrapped = buttons.length && (opts.actionId || opts.secondaryId);
+    const actionHtml = buttons.length ? (wrapped ? '<div class="emptyStateActions">' + buttons.join("") + "</div>" : buttons.join("")) : "";
+    return '<div class="emptyState">' + iconHtml + '<p class="emptyStateLine">' + escapeHtml(line || "") + "</p>" + hintHtml + actionHtml + "</div>";
+  }
+
+  // Hosts already carry emptyState; drop the helper's outer wrapper so padding is not doubled.
+  function applyEmptyMarkup(host, html) {
+    if (!host) return;
+    if (host.getAttribute && host.getAttribute("data-empty") === html) return;
+    if (host.setAttribute) host.setAttribute("data-empty", html);
+    const open = html.indexOf(">");
+    const close = html.lastIndexOf("</div>");
+    host.innerHTML = open >= 0 && close > open ? html.slice(open + 1, close) : html;
+  }
+
+  // Copy the shared chip's classes onto a live element. The label stays text, so titles set afterwards survive.
+  function applyChipMarkup(element, html) {
+    if (!element || !html) return;
+    const mark = 'class="';
+    const start = html.indexOf(mark);
+    if (start < 0) return;
+    const from = start + mark.length;
+    const end = html.indexOf('"', from);
+    if (end > from) setClass(element, html.slice(from, end));
   }
 
   function escapeHtml(value) {
@@ -960,11 +1053,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
   }
 
+  // Backticks in a translation mark an API or field name and become a code span. Plain strings stay text.
+  function applyI18nText(node, value) {
+    const text = String(value);
+    const parts = text.split("\`");
+    if (parts.length >= 3 && parts.length % 2 === 1) {
+      const html = parts.map((part, index) => (index % 2 === 1 ? "<code>" + escapeHtml(part) + "</code>" : escapeHtml(part))).join("");
+      if (node.innerHTML !== html) node.innerHTML = html;
+      return;
+    }
+    if (node.textContent !== text) node.textContent = text;
+  }
+
   function applyStaticTranslations() {
     document.querySelectorAll("[data-i18n]").forEach((node) => {
       const key = node.getAttribute("data-i18n");
       if (!key) return;
-      node.textContent = t(key);
+      applyI18nText(node, t(key));
     });
     document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
       const key = node.getAttribute("data-i18n-placeholder");
@@ -1161,21 +1266,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       (saving ? " is-saving" : ""));
     const pillBadge = card ? card.querySelector(".policyBadge") : null;
     setText(pillBadge, saving ? t("common.saving") : enabled ? t("shell.on") : t("shell.off"));
-    setClass(pillBadge, "policyBadge " + (saving ? "saving" : enabled ? "enabled" : "disabled"));
+    setClass(pillBadge, "policyBadge " + statusVariantClass(saving ? "warning" : enabled ? "success" : "neutral") + (saving ? " saving" : enabled ? " enabled" : ""));
     setAttr(card, "title", getPolicyMeta(kind, enabled));
     // An open confirm keeps the switch on until the user answers it.
     const confirming = state.settings.confirm === kind;
     if (!confirming && toggle.checked !== !!enabled) toggle.checked = !!enabled;
     if (toggle.disabled !== saving) toggle.disabled = saving;
     setText(badge, saving ? t("settings.saving") : enabled ? t("settings.on") : t("settings.off"));
-    setClass(badge, "setChip " + (saving ? "is-busy" : enabled ? "is-ok" : "is-off"));
+    setClass(badge, "setChip " + statusVariantClass(saving ? "warning" : enabled ? "success" : "neutral") + (saving ? " is-busy" : enabled ? " is-ok" : " is-off"));
     setText(meta, enabled || saving ? t(isRead ? "settings.readLead" : "settings.writeLead") : t(isRead ? "settings.readOffLead" : "settings.writeOffLead"));
     setClass(meta, "setSwitchLead" + (!enabled && !saving ? " is-off" : ""));
     const row = isRead ? document.getElementById("setReadRow") : document.getElementById("setWriteRow");
     if (row) row.classList.toggle("is-off", !enabled && !saving);
     const policy = getDisplayedPolicy();
     const changedAt = parseTimestamp(policy.updatedAt);
-    setText(isRead ? els.setReadChanged : els.setWriteChanged, saving ? "" : changedAt ? t("settings.changed", { time: formatShortDate(changedAt) + ", " + formatClock(changedAt) }) : "");
+    setText(isRead ? els.setReadChanged : els.setWriteChanged, saving ? "" : changedAt ? t("settings.changed", { time: formatSettingsStamp(changedAt) }) : "");
     renderPolicyNote();
   }
 
@@ -1258,10 +1363,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.statusText.textContent = state.isSavingPolicy
       ? t("status.policySaving", { summary: getPolicySummary(policy) })
       : getPolicySummary(policy);
-    els.statusText.className = "statusValue" + (state.isSavingPolicy ? " is-saving" : "");
+    els.statusText.className = "statusValue " + statusVariantClass(state.isSavingPolicy ? "warning" : "info") + (state.isSavingPolicy ? " is-saving" : "");
     els.policyUpdatedAt.textContent = state.isSavingPolicy
       ? t("status.pendingPolicy")
       : t("status.policyUpdated", { timestamp: formatDate(policy.updatedAt || state.overview.refreshedAt) });
+    setText(els.devToolsUpdated, t("devtools.updated", { time: formatClock(new Date(state.overviewAt || Date.now())) }));
+    setClass(els.devToolsUpdated, "pageStamp");
 
     const projects = state.overview.projects || [];
     const agents = state.overview.agents || [];
@@ -1314,6 +1421,49 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return "";
   }
 
+  // Known release-check sentences stay on the server. Map them here so zh-CN does not show the English prose.
+  function localizeReleaseMessage(result) {
+    if (!result) return "";
+    const message = String(result.message || "");
+    const status = String(result.status || "");
+    if (message.indexOf("ahead of the latest") >= 0) return t("runtime.releaseAhead");
+    if (status === "up_to_date") {
+      if (!message || message === "You are on the latest release." || message.indexOf("latest published release") >= 0) return t("runtime.releaseLatestMessage");
+      return message;
+    }
+    if (message === "You are on the latest release.") return t("runtime.releaseLatestMessage");
+    if (status === "update_available") {
+      if (!message || message.indexOf("newer AgentMemory release") >= 0) return t("runtime.releaseUpdateMessage");
+      return message;
+    }
+    if (status === "invalid_latest_tag") {
+      if (!message || message.indexOf("not a strict SemVer") >= 0) return t("runtime.releaseInvalidTagMessage", { tag: String(result.latestTag || "unknown") });
+      return message;
+    }
+    if (status === "network_error") {
+      const prefix = "Unable to check the latest GitHub Release right now";
+      if (message === prefix || message === prefix + ".") return t("runtime.releaseNetworkMessage");
+      if (message.indexOf(prefix) === 0 && message.charAt(prefix.length) === ":") {
+        let detail = message.slice(prefix.length + 1);
+        if (detail.charAt(0) === " ") detail = detail.slice(1);
+        return detail ? t("runtime.releaseNetworkDetail", { detail: detail }) : t("runtime.releaseNetworkMessage");
+      }
+      return message;
+    }
+    return message;
+  }
+
+  function localizeReleaseGuidance(guidance) {
+    if (!guidance) return "";
+    const summary = String(guidance.summary || "");
+    const mode = String(guidance.installMode || "");
+    if (mode === "git_checkout" || summary.indexOf("git checkout") >= 0 || summary.indexOf("pulling the latest") >= 0 || summary.indexOf("Pull the latest code") >= 0) {
+      return t("runtime.releaseGuideGit");
+    }
+    if (mode === "source_archive" || summary.indexOf("source archive") >= 0) return t("runtime.releaseGuideArchive");
+    return summary;
+  }
+
   function renderReleaseCheck() {
     if (!state.overview || !state.overview.release) return;
     const manifest = state.overview.release;
@@ -1331,7 +1481,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
 
     els.releaseStatusBadge.textContent = status.label;
-    els.releaseStatusBadge.className = "statusChip " + status.variant;
+    els.releaseStatusBadge.className = statusVariantClass(status.variant);
     els.releaseCurrentVersion.textContent = String(manifest.version || "-");
     els.releaseLatestVersion.textContent = latestVersion;
     els.releaseVersionMeta.textContent = versionMeta.join(" · ");
@@ -1341,11 +1491,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         ? t("runtime.releaseCheckedAt", { timestamp: formatDate(result.checkedAt) })
         : t("runtime.releaseNotChecked");
     els.releaseCheckMessage.textContent = result
-      ? String(result.message || "")
+      ? localizeReleaseMessage(result)
       : t("runtime.releaseNotChecked");
 
     if (result && result.upgradeGuidance) {
-      els.releaseGuidanceSummary.textContent = String(result.upgradeGuidance.summary || "");
+      els.releaseGuidanceSummary.textContent = localizeReleaseGuidance(result.upgradeGuidance);
       const commands = Array.isArray(result.upgradeGuidance.commands)
         ? result.upgradeGuidance.commands
         : [];
@@ -1454,7 +1604,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       ? t("llm.testPassed", { latency: String(result.latencyMs || 0) })
       : t("llm.testFailed", { latency: String(result.latencyMs || 0) });
     const details = [
-      '<div class="statusChip ' + (result.ok ? 'success' : 'error') + '">' + escapeHtml(statusLine) + '</div>',
+      '<div class="' + statusVariantClass(result.ok ? 'success' : 'error') + '">' + escapeHtml(statusLine) + '</div>',
       '<div class="finePrint" style="margin-top: 10px;">' + escapeHtml(t("llm.testEndpoint", { endpoint: result.requestUrl || "" })) + '</div>',
       result.status ? '<div class="finePrint">' + escapeHtml(t("llm.testStatus", { status: String(result.status) })) + '</div>' : '',
       result.contentPreview ? '<div class="finePrint">' + escapeHtml(t("llm.testResponse", { response: result.contentPreview })) + '</div>' : '',
@@ -1525,7 +1675,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const compact = !!(options && options.compact);
     const meta = [
       localDate ? localDate : "",
-      generatedAt ? formatDate(generatedAt) : "",
+      generatedAt ? formatDate(generatedAt, "full") : "",
       t("runtime.dailyDigestSources", { count: String(sourceCount) }),
       t("runtime.dailyDigestConfidence", { confidence: formatConfidence(confidence) }),
     ].filter(Boolean);
@@ -1542,7 +1692,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return '<div class="summaryCard">' +
       '<div class="policyTitleRow">' +
         '<div style="font-weight: 700;">' + escapeHtml(localDate || t("runtime.dailyDigestSummary")) + '</div>' +
-        '<span class="statusChip ' + escapeHtml(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
+        '<span class="' + statusVariantClass(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
       '</div>' +
       '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(meta.join(" · ")) + '</div>' +
       details.join("") +
@@ -1562,7 +1712,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
     if (!config) {
       els.dailyDigestSchedulerRuntimeBadge.textContent = t("runtime.dailyDigestSchedulerLoading");
-      els.dailyDigestSchedulerRuntimeBadge.className = "statusChip warning";
+      els.dailyDigestSchedulerRuntimeBadge.className = statusVariantClass("warning");
       els.dailyDigestSchedulerStatusText.textContent = t("runtime.dailyDigestSchedulerLoading");
       els.dailyDigestSchedulerNextRunText.textContent = "";
       return;
@@ -1581,7 +1731,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.dailyDigestSchedulerRuntimeBadge.textContent = isActive
       ? t("runtime.dailyDigestSchedulerActive")
       : t("runtime.dailyDigestSchedulerInactive");
-    els.dailyDigestSchedulerRuntimeBadge.className = "statusChip " + (isActive ? "success" : "warning");
+    els.dailyDigestSchedulerRuntimeBadge.className = statusVariantClass(isActive ? "success" : "warning");
     if (!state.isSavingDigestScheduler) {
       els.dailyDigestSchedulerStatusText.textContent = t("runtime.dailyDigestSchedulerReady");
     }
@@ -1597,7 +1747,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const latest = payload && payload.latest ? payload.latest : null;
     const statusPresentation = getDigestStatusPresentation(latest && latest.status);
     els.dailyDigestStatusBadge.textContent = statusPresentation.label;
-    els.dailyDigestStatusBadge.className = "statusChip " + statusPresentation.variant;
+    els.dailyDigestStatusBadge.className = statusVariantClass(statusPresentation.variant);
     els.dailyDigestRunButton.disabled = state.isRunningDigest || !projectPath;
     els.dailyDigestRunButton.textContent = state.isRunningDigest
       ? t("runtime.dailyDigestRunningButton")
@@ -1862,13 +2012,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return '<div class="summaryCard proceduralSkillCard' + (isSelected ? ' is-selected' : '') + '" role="button" tabindex="0" data-procedural-skill-select="true" data-procedural-skill-id="' + escapeHtml(skill.id) + '">' +
         '<div class="policyTitleRow">' +
           '<div style="font-weight: 700;">' + escapeHtml(skill.title) + '</div>' +
-          '<span class="statusChip ' + escapeHtml(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
+          '<span class="' + statusVariantClass(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
         '</div>' +
         '<p class="panelLead" style="margin-top: 10px;">' + escapeHtml(skill.summary) + '</p>' +
         '<div class="metaRow" style="margin-top: 10px;">' +
           '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(skill.confidence)) + '</span>' +
           '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.successFailureLabel")) + '</strong> ' + escapeHtml(String(skill.success_count || 0) + "/" + String(skill.failure_count || 0)) + '</span>' +
-          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at) : t("procedural.neverUsed")) + '</span>' +
+          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at, "full") : t("procedural.neverUsed")) + '</span>' +
         '</div>' +
         '<div class="toolbarFooter" style="margin-top: 12px;">' +
           '<div class="finePrint">' + escapeHtml(skill.trigger_text || t("common.none")) + '</div>' +
@@ -1893,12 +2043,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.proceduralSkillDetail.innerHTML = '<div class="summaryCard">' +
       '<div class="policyTitleRow">' +
         '<div style="font-weight: 700;">' + escapeHtml(skill.title) + '</div>' +
-        '<span class="statusChip ' + escapeHtml(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
+        '<span class="' + statusVariantClass(statusPresentation.variant) + '">' + escapeHtml(statusPresentation.label) + '</span>' +
       '</div>' +
       '<div class="proceduralDetailStats">' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(skill.confidence)) + '</span>' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.successFailureLabel")) + '</strong> ' + escapeHtml(String(skill.success_count || 0) + "/" + String(skill.failure_count || 0)) + '</span>' +
-        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at) : t("procedural.neverUsed")) + '</span>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at, "full") : t("procedural.neverUsed")) + '</span>' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.feedbackCountLabel")) + '</strong> ' + escapeHtml(String(feedbackSummary.total || 0)) + '</span>' +
       '</div>' +
       '<div class="detailCard">' +
@@ -1920,7 +2070,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         '<div class="chipsRow" style="margin-top: 10px;">' +
           '<span class="tag">' + escapeHtml(t("procedural.sourceDigestLabel")) + ': ' + escapeHtml(String(skill.source_digest_id || t("common.none"))) + '</span>' +
           '<span class="tag">' + escapeHtml(t("procedural.sourceObservationsLabel")) + ': ' + escapeHtml(String(skill.source_observation_count || 0)) + '</span>' +
-          '<span class="tag">' + escapeHtml(t("procedural.statusEffectiveLabel")) + ': ' + escapeHtml(skill.status_effective_at ? formatDate(skill.status_effective_at) : t("common.none")) + '</span>' +
+          '<span class="tag">' + escapeHtml(t("procedural.statusEffectiveLabel")) + ': ' + escapeHtml(skill.status_effective_at ? formatDate(skill.status_effective_at, "full") : t("common.none")) + '</span>' +
         '</div>' +
         (lifecycleSignal
           ? '<div class="recordSummary" style="margin-top: 10px;">' + escapeHtml(t("procedural.lifecycleSignalLabel")) + ': ' + escapeHtml(lifecycleSignal.state) + ' (' + escapeHtml(String(Number(lifecycleSignal.score || 0).toFixed ? Number(lifecycleSignal.score || 0).toFixed(2) : lifecycleSignal.score)) + ')</div>' +
@@ -1932,7 +2082,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         (feedbackHistory.length
           ? '<ul class="listDetails" style="margin-top: 10px;">' + feedbackHistory.map((feedback) =>
               '<li><strong>' + escapeHtml(formatProceduralOutcomeLabel(feedback.outcome)) + '</strong> · ' +
-              escapeHtml(feedback.created_at ? formatDate(feedback.created_at) : t("common.none")) +
+              escapeHtml(feedback.created_at ? formatDate(feedback.created_at, "full") : t("common.none")) +
               (feedback.task_text ? ' · ' + escapeHtml(feedback.task_text) : '') +
               (feedback.notes ? ' · ' + escapeHtml(feedback.notes) : '') +
               '</li>'
@@ -2081,7 +2231,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.actionLabel")) + '</strong> ' + escapeHtml(String(review.status || "open")) + '</span>' +
         '</div>' +
         '<div class="finePrint" style="margin-top: 6px;">' +
-          escapeHtml(t("procedural.generatedAt", { timestamp: formatDate(review.generated_at) })) +
+          escapeHtml(t("procedural.generatedAt", { timestamp: formatDate(review.generated_at, "full") })) +
         '</div>' +
         '<div class="detailCard">' +
           '<div class="metaLabel">' + escapeHtml(t("procedural.postTaskReviewQueryLabel")) + '</div>' +
@@ -2214,7 +2364,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="metaLabel">' + escapeHtml(fact.entity_type + ":" + fact.entity_key) + '</div>' +
             '<div style="margin-top: 8px; font-weight: 700;">' + escapeHtml(fact.fact_key) + '</div>' +
             '<div class="factValue subtle" style="margin-top: 6px;">' + escapeHtml(typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value)) + '</div>' +
-            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at, "full")) + '</div>' +
           '</div>'
         )).join("")
       : '<div class="emptyState">' + escapeHtml(t("projectContext.noCurrentStructuredState")) + '</div>';
@@ -2230,7 +2380,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
               '<div style="font-weight: 700;">' + escapeHtml(block.title) + '</div>' +
               '<span class="tag">' + escapeHtml(block.agent_id) + '</span>' +
             '</div>' +
-            '<div class="finePrint" style="margin-top: 4px;">' + escapeHtml(formatDate(block.created_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 4px;">' + escapeHtml(formatDate(block.created_at, "full")) + '</div>' +
             '<div style="margin-top: 10px;">' +
               (block.lines || []).map((line) => '<div class="summaryLine subtle">' + escapeHtml(line) + '</div>').join("") +
             '</div>' +
@@ -2245,7 +2395,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
               '<div style="font-weight: 700;">' + escapeHtml(entry.title) + '</div>' +
               '<span class="tag">' + escapeHtml(entry.agent_id) + '</span>' +
             '</div>' +
-            '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(formatDate(entry.created_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(formatDate(entry.created_at, "full")) + '</div>' +
             '<div class="mono subtle" style="margin-top: 8px;">' + escapeHtml(entry.id) + '</div>' +
           '</div>'
         )).join("")
@@ -2307,7 +2457,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="metaLabel">' + escapeHtml(fact.entity_type + ":" + fact.entity_key) + '</div>' +
             '<div style="margin-top: 8px; font-weight: 700;">' + escapeHtml(fact.fact_key) + '</div>' +
             '<div class="factValue subtle" style="margin-top: 6px;">' + escapeHtml(typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value)) + '</div>' +
-            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at, "full")) + '</div>' +
           '</div>'
         )).join("")
       : '<div class="emptyState">' + escapeHtml(t("stateLab.noMatchingFacts")) + '</div>';
@@ -2332,13 +2482,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="policyTitleRow">' +
               '<div style="font-weight: 700;">' + escapeHtml(result.title) + '</div>' +
               '<span class="tag">' + escapeHtml(result.agent_id) + '</span>' +
-              (result.low_signal_title ? '<span class="statusChip warning">' + escapeHtml(t("search.lowSignal")) + '</span>' : '') +
+              (result.low_signal_title ? statusChip(t("search.lowSignal"), "warning") : '') +
             '</div>' +
             '<div class="metaRow">' +
               '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricHybrid")) + '</strong> ' + escapeHtml(Number(result.hybrid_score || 0).toFixed(3)) + '</span>' +
               '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricFts")) + '</strong> ' + escapeHtml(Number(result.fts_score || 0).toFixed(3)) + '</span>' +
               '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricVector")) + '</strong> ' + escapeHtml(Number(result.vector_score || 0).toFixed(3)) + '</span>' +
-              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricDate")) + '</strong> ' + escapeHtml(formatDate(result.created_at)) + '</span>' +
+              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricDate")) + '</strong> ' + escapeHtml(formatDate(result.created_at, "full")) + '</span>' +
             '</div>' +
             '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(summarize(result.narrative, 220)) + '</p>' +
           '</div>'
@@ -2369,7 +2519,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(summarize(record.narrative)) + '</p>' +
         '<div class="metaRow">' +
           '<span class="tag">' + escapeHtml(record.project_path) + '</span>' +
-          '<span class="tag">' + escapeHtml(formatDate(record.created_at)) + '</span>' +
+          '<span class="tag">' + escapeHtml(formatDate(record.created_at, "full")) + '</span>' +
         '</div>' +
       '</button>';
     }).join("");
@@ -2422,7 +2572,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
 
     els.detailTitle.textContent = record.title;
-    els.detailTimestamp.textContent = formatDate(record.created_at);
+    els.detailTimestamp.textContent = formatDate(record.created_at, "full");
     els.detailContent.className = "";
     els.detailContent.innerHTML = [
       '<div class="metaRow">',
@@ -2455,11 +2605,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function formatClock(date) {
-    return date.toLocaleTimeString(state.locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+    return date ? formatUiDate(date, "time") : "";
   }
 
   function formatShortDate(date) {
-    return date ? date.toLocaleDateString(state.locale, { month: "short", day: "numeric" }) : "";
+    return date ? formatUiDate(date, "day") : "";
   }
 
   function calendarDaysAgo(date) {
@@ -2601,7 +2751,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           status === "failed" ? "error" : status === "skipped_missing_llm" ? "warn" : "ok",
           formatShortDate(covered),
           meta,
-          [projectBasename(latest.project_path), formatShortDate(covered), status.replace(/_/g, " "), generatedAt ? generatedAt.toLocaleString(state.locale) : ""].filter(Boolean).join(" · ")
+          [projectBasename(latest.project_path), formatShortDate(covered), status.replace(/_/g, " "), generatedAt ? formatUiDate(generatedAt, "dateTime") : ""].filter(Boolean).join(" · ")
         );
       }
     }
@@ -2621,7 +2771,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           age > VAULT_STALE_MS ? "warn" : "ok",
           daysAgo <= 1 ? formatClock(checkpoint) : formatShortDate(checkpoint),
           daysAgo <= 1 ? t("home.vaultMeta", { day: formatDayLabel(checkpoint), age: ageText }) : t("home.vaultAge", { age: ageText }),
-          checkpoint.toLocaleString(state.locale)
+          formatUiDate(checkpoint, "dateTime")
         );
       }
     }
@@ -2715,7 +2865,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setText(els.homeKindContext, String(today.context || 0));
     setText(els.homeKindLegacy, String(today.legacy || 0));
     const todayDate = parseLocalDay(today.date);
-    setText(els.homeTodayDate, todayDate ? todayDate.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric" }) : "");
+    setText(els.homeTodayDate, todayDate ? formatUiDate(todayDate, "day") : "");
 
     const daily = Array.isArray(summary.daily) ? summary.daily : [];
     setHtmlIfChanged("chart", els.homeTodayChart, state.locale + JSON.stringify(daily), () => renderDailyChart(daily));
@@ -2829,6 +2979,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
     setText(els.homeHealthRingChip, t(passing === total ? "home.checksPassingAll" : "home.checksPassing", { n: passing, total }));
     setAttr(els.homeHealthRingChip, "data-tone", tone);
+    const toneVariant = tone === "error" ? "danger" : tone === "warn" ? "warning" : tone === "ok" ? "success" : "neutral";
+    setClass(els.homeHealthRingChip, "statusMetaChip " + statusVariantClass(toneVariant));
   }
 
   function renderHomeAttention() {
@@ -2855,9 +3007,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     renderHealthRing(checks, tone);
     setHidden(els.homeStatusUpdated, !state.overviewAt);
+    setClass(els.homeStatusUpdated, "statusMetaChip " + statusVariantClass("info"));
     if (state.overviewAt) {
       setText(els.homeStatusUpdated, t("home.updatedAt", { time: formatClock(new Date(state.overviewAt)) }));
     }
+    setText(els.homeUpdated, state.overviewAt ? t("home.updated", { time: formatClock(new Date(state.overviewAt)) }) : "");
+    setClass(els.homeUpdated, "pageStamp");
     setHidden(els.homeAttentionList, !loaded || items.length === 0);
     setHidden(els.homeAttentionCount, items.length === 0);
     setText(els.homeAttentionCount, String(items.length));
@@ -2896,7 +3051,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         const kindLabel = t(kind === "outcome" ? "home.kindOutcome" : kind === "context" ? "home.kindContext" : "home.kindLegacy");
         const explicit = row.source_kind === "explicit";
         return '<tr>' +
-          '<td title="' + escapeHtml(createdAt ? createdAt.toLocaleString(state.locale) : "") + '">' + escapeHtml(time) + '</td>' +
+          '<td title="' + escapeHtml(createdAt ? formatUiDate(createdAt, "dateTime") : "") + '">' + escapeHtml(time) + '</td>' +
           '<td><span class="kindPill kind-' + kind + (explicit ? ' is-explicit" title="' + escapeHtml(t("home.kindExplicit")) : '') + '">' + escapeHtml(kindLabel) + '</span></td>' +
           '<td class="cellMuted">' + escapeHtml(row.agent_id || "") + '</td>' +
           '<td title="' + escapeHtml(row.project_path || "") + '">' + escapeHtml(projectBasename(row.project_path)) + '</td>' +
@@ -3325,19 +3480,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setClass(els.activityAgentButton, "actPopup" + (act.agent ? " is-filtered" : ""));
 
     const win = getActivityWindow();
-    const withYear = win.from.getFullYear() !== new Date().getFullYear();
-    const options = withYear
-      ? { weekday: "short", month: "short", day: "numeric", year: "numeric" }
-      : { weekday: "short", month: "short", day: "numeric" };
-    const format = (day) => parseLocalDay(day).toLocaleDateString(state.locale, options);
+    const format = (day) => formatUiDate(parseLocalDay(day), "day");
     // Chinese dates carry no spaces, so the range dash sits tight there; English sets it off with spaces.
     const dash = state.locale === "zh-CN" ? "–" : " – ";
     setText(els.activityRangeLabel, win.firstDay === win.lastDay ? format(win.lastDay) : format(win.firstDay) + dash + format(win.lastDay));
     const updated = act.refreshFailed
       ? t("activity.refreshFailed", { time: formatClock(new Date()) })
       : act.loadedAt ? t("activity.updated", { time: formatClock(new Date(act.loadedAt)) }) : "";
-    setText(els.activityUpdated, updated ? " · " + updated : "");
-    setClass(els.activityUpdated, "actUpdated" + (act.refreshFailed ? " is-warn" : ""));
+    setText(els.activityUpdated, updated);
+    setClass(els.activityUpdated, "pageStamp actUpdated" + (act.refreshFailed ? " is-warn" : ""));
   }
 
   // Projects and agents come from breakdown, which ignores the project and agent filters; each list is narrowed
@@ -3444,7 +3595,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (facts > 0) meta.push(metaItem("facts", facts, t(facts === 1 ? "activity.factsHintOne" : "activity.factsHint", { n: formatCount(facts) })));
     const title = String(card.title || "").trim();
     return '<div class="actCardHead">' +
-        '<time class="actTime" datetime="' + escapeHtml(created ? created.toISOString() : "") + '" title="' + escapeHtml(created ? created.toLocaleString(state.locale) : "") + '">' + escapeHtml(created ? formatClock(created) : "—") + '</time>' +
+        '<time class="actTime" datetime="' + escapeHtml(created ? created.toISOString() : "") + '" title="' + escapeHtml(created ? formatUiDate(created, "dateTime") : "") + '">' + escapeHtml(created ? formatClock(created) : "—") + '</time>' +
         '<span class="kindPill kind-' + kind + '">' + escapeHtml(kindLabel) + '</span>' + badges.join("") +
         (meta.length ? '<span class="actMeta">' + meta.join("") + '</span>' : '') +
       '</div>' +
@@ -3497,10 +3648,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const prefix = "activityColumn" + index;
     const date = parseLocalDay(dayKey);
     const ago = calendarDaysAgo(date);
-    // "Today Sat, Oct 17" and "Yesterday Fri, Oct 16"; any other day is headed by its date alone ("Thu, Oct 15").
-    const dateOptions = { weekday: "short", month: "short", day: "numeric" };
-    if (date.getFullYear() !== new Date().getFullYear()) dateOptions.year = "numeric";
-    const dateText = date.toLocaleDateString(state.locale, dateOptions);
+    // "Today" / "Yesterday" with the day underneath ("Oct 24"); any other day is headed by that day alone.
+    const dateText = formatUiDate(date, "day");
     const relative = ago === 0 ? t("home.today") : ago === 1 ? t("home.yesterday") : "";
     setText(document.getElementById(prefix + "Title"), relative || dateText);
     const dateNode = document.getElementById(prefix + "Date");
@@ -3547,19 +3696,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (act.readsDisabled) {
       notice = {
         error: false,
+        icon: "pause",
         title: t("activity.readsDisabledTitle"),
         lead: t("activity.readsDisabledLead"),
         action: null,
         secondary: null,
       };
     } else if (!payload && act.error) {
-      notice = { error: true, title: t("activity.errorTitle"), lead: act.error, action: ["retry", t("activity.retry")] };
+      notice = { error: true, icon: "warning", title: t("activity.errorTitle"), lead: act.error, action: ["retry", t("activity.retry")], secondary: null };
     } else if (payload && activityMeasure(payload.totals) === 0) {
       const legacy = Number(payload.totals && payload.totals.legacy || 0);
       const filtered = !!(act.project || act.agent);
       const offerLegacy = act.kind === "typed" && legacy > 0;
       notice = {
         error: false,
+        icon: filtered ? "search" : "activity",
         title: t("activity.emptyTitle"),
         lead: offerLegacy ? t("activity.emptyLeadLegacy", { n: formatCount(legacy) }) : t(filtered ? "activity.emptyLeadFiltered" : "activity.emptyLead"),
         action: offerLegacy ? ["legacy", t("activity.showLegacy")] : null,
@@ -3569,14 +3720,16 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(els.activityNotice, !notice);
     setHidden(els.activityColumns, !!notice);
     if (notice) {
-      setClass(els.activityNotice, "actNotice glassCard glassBlur" + (notice.error ? " is-error" : ""));
-      setText(els.activityNoticeTitle, notice.title);
-      setText(els.activityNoticeLead, notice.lead);
-      [[els.activityNoticeAction, notice.action], [els.activityNoticeSecondary, notice.secondary]].forEach((entry) => {
-        setHidden(entry[0], !entry[1]);
-        setAttr(entry[0], "data-activity-action", entry[1] ? entry[1][0] : null);
-        setText(entry[0], entry[1] ? entry[1][1] : "");
-      });
+      setClass(els.activityNotice, "actNotice emptyState glassCard glassBlur" + (notice.error ? " is-error" : ""));
+      applyEmptyMarkup(els.activityNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "activityNoticeAction",
+        actionAttr: "data-activity-action",
+        actionValue: notice.action ? notice.action[0] : "",
+        secondaryId: "activityNoticeSecondary",
+        secondaryAttr: "data-activity-action",
+        secondaryValue: notice.secondary ? notice.secondary[0] : "",
+        secondaryLabel: notice.secondary ? notice.secondary[1] : "",
+      }));
     }
 
     setAttr(els.activityColumns, "aria-busy", !payload || act.stale ? "true" : "false");
@@ -3688,7 +3841,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const typed = earlierTyped(day);
     const legacyGroup = day.era === "legacy";
     const width = max > 0 ? Math.max(4, Math.round((Math.sqrt(value) / Math.sqrt(max)) * 100)) : 0;
-    const full = date.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined });
+    const full = formatUiDate(date, "day");
     // The breakdown line sits under v2.1 rows; legacy rows stay one quiet line and carry it in the tooltip.
     const parts = [];
     if (Number(day.outcome || 0) > 0) parts.push([t("activity.sumOutcome", { n: formatCount(day.outcome) }), false]);
@@ -3701,8 +3854,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return '<button class="actEarlierRow' + (legacyGroup ? ' is-legacy' : '') + '" type="button" data-earlier-day="' + escapeHtml(day.day) + '" data-earlier-typed="' + typed + '"' +
       (day.day === selectedDay ? ' aria-current="date"' : '') +
       ' aria-label="' + escapeHtml(t("activity.earlierOpenDay", { date: full, n: formatCount(value) })) + '" title="' + escapeHtml(tooltip) + '">' +
-      '<span class="actEarlierDay"><span class="actEarlierWeek">' + escapeHtml(date.toLocaleDateString(state.locale, { weekday: "short" })) + '</span>' +
-      '<span class="actEarlierNum">' + escapeHtml(date.toLocaleDateString(state.locale, { day: "numeric" })) + '</span></span>' +
+      '<span class="actEarlierDay"><span class="actEarlierWeek">' + escapeHtml(formatUiDate(date, "weekday")) + '</span>' +
+      '<span class="actEarlierNum">' + escapeHtml(formatUiDate(date, "dayNum")) + '</span></span>' +
       '<span class="actEarlierTrack" aria-hidden="true"><span class="actEarlierBar" style="width:' + width + '%"></span></span>' +
       '<span class="actEarlierCount">' + escapeHtml(formatCount(value)) + '</span>' +
       (sub.length ? '<span class="actEarlierSub">' + sub.join('<span class="actEarlierDot" aria-hidden="true"> · </span>') + '</span>' : '') +
@@ -3718,7 +3871,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       let label = "";
       if (key !== month) {
         month = key;
-        label = '<p class="actEarlierMonth">' + escapeHtml(date.toLocaleDateString(state.locale, { month: "long", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined })) + '</p>';
+        label = '<p class="actEarlierMonth">' + escapeHtml(formatUiDate(date, "month")) + '</p>';
       }
       return label + renderEarlierRow(day, measure(day), max, selectedDay);
     }).join("");
@@ -4105,6 +4258,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return "neutral";
   }
 
+  function taskStatusVariant(status) {
+    const tone = taskStatusTone(status);
+    if (tone === "ok") return "success";
+    if (tone === "warn") return "warning";
+    if (tone === "err") return "danger";
+    return "neutral";
+  }
+
   // Review recommendation entries are objects of varying shape; show the readable fields when there are any.
   function describeRecommendation(entry) {
     if (!entry || typeof entry !== "object") return String(entry);
@@ -4186,7 +4347,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderDrawerTask(task) {
     const created = parseTimestamp(task.created_at);
-    const tone = taskStatusTone(task.status);
     const stat = (label, value) => '<div class="actStat"><span class="actStatLabel">' + escapeHtml(label) + '</span><span class="actStatValue">' + value + '</span></div>';
     const notes = ['<code class="actMono" title="' + escapeHtml(task.task_id || "") + '">' + escapeHtml(String(task.task_id || "").slice(0, 8)) + '</code>'];
     if (Number(task.segment_count || 0) > 1) notes.push(escapeHtml(t("activity.drawerTaskSegment", { i: formatCount(Number(task.segment_index || 0) + 1), n: formatCount(task.segment_count) })));
@@ -4194,7 +4354,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (created) notes.push('<time datetime="' + escapeHtml(created.toISOString()) + '">' + escapeHtml(formatShortDate(created) + " · " + formatClock(created)) + '</time>');
     return '<li class="actPane actTask">' +
       '<div class="actStats">' +
-        stat(t("memory.drawerStatus"), '<span class="actStatusDot tone-' + tone + '" aria-hidden="true"></span><span class="actStatusWord tone-' + tone + '">' + escapeHtml(task.status || "—") + '</span>') +
+        stat(t("memory.drawerStatus"), statusChip(task.status || "—", taskStatusVariant(task.status))) +
         stat(t("memory.drawerEvents"), escapeHtml(formatCount(task.event_count))) +
         stat(t("memory.drawerEvidence"), escapeHtml(formatCount(task.evidence_count))) +
         stat(t("memory.drawerLlmCalls"), escapeHtml(formatCount(task.llm_calls))) +
@@ -4233,7 +4393,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
     const flags = Array.isArray(detail.duplicate_flags) ? detail.duplicate_flags : [];
     parts.push(drawerSection(t("activity.drawerDuplicates"), flags.length || null, flags.length
-      ? '<ul class="actFlags">' + flags.map((flag) => '<li class="actFlag"><span class="actStatus tone-' + taskStatusTone(flag.status) + '">' + escapeHtml(flag.status || "—") + '</span>' +
+      ? '<ul class="actFlags">' + flags.map((flag) => '<li class="actFlag">' + statusChip(flag.status || "—", taskStatusVariant(flag.status)) +
         '<span class="actFlagTask">' + escapeHtml(t("activity.drawerDuplicateTask", { id: String(flag.task_id || "").slice(0, 8) })) + '</span>' +
         (flag.reason ? '<span class="actFlagReason">' + escapeHtml(flag.reason) + '</span>' : '') + '</li>').join("") + '</ul>'
       : drawerEmpty(t("activity.drawerDuplicatesEmpty"))));
@@ -4245,8 +4405,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const skills = Array.isArray(review.matched_skill_titles) ? review.matched_skill_titles : [];
       const states = Array.isArray(review.recommendation_states) ? review.recommendation_states : [];
       reviewHtml = '<div class="actPane actReviewBox">' +
-        '<div class="actReviewHead"><span class="actStatus tone-' + (review.status === "open" ? "info" : taskStatusTone(review.status)) + '">' + escapeHtml(review.status || "—") + '</span>' +
-        (generated ? '<span class="actReviewTime">' + escapeHtml(t("activity.drawerReviewGenerated", { time: generated.toLocaleString(state.locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) })) + '</span>' : '') + '</div>' +
+        '<div class="actReviewHead">' + statusChip(review.status || "—", review.status === "open" ? "info" : taskStatusVariant(review.status)) +
+        (generated ? '<span class="actReviewTime">' + escapeHtml(t("activity.drawerReviewGenerated", { time: formatUiDate(generated, "dateTime") })) + '</span>' : '') + '</div>' +
         '<dl class="actReviewFields">' +
         '<dt>' + escapeHtml(t("activity.drawerReviewQuery")) + '</dt><dd>' + escapeHtml(review.query_text || "—") + '</dd>' +
         '<dt>' + escapeHtml(t("activity.drawerReviewSkills")) + '</dt><dd>' + (skills.length
@@ -4290,7 +4450,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (created) {
       const ago = calendarDaysAgo(created);
       const when = ago === 0 ? formatClock(created) : formatShortDate(created) + " · " + formatClock(created);
-      items.push('<time class="actMetaChip actDrawerTime" datetime="' + escapeHtml(created.toISOString()) + '" title="' + escapeHtml(created.toLocaleString(state.locale)) + '">' + escapeHtml(when) + '</time>');
+      items.push('<time class="actMetaChip actDrawerTime" datetime="' + escapeHtml(created.toISOString()) + '" title="' + escapeHtml(formatUiDate(created, "dateTime")) + '">' + escapeHtml(when) + '</time>');
     }
     return chips.join("") + (items.length ? '<span class="actMetaChips">' + items.join("") + '</span>' : '');
   }
@@ -4722,6 +4882,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
 
     els.activityView.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target && event.target.id === "activitySearchInput") {
+        event.preventDefault();
+        const button = document.getElementById("activitySearchButton");
+        if (button) button.click();
+        return;
+      }
       if (els.activityDrawer.contains(event.target)) return;
       if ((event.key === "Enter" || event.key === " ") && event.target.matches(".actCard[data-memory-id]")) {
         event.preventDefault();
@@ -5101,7 +5267,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       ? t("memory.refreshFailed", { time: formatClock(new Date()) })
       : mem.loaded && mem.loadedAt ? t("memory.updated", { time: formatClock(new Date(mem.loadedAt)) }) : "";
     setText(els.memoryUpdated, updated);
-    setClass(els.memoryUpdated, "memUpdated" + (mem.refreshFailed ? " is-warn" : ""));
+    setClass(els.memoryUpdated, "pageStamp memUpdated" + (mem.refreshFailed ? " is-warn" : ""));
   }
 
   // Top five projects as one proportional bar; the remainder is a quiet "Other" sliver when no project is picked.
@@ -5134,14 +5300,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const date = parseLocalDay(dayKey);
     if (!date) return { name: dayKey, date: "" };
     const ago = calendarDaysAgo(date);
-    const withYear = date.getFullYear() !== new Date().getFullYear();
-    const full = date.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
-    if (ago === 0) return { name: t("home.today"), date: full };
-    if (ago === 1) return { name: t("home.yesterday"), date: full };
-    return {
-      name: date.toLocaleDateString(state.locale, { month: "short", day: "numeric", year: withYear ? "numeric" : undefined }),
-      date: date.toLocaleDateString(state.locale, { weekday: "long" }),
-    };
+    const day = formatUiDate(date, "day");
+    if (ago === 0) return { name: t("home.today"), date: day };
+    if (ago === 1) return { name: t("home.yesterday"), date: day };
+    return { name: day, date: formatUiDate(date, "weekdayLong") };
   }
 
   function renderMemoryRowBody(item) {
@@ -5157,7 +5319,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const files = Number(item.files_count || 0);
     const factsHint = t(facts === 1 ? "memory.factsHintOne" : "memory.factsHint", { n: formatCount(facts) });
     const filesHint = t(files === 1 ? "memory.filesHintOne" : "memory.filesHint", { n: formatCount(files), m: formatCount(item.files_modified_count) });
-    return '<time class="memCell memTime" datetime="' + escapeHtml(created ? created.toISOString() : "") + '" title="' + escapeHtml(created ? created.toLocaleString(state.locale) : "") + '">' + escapeHtml(created ? formatClock(created) : "—") + '</time>' +
+    return '<time class="memCell memTime" datetime="' + escapeHtml(created ? created.toISOString() : "") + '" title="' + escapeHtml(created ? formatUiDate(created, "dateTime") : "") + '">' + escapeHtml(created ? formatClock(created) : "—") + '</time>' +
       '<span class="memCell memKind"><span class="kindPill kind-' + kind + '">' + escapeHtml(memoryKindLabel(kind)) + '</span></span>' +
       '<span class="memCell memMain"><span class="memTitleLine"><span class="memTitle"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + escapeHtml(title || t("memory.untitled")) + '</span>' + badges.join("") + '</span>' +
         (preview ? '<span class="memPreview">' + escapeHtml(preview + (item.preview_truncated ? " …" : "")) + '</span>' : '') + '</span>' +
@@ -5216,7 +5378,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     setHidden(els.memoryNotice, !notice);
     if (notice) {
-      setClass(els.memoryNotice, "actNotice memNotice glassCard glassBlur" + notice.tone);
+      setClass(els.memoryNotice, "actNotice emptyState memNotice glassCard glassBlur" + notice.tone);
       setText(els.memoryNoticeTitle, notice.title);
       setText(els.memoryNoticeLead, notice.lead);
       setHidden(els.memoryNoticeAction, !notice.action);
@@ -5688,9 +5850,18 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return formatShortDate(date) + " · " + formatClock(date);
   }
 
+  function pipelineChipVariant(value) {
+    if (value === "saved") return "success";
+    if (value === "failed") return "danger";
+    if (value === "duplicate" || value === "fallback" || value === "stuck") return "warning";
+    if (value === "processing" || value === "consolidating") return "info";
+    return "neutral";
+  }
+
   function renderPipelinePill(value) {
     const known = Object.prototype.hasOwnProperty.call(PIPELINE_STATE_KEYS, value);
-    return '<span class="pipePill state-' + (known ? value : "unknown") + '">' + escapeHtml(pipelineStateLabel(value)) + '</span>';
+    const name = known ? value : "unknown";
+    return '<span class="pipePill statusChip is-' + pipelineChipVariant(name) + ' state-' + name + '">' + escapeHtml(pipelineStateLabel(value)) + '</span>';
   }
 
   function findPipelineTask(id) {
@@ -5746,9 +5917,36 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return "/admin/api/pipeline?" + params.toString();
   }
 
+  function pipelineMatchesQuery(item, query) {
+    const note = pipelineTaskNote(item);
+    const haystack = [
+      pipelineTaskTitle(item),
+      item && item.project_path,
+      item && item.agent_id,
+      item && item.state,
+      item && item.summary,
+      note && note.text,
+    ].join("\\n").toLowerCase();
+    return haystack.indexOf(query) >= 0;
+  }
+
+  function pipelineVisibleItems() {
+    const pipe = state.pipeline;
+    const items = Array.isArray(pipe.items) ? pipe.items : [];
+    const query = String(pipe.query || "").trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((item) => pipelineMatchesQuery(item, query));
+  }
+
+  function applyPipelineQuery(value) {
+    state.pipeline.query = String(value || "").trim().slice(0, 200);
+    setHidden(els.pipelineSearchClear, !state.pipeline.query);
+    renderPipeline();
+  }
+
   function isPipelineFiltered() {
     const pipe = state.pipeline;
-    return !!(pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.fallbackFrom || pipe.range !== "7d");
+    return !!(pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.fallbackFrom || pipe.range !== "7d" || String(pipe.query || "").trim());
   }
 
   // More rows are on screen than one request can refresh (the limit max is PIPELINE_MAX_PAGE). The poll pauses
@@ -5960,7 +6158,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function clearPipelineFilters() {
-    setPipelineFilters({ project: "", agent: "", state: "", flagged: false, fallbackFrom: "", range: "7d", customFrom: "", customTo: "" });
+    if (els.pipelineSearchInput) els.pipelineSearchInput.value = "";
+    setPipelineFilters({ query: "", project: "", agent: "", state: "", flagged: false, fallbackFrom: "", range: "7d", customFrom: "", customTo: "" });
   }
 
   // Home's queue and attention links land here with one state picked; activateView then loads page 1.
@@ -6074,7 +6273,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       ? t("pipeline.refreshFailed", { time: formatClock(new Date()) })
       : pipe.loaded && pipe.loadedAt ? t("pipeline.updated", { time: formatClock(new Date(pipe.loadedAt)) }) : "";
     setText(els.pipelineUpdated, updated);
-    setClass(els.pipelineUpdated, "memUpdated" + (pipe.refreshFailed ? " is-warn" : ""));
+    setClass(els.pipelineUpdated, "pageStamp memUpdated" + (pipe.refreshFailed ? " is-warn" : ""));
+    const pipelineSearch = els.pipelineSearchInput;
+    if (pipelineSearch) {
+      const active = typeof document !== "undefined" ? document.activeElement : null;
+      if (active !== pipelineSearch && pipelineSearch.value !== (pipe.query || "")) pipelineSearch.value = pipe.query || "";
+    }
+    setHidden(els.pipelineSearchClear, !String(pipe.query || "").trim());
   }
 
   // Stage counts follow project, agent and range but never the state filter, so every stage stays clickable.
@@ -6155,55 +6360,62 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderPipelineNotice() {
     const pipe = state.pipeline;
+    const query = String(pipe.query || "").trim();
+    const visible = query ? pipelineVisibleItems() : pipe.items;
     let notice = null;
     if (pipe.readsDisabled) {
-      notice = { tone: "", title: t("pipeline.readsDisabledTitle"), lead: t("pipeline.readsDisabledLead"), action: null };
+      notice = { tone: "", icon: "pause", title: t("pipeline.readsDisabledTitle"), lead: t("pipeline.readsDisabledLead"), action: null };
     } else if (!pipe.loaded && pipe.error) {
-      notice = { tone: " is-error", title: t("pipeline.errorTitle"), lead: pipe.error, action: ["retry", t("pipeline.retry")] };
+      notice = { tone: " is-error", icon: "warning", title: t("pipeline.errorTitle"), lead: pipe.error, action: ["retry", t("pipeline.retry")] };
+    } else if (pipe.loaded && !pipe.stale && query && (!visible || !visible.length)) {
+      const more = !!pipe.nextCursor;
+      notice = { tone: "", icon: "search", title: t("pipeline.noResultsTitle"), lead: t(more ? "pipeline.noResultsMore" : "pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")], keepMore: more };
     } else if (pipe.loaded && !pipe.stale && !pipe.items.length) {
       // Quiet weeks are common: offer a wider window before anything else.
       if (pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.fallbackFrom) {
-        notice = { tone: "", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
+        notice = { tone: "", icon: "search", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
       } else if (pipe.range === "today") {
-        notice = { tone: "", title: t("pipeline.emptyTodayTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show7d")] };
+        notice = { tone: "", icon: "pipeline", title: t("pipeline.emptyTodayTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show7d")] };
       } else if (pipe.range === "7d") {
-        notice = { tone: "", title: t("pipeline.emptyWeekTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show30d")] };
+        notice = { tone: "", icon: "pipeline", title: t("pipeline.emptyWeekTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show30d")] };
       } else {
-        notice = { tone: "", title: t("pipeline.emptyRangeTitle"), lead: t("pipeline.emptyRangeLead"), action: pipe.range === "custom" ? ["clear", t("pipeline.show7d")] : null };
+        notice = { tone: "", icon: "pipeline", title: t("pipeline.emptyRangeTitle"), lead: t("pipeline.emptyRangeLead"), action: pipe.range === "custom" ? ["clear", t("pipeline.show7d")] : null };
       }
     }
     setHidden(els.pipelineNotice, !notice);
     if (notice) {
-      setClass(els.pipelineNotice, "actNotice memNotice glassCard glassBlur" + notice.tone);
-      setText(els.pipelineNoticeTitle, notice.title);
-      setText(els.pipelineNoticeLead, notice.lead);
-      setHidden(els.pipelineNoticeAction, !notice.action);
-      setAttr(els.pipelineNoticeAction, "data-pipeline-action", notice.action ? notice.action[0] : null);
-      setText(els.pipelineNoticeAction, notice.action ? notice.action[1] : "");
+      setClass(els.pipelineNotice, "actNotice emptyState memNotice glassCard glassBlur" + notice.tone);
+      applyEmptyMarkup(els.pipelineNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "pipelineNoticeAction",
+        actionAttr: "data-pipeline-action",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
-    return !!notice;
+    return notice;
   }
 
   function renderPipelineList() {
     const pipe = state.pipeline;
     const list = els.pipelineList;
+    const items = pipelineVisibleItems();
     // Clear before the notice early-return, so a disabled payload cannot leave the previous rows up.
     if (pipe.readsDisabled && list) {
       list.innerHTML = "";
       pipe.groupNodes.clear();
       pipe.rowNodes.clear();
     }
-    const noticed = renderPipelineNotice();
+    const notice = renderPipelineNotice();
+    const noticed = !!notice;
     setHidden(list, noticed);
     setHidden(els.pipelineListHead, noticed);
     renderPipelinePauseHint(noticed);
     setAttr(list, "aria-busy", pipe.stale || !pipe.loaded ? "true" : "false");
     list.classList.toggle("is-stale", pipe.stale && pipe.items.length > 0);
-    setHidden(els.pipelineLoadMore, noticed || !pipe.nextCursor);
+    setHidden(els.pipelineLoadMore, !pipe.nextCursor || (noticed && !notice.keepMore));
     setText(els.pipelineLoadMore, t(pipe.moreSeq ? "pipeline.loadingMore" : "pipeline.loadMore"));
     setAttr(els.pipelineLoadMore, "aria-busy", pipe.moreSeq ? "true" : null);
     if (noticed) return;
-    if (!pipe.items.length) {
+    if (!items.length) {
       // First load or a reload of an empty list: skeleton rows.
       if (!list.querySelector(".is-skeleton")) {
         list.innerHTML = MEMORY_SKELETON;
@@ -6216,7 +6428,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (skeleton) skeleton.remove();
     const order = [];
     const byDay = new Map();
-    pipe.items.forEach((item) => {
+    items.forEach((item) => {
       const created = parseTimestamp(item.created_at);
       const day = item.day || (created ? localDayKey(created) : "");
       if (!byDay.has(day)) {
@@ -6487,6 +6699,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         return;
       }
       if (event.target.closest("#pipelineCustomCancel")) closePipelinePopover(true);
+      if (event.target.closest("#pipelineSearchClear")) {
+        if (els.pipelineSearchInput) els.pipelineSearchInput.value = "";
+        applyPipelineQuery("");
+        if (els.pipelineSearchInput) els.pipelineSearchInput.focus();
+      }
     });
 
     els.pipelineView.addEventListener("keydown", (event) => {
@@ -6542,6 +6759,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       state.pipeline.lastScrollAt = Date.now();
       scheduleMemoryDrawerPlace();
     }, { passive: true });
+
+    if (els.pipelineSearchInput) {
+      els.pipelineSearchInput.addEventListener("input", () => {
+        applyPipelineQuery(els.pipelineSearchInput.value);
+      });
+    }
   }
 
   // ---------- Digests & Reviews ----------
@@ -6607,9 +6830,35 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return Array.from(byDay.values()).sort((left, right) => (left.day < right.day ? 1 : left.day > right.day ? -1 : 0));
   }
 
+  function digestMatchesQuery(item, query) {
+    const haystack = [
+      item && item.summary,
+      item && item.project_path,
+      item && item.agent_id,
+      item && item.status,
+      item && item.last_error,
+      item && item.covered_day,
+    ].join("\\n").toLowerCase();
+    return haystack.indexOf(query) >= 0;
+  }
+
+  function digestVisibleItems() {
+    const dig = state.digests;
+    const items = Array.isArray(dig.items) ? dig.items : [];
+    const query = String(dig.query || "").trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((item) => digestMatchesQuery(item, query));
+  }
+
+  function applyDigestQuery(value) {
+    state.digests.query = String(value || "").trim().slice(0, 200);
+    setHidden(els.digSearchClear, !state.digests.query);
+    renderDigests();
+  }
+
   function isDigestFiltered() {
     const dig = state.digests;
-    return !!(dig.project || dig.agent || dig.status);
+    return !!(dig.project || dig.agent || dig.status || String(dig.query || "").trim());
   }
 
   // mode: "reset" loads page 1 of the current filters, "more" appends the page after next_cursor. Only the newest
@@ -6749,7 +6998,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function clearDigestFilters() {
-    setDigestFilters({ project: "", agent: "", status: "", range: "7d", customFrom: "", customTo: "" });
+    if (els.digSearchInput) els.digSearchInput.value = "";
+    setDigestFilters({ query: "", project: "", agent: "", status: "", range: "7d", customFrom: "", customTo: "" });
   }
 
   // Today and yesterday reuse Memory's header ("Today" + "Fri, Oct 16"). Older days stay "Oct 15" + "Fri".
@@ -6757,14 +7007,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const date = parseLocalDay(dayKey);
     if (!date) return { name: dayKey || "—", date: "", short: dayKey || "—", full: dayKey || "—", relative: false };
     const ago = calendarDaysAgo(date);
-    const withYear = date.getFullYear() !== new Date().getFullYear();
-    const short = date.toLocaleDateString(state.locale, { month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
-    const full = date.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
+    const short = formatUiDate(date, "day");
     if (ago === 0 || ago === 1) {
       const shared = memoryDayLabel(dayKey);
       return { name: shared.name, date: shared.date, short, full: shared.date, relative: true };
     }
-    return { name: short, date: date.toLocaleDateString(state.locale, { weekday: "short" }), short, full, relative: false };
+    return { name: short, date: formatUiDate(date, "weekday"), short, full: short, relative: false };
   }
 
   function digestSkipLabel(detail) {
@@ -6859,49 +7107,56 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderDigestNotice() {
     const dig = state.digests;
+    const query = String(dig.query || "").trim();
+    const visible = query ? digestVisibleItems() : dig.items;
     let notice = null;
     if (dig.readsDisabled) {
-      notice = { tone: "", title: t("digests.readsDisabledTitle"), lead: t("digests.readsDisabledLead"), action: null };
+      notice = { tone: "", icon: "pause", title: t("digests.readsDisabledTitle"), lead: t("digests.readsDisabledLead"), action: null };
     } else if (!dig.loaded && dig.error) {
-      notice = { tone: " is-error", title: t("digests.errorTitle"), lead: dig.error, action: ["retry", t("digests.retry")] };
+      notice = { tone: " is-error", icon: "warning", title: t("digests.errorTitle"), lead: dig.error, action: ["retry", t("digests.retry")] };
+    } else if (dig.loaded && !dig.stale && query && (!visible || !visible.length)) {
+      const more = !!dig.nextCursor;
+      notice = { tone: "", icon: "search", title: t("digests.noResultsTitle"), lead: t(more ? "digests.noResultsMore" : "digests.noResultsLead"), action: ["clear", t("digests.clearFilters")], keepMore: more };
     } else if (dig.loaded && !dig.stale && !dig.items.length) {
       if (isDigestFiltered()) {
-        notice = { tone: "", title: t("digests.noResultsTitle"), lead: t("digests.noResultsLead"), action: ["clear", t("digests.clearFilters")] };
+        notice = { tone: "", icon: "search", title: t("digests.noResultsTitle"), lead: t("digests.noResultsLead"), action: ["clear", t("digests.clearFilters")] };
       } else if (dig.range === "7d") {
-        notice = { tone: "", title: t("digests.emptyWeekTitle"), lead: t("digests.emptyLead"), action: ["widen", t("digests.show30d")] };
+        notice = { tone: "", icon: "digestDoc", title: t("digests.emptyWeekTitle"), lead: t("digests.emptyLead"), action: ["widen", t("digests.show30d")] };
       } else {
-        notice = { tone: "", title: t("digests.emptyRangeTitle"), lead: t("digests.emptyRangeLead"), action: ["clear", t("digests.show7d")] };
+        notice = { tone: "", icon: "digestDoc", title: t("digests.emptyRangeTitle"), lead: t("digests.emptyRangeLead"), action: ["clear", t("digests.show7d")] };
       }
     }
     setHidden(els.digNotice, !notice);
     if (notice) {
-      setClass(els.digNotice, "actNotice memNotice digGlass glassCard glassBlur" + notice.tone);
-      setText(els.digNoticeTitle, notice.title);
-      setText(els.digNoticeLead, notice.lead);
-      setHidden(els.digNoticeAction, !notice.action);
-      setAttr(els.digNoticeAction, "data-digest-action", notice.action ? notice.action[0] : null);
-      setText(els.digNoticeAction, notice.action ? notice.action[1] : "");
+      setClass(els.digNotice, "actNotice emptyState memNotice digGlass glassCard glassBlur" + notice.tone);
+      applyEmptyMarkup(els.digNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "digNoticeAction",
+        actionAttr: "data-digest-action",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
-    return !!notice;
+    return notice;
   }
 
   function renderDigestList() {
     const dig = state.digests;
     const list = els.digList;
+    const items = digestVisibleItems();
     if (dig.readsDisabled && list.firstChild) {
       list.innerHTML = "";
       dig.groupNodes.clear();
       dig.rowNodes.clear();
     }
-    const noticed = renderDigestNotice();
+    const notice = renderDigestNotice();
+    const noticed = !!notice;
     setHidden(list, noticed);
     setAttr(list, "aria-busy", dig.stale || !dig.loaded ? "true" : "false");
     list.classList.toggle("is-stale", dig.stale && dig.items.length > 0);
-    setHidden(els.digLoadMore, noticed || !dig.nextCursor);
+    setHidden(els.digLoadMore, !dig.nextCursor || (noticed && !notice.keepMore));
     setText(els.digLoadMore, t(dig.moreSeq ? "digests.loadingMore" : "digests.loadMore"));
     setAttr(els.digLoadMore, "aria-busy", dig.moreSeq ? "true" : null);
     if (noticed) return;
-    if (!dig.items.length) {
+    if (!items.length) {
       if (!list.querySelector(".is-skeleton")) {
         list.innerHTML = MEMORY_SKELETON;
         dig.groupNodes.clear();
@@ -6913,7 +7168,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (skeleton) skeleton.remove();
     const order = [];
     const byDay = new Map();
-    dig.items.forEach((item) => {
+    items.forEach((item) => {
       const day = item.covered_day || "";
       if (!byDay.has(day)) {
         byDay.set(day, []);
@@ -6952,7 +7207,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       cursor.remove();
       cursor = next;
     }
-    const visible = new Set(dig.items.map((item) => item.id));
+    const visible = new Set(items.map((item) => item.id));
     dig.groupNodes.forEach((_group, day) => {
       if (!byDay.has(day)) dig.groupNodes.delete(day);
     });
@@ -6962,7 +7217,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function setDigestChip(chip, textEl, tone, text) {
-    setClass(chip, "digChip is-" + tone);
+    const map = { ok: "success", warn: "warning", err: "danger", off: "neutral", muted: "neutral" };
+    setClass(chip, "digChip statusChip is-" + (map[tone] || "neutral") + " is-" + tone);
     setText(textEl, text);
   }
 
@@ -7092,6 +7348,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     popup(els.digAgentButton, els.digAgentValue, dig.agent, dig.agent || t("digests.all"));
     setHidden(els.digStatusChip, dig.status !== "failed");
     setText(els.digUpdated, dig.loaded && dig.loadedAt ? t("digests.updated", { time: formatClock(new Date(dig.loadedAt)) }) : "");
+    const digestSearch = els.digSearchInput;
+    if (digestSearch) {
+      const active = typeof document !== "undefined" ? document.activeElement : null;
+      if (active !== digestSearch && digestSearch.value !== (dig.query || "")) digestSearch.value = dig.query || "";
+    }
+    setHidden(els.digSearchClear, !String(dig.query || "").trim());
   }
 
   function renderDigests() {
@@ -7505,6 +7767,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         return;
       }
       if (event.target.closest("#digCustomCancel")) closeDigestPopover(true);
+      if (event.target.closest("#digSearchClear")) {
+        if (els.digSearchInput) els.digSearchInput.value = "";
+        applyDigestQuery("");
+        if (els.digSearchInput) els.digSearchInput.focus();
+      }
     });
 
     els.digestsView.addEventListener("keydown", (event) => {
@@ -7558,6 +7825,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     window.addEventListener("scroll", () => {
       if (state.activeView === "digestsView") scheduleMemoryDrawerPlace();
     }, { passive: true });
+
+    if (els.digSearchInput) {
+      els.digSearchInput.addEventListener("input", () => {
+        applyDigestQuery(els.digSearchInput.value);
+      });
+    }
   }
 
   // ---------- Skills ----------
@@ -7799,9 +8072,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function renderSkillChip(variant) {
-    const chips = { pending: ["is-warn", "skills.chipCandidate"], draft: ["is-draft", "skills.chipDraft"], active: ["is-ok", "skills.chipActive"], disabled: ["is-muted", "skills.chipDisabled"], retired: ["is-muted", "skills.chipRetired"] };
+    const chips = {
+      pending: ["warning", "is-warn", "skills.chipCandidate"],
+      draft: ["warning", "sklChip is-draft", "skills.chipDraft"],
+      active: ["success", "is-ok", "skills.chipActive"],
+      disabled: ["neutral", "is-muted", "skills.chipDisabled"],
+      retired: ["neutral", "is-muted", "skills.chipRetired"],
+    };
     const chip = chips[variant] || chips.pending;
-    return '<span class="digChip sklChip ' + chip[0] + '"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t(chip[1])) + '</span>';
+    return statusChip(t(chip[2]), chip[0], "digChip sklChip " + chip[1]);
   }
 
   function skillWritePending() {
@@ -7937,16 +8216,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     setHidden(els.sklNotice, !notice);
     if (notice) {
-      setClass(els.sklNotice, "actNotice memNotice sklNotice digGlass glassCard glassBlur" + notice.tone);
-      if (skl.signatures.noticeIcon !== notice.icon) {
-        skl.signatures.noticeIcon = notice.icon;
-        els.sklNoticeIcon.innerHTML = svgIcon(notice.icon, "placeholderGlyph");
-      }
-      setText(els.sklNoticeTitle, notice.title);
-      setText(els.sklNoticeLead, notice.lead);
-      setHidden(els.sklNoticeAction, !notice.action);
-      setAttr(els.sklNoticeAction, "data-skill-notice", notice.action ? notice.action[0] : null);
-      setText(els.sklNoticeAction, notice.action ? notice.action[1] : "");
+      setClass(els.sklNotice, "actNotice emptyState memNotice sklNotice digGlass glassCard glassBlur" + notice.tone);
+      applyEmptyMarkup(els.sklNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "sklNoticeAction",
+        actionAttr: "data-skill-notice",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
     return !!notice;
   }
@@ -7963,17 +8238,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     setHidden(els.sklEmpty, !spec);
     if (!spec) return;
-    setClass(els.sklEmpty, "sklEmpty" + (spec.quiet ? " is-quiet" : ""));
-    if (skl.signatures.emptyIcon !== spec.icon) {
-      skl.signatures.emptyIcon = spec.icon;
-      els.sklEmptyIcon.innerHTML = svgIcon(spec.icon, "sklEmptyGlyph");
-    }
-    setText(els.sklEmptyTitle, spec.title);
-    setHidden(els.sklEmptyLead, !spec.lead);
-    setText(els.sklEmptyLead, spec.lead);
-    setHidden(els.sklEmptyAction, !spec.action);
-    setAttr(els.sklEmptyAction, "data-skill-empty", spec.action ? spec.action[0] : null);
-    setText(els.sklEmptyAction, spec.action ? spec.action[1] : "");
+    setClass(els.sklEmpty, "sklEmpty emptyState" + (spec.quiet ? " is-quiet" : ""));
+    applyEmptyMarkup(els.sklEmpty, renderEmptyState(svgIcon(spec.icon, "placeholderGlyph"), spec.title, spec.lead, spec.action ? spec.action[1] : "", {
+      actionId: "sklEmptyAction",
+      actionAttr: "data-skill-empty",
+      actionValue: spec.action ? spec.action[0] : "",
+    }));
   }
 
   function renderSkillList() {
@@ -8467,7 +8737,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       ? '<ul class="sklMatchList prjWell">' + matches.map((match) => {
         const at = parseTimestamp(match.at);
         const agent = String(match.agent_id || "").trim();
-        return '<li class="sklMatchRow"><time class="sklMatchAt"' + (at ? ' datetime="' + escapeHtml(at.toISOString()) + '" title="' + escapeHtml(at.toLocaleString(state.locale)) + '"' : '') + '>' + escapeHtml(at ? projectAgo(match.at) : "—") + '</time>' +
+        return '<li class="sklMatchRow"><time class="sklMatchAt"' + (at ? ' datetime="' + escapeHtml(at.toISOString()) + '" title="' + escapeHtml(formatUiDate(at, "dateTime")) + '"' : '') + '>' + escapeHtml(at ? projectAgo(match.at) : "—") + '</time>' +
           '<span class="sklMatchTask" title="' + escapeHtml(String(match.task || "")) + '">' + escapeHtml(String(match.task || "").trim() || "—") + '</span>' +
           (agent ? '<span class="prjChip sklAgentChip" title="' + escapeHtml(agent) + '"><span class="prjChipName">' + escapeHtml(agent) + '</span></span>' : '') + '</li>';
       }).join("") + '</ul>'
@@ -8923,8 +9193,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (ms < 3600000) return t("projects.agoMinutes", { n: formatCount(Math.floor(ms / 60000)) });
     if (ms < 86400000) return t("projects.agoHours", { n: formatCount(Math.floor(ms / 3600000)) });
     if (calendarDaysAgo(date) === 1) return t("projects.yesterday");
-    const withYear = date.getFullYear() !== new Date().getFullYear();
-    return date.toLocaleDateString(state.locale, { month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
+    return formatShortDate(date);
   }
 
   // Every folder shares the family's blue tint; only the open row's tile is a little stronger.
@@ -8959,7 +9228,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return renderProjectIcon("prjIcon") +
       '<span class="prjMain"><span class="prjName" title="' + escapeHtml(item.display_name || "") + '">' + escapeHtml(item.display_name || "—") + '</span>' + sub + '</span>' +
       '<span class="prjMem"><span class="prjNum">' + escapeHtml(formatCount(inRange)) + '</span><span class="prjSub">' + escapeHtml(t("projects.memoriesOf", { n: formatCount(item.memories_total) })) + '</span></span>' +
-      '<time class="prjWhen"' + (last ? ' datetime="' + escapeHtml(last.toISOString()) + '" title="' + escapeHtml(last.toLocaleString(state.locale)) + '"' : '') + '>' +
+      '<time class="prjWhen"' + (last ? ' datetime="' + escapeHtml(last.toISOString()) + '" title="' + escapeHtml(formatUiDate(last, "dateTime")) + '"' : '') + '>' +
         escapeHtml(last ? projectAgo(item.last_activity_at) : t("projects.never")) + '</time>' +
       '<span class="prjDigests' + (digestDays ? '' : ' is-zero') + '" title="' + escapeHtml(digestTitle) + '">' +
         escapeHtml(t("projects.digestDays", { n: formatCount(digestDays), days: formatCount(days) })) + '</span>' +
@@ -9026,16 +9295,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     setHidden(els.prjNotice, !notice);
     if (notice) {
-      setClass(els.prjNotice, "actNotice memNotice digGlass glassCard glassBlur" + notice.tone);
-      if (prj.signatures.noticeIcon !== notice.icon) {
-        prj.signatures.noticeIcon = notice.icon;
-        els.prjNoticeIcon.innerHTML = svgIcon(notice.icon, "placeholderGlyph");
-      }
-      setText(els.prjNoticeTitle, notice.title);
-      setText(els.prjNoticeLead, notice.lead);
-      setHidden(els.prjNoticeAction, !notice.action);
-      setAttr(els.prjNoticeAction, "data-project-action", notice.action ? notice.action[0] : null);
-      setText(els.prjNoticeAction, notice.action ? notice.action[1] : "");
+      setClass(els.prjNotice, "actNotice emptyState memNotice digGlass glassCard glassBlur" + notice.tone);
+      applyEmptyMarkup(els.prjNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "prjNoticeAction",
+        actionAttr: "data-project-action",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
     return !!notice;
   }
@@ -9321,9 +9586,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       ? '<ul class="prjSkillList">' + skills.map((skill) => {
         const candidate = skill.status === "candidate" || skill.kind === "digest_candidate";
         const disabled = !candidate && skill.status === "disabled";
-        const chip = candidate ? '<span class="digChip is-warn"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t("projects.skillCandidate")) + '</span>'
-          : disabled ? '<span class="digChip is-muted"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t("projects.skillDisabled")) + '</span>'
-            : '<span class="digChip is-ok"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t("projects.skillActive")) + '</span>';
+        const chip = candidate ? statusChip(t("projects.skillCandidate"), "warning", "digChip is-warn")
+          : disabled ? statusChip(t("projects.skillDisabled"), "neutral", "digChip is-muted")
+            : statusChip(t("projects.skillActive"), "success", "digChip is-ok");
         const sourceDay = skill.source_digest && skill.source_digest.covered_day ? parseLocalDay(skill.source_digest.covered_day) : null;
         const matches = Number(skill.match_count_in_range || 0);
         const meta = candidate
@@ -9623,7 +9888,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     state.recordsTotal = Number(payload.total || 0);
     renderRecords(state.recordsTotal);
     setStoredStatusLine("ledger", els.listStatus, "ledger.syncedAt", {
-      time: new Date().toLocaleTimeString(state.locale),
+      time: formatUiDate(new Date(), "time"),
     }, "");
   }
 
@@ -10875,7 +11140,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   // Short local stamp ("Oct 22, 09:14") for the switch rows, the scheduler and the release check.
   function formatSettingsStamp(date) {
-    return formatShortDate(date) + ", " + formatClock(date);
+    return date ? formatUiDate(date, "dateTime") : "";
   }
 
   function renderSettingsLlm() {
@@ -10904,8 +11169,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setAttr(els.setLlmKeyMasked, "placeholder", loading ? t("settings.loading") : t("settings.llmKeyEmpty"));
     setHidden(els.setLlmKeyMasked, set.keyEditing);
     setHidden(els.setLlmKeyInput, !set.keyEditing);
-    setText(els.setLlmKeyChip, hasKey ? t("settings.llmKeySaved") : t("settings.llmKeyNotSet"));
-    setClass(els.setLlmKeyChip, "setChip " + (hasKey ? "is-ok" : local ? "is-muted" : "is-warn"));
+    const keyLabel = hasKey ? t("settings.llmKeySaved") : t("settings.llmKeyNotSet");
+    const keyVariant = hasKey ? "success" : local ? "neutral" : "warning";
+    const keyLegacy = hasKey ? "is-ok" : local ? "is-muted" : "is-warn";
+    setText(els.setLlmKeyChip, keyLabel);
+    applyChipMarkup(els.setLlmKeyChip, statusChip(keyLabel, keyVariant, "setChip " + keyLegacy));
     setHidden(els.setLlmKeyChip, !config || set.keyEditing);
     setText(els.setLlmReplaceKey, set.keyEditing ? t("settings.confirmCancel") : t(hasKey ? "settings.llmReplaceKey" : "settings.llmSetKey"));
     setAttr(els.setLlmReplaceKey, "aria-expanded", set.keyEditing ? "true" : "false");
@@ -10953,7 +11221,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           ? t("settings.llmFailedStatus", { status: String(result.status), error: error })
           : t("settings.llmFailed", { error: error || String(result.status || "") });
       setText(els.setLlmTestChip, label);
-      setClass(els.setLlmTestChip, "setChip setTestChip " + (result.ok ? "is-ok" : "is-err"));
+      applyChipMarkup(els.setLlmTestChip, statusChip(label, result.ok ? "success" : "danger", "setChip setTestChip " + (result.ok ? "is-ok" : "is-err")));
       setAttr(els.setLlmTestChip, "title", settingsRedacted(result.ok ? String(result.requestUrl || "") : error, settingsTypedKey()));
     }
     const testedAt = result ? parseTimestamp(result.testedAt) : null;
@@ -11119,8 +11387,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function getSettingsReleasePresentation(result) {
     switch (result && result.status) {
-      case "up_to_date": return { chip: t("settings.aboutUpToDate"), tone: "is-ok" };
-      case "update_available": return { chip: t("settings.aboutUpdate"), tone: "is-warn" };
+      case "up_to_date": return { chip: t("settings.aboutUpToDate"), tone: "is-ok", variant: "success" };
+      case "update_available": return { chip: t("settings.aboutUpdate"), tone: "is-warn", variant: "warning" };
       case "invalid_latest_tag": return { note: String(result.message || "") || t("settings.aboutInvalidTag") };
       case "network_error": return { note: String(result.message || "") || t("settings.aboutNetworkError") };
       default: return {};
@@ -11137,7 +11405,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.setLatest.classList.toggle("is-muted", !(result && result.latestVersion));
     setHidden(els.setReleaseChip, !view.chip || state.isCheckingRelease);
     setText(els.setReleaseChip, view.chip || "");
-    setClass(els.setReleaseChip, "setChip " + (view.tone || ""));
+    applyChipMarkup(els.setReleaseChip, statusChip(view.chip || "", view.variant || "neutral", "setChip " + (view.tone || "")));
     const checkedAt = result ? parseTimestamp(result.checkedAt) : null;
     let note = "";
     if (view.note) note = view.note;
@@ -11372,9 +11640,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
   }
 
+  function initialViewId() {
+    let viewId = "";
+    try {
+      const hash = String(window.location.hash || "").replace(/^#/, "");
+      const params = new URLSearchParams(window.location.search || "");
+      viewId = hash || params.get("view") || "";
+    } catch (_error) {
+      viewId = "";
+    }
+    return VIEW_TITLE_KEYS[viewId] ? viewId : "homeView";
+  }
+
   function activateView(viewId) {
     let nextView = VIEW_TITLE_KEYS[viewId] ? viewId : "homeView";
-    if (nextView === "devToolsView" && !state.devToolsEnabled) nextView = "homeView";
+    if (nextView === "devToolsView" && !state.devToolsEnabled) setDevToolsEnabled(true, true);
     state.activeView = nextView;
     els.appViews.forEach((view) => {
       view.classList.toggle("is-active", view.id === nextView);
@@ -11452,6 +11732,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }
     }
     if (!state.devToolsEnabled && state.activeView === "devToolsView") {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("view") === "devToolsView") url.searchParams.delete("view");
+        if (String(url.hash || "").replace(/^#/, "") === "devToolsView") url.hash = "";
+        window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+      } catch (_error) {
+        // Ignore history errors. replaceState does not fire hashchange.
+      }
       activateView("homeView");
     }
   }
@@ -11608,10 +11896,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }
       // Home's queue card and attention items open Pipeline filtered to the state they count.
       if (trigger.hasAttribute("data-pipeline-state") || trigger.hasAttribute("data-pipeline-flagged") || trigger.hasAttribute("data-pipeline-fallback-from")) {
+        state.pipeline.query = "";
+        if (els.pipelineSearchInput) els.pipelineSearchInput.value = "";
         presetPipelineFilters(trigger.getAttribute("data-pipeline-state"), trigger.getAttribute("data-pipeline-range"), trigger.getAttribute("data-pipeline-flagged"), trigger.getAttribute("data-pipeline-fallback-from"));
       }
       if (trigger.hasAttribute("data-digest-status") || trigger.hasAttribute("data-digest-project")) {
+        state.digests.query = "";
+        if (els.digSearchInput) els.digSearchInput.value = "";
         presetDigestFilters(trigger.getAttribute("data-digest-project"), trigger.getAttribute("data-digest-status"), trigger.getAttribute("data-digest-date"));
+      }
+      if (trigger.id === "activitySearchButton") {
+        const field = document.getElementById("activitySearchInput");
+        const query = field ? String(field.value || "").trim().slice(0, 200) : "";
+        state.memory.query = query;
+        if (els.memorySearchInput && els.memorySearchInput.value !== query) els.memorySearchInput.value = query;
+        setHidden(els.memorySearchClear, !query);
       }
       activateView(trigger.getAttribute("data-nav-target"));
       // Legacy panels sit below the hero and the tab dock, and "View all" is clicked from the bottom of Home,
@@ -11631,6 +11930,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
     els.devToolsToggle.addEventListener("change", () => {
       setDevToolsEnabled(els.devToolsToggle.checked, true);
+    });
+
+    window.addEventListener("hashchange", () => {
+      const hash = String(window.location.hash || "").replace(/^#/, "");
+      if (VIEW_TITLE_KEYS[hash]) activateView(hash);
     });
 
     if (els.homeHealthRing) {
@@ -11680,7 +11984,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       } catch (error) {
         els.dailyDigestStatusText.textContent = error.message || t("runtime.dailyDigestFailed");
         els.dailyDigestStatusBadge.textContent = t("runtime.dailyDigestFailed");
-        els.dailyDigestStatusBadge.className = "statusChip error";
+        els.dailyDigestStatusBadge.className = statusVariantClass("error");
       }
     });
     els.dailyDigestSchedulerSaveButton.addEventListener("click", async () => {
@@ -11689,7 +11993,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       } catch (error) {
         els.dailyDigestSchedulerStatusText.textContent = error.message || t("runtime.dailyDigestSchedulerSaveFailed");
         els.dailyDigestSchedulerRuntimeBadge.textContent = t("runtime.dailyDigestSchedulerSaveFailed");
-        els.dailyDigestSchedulerRuntimeBadge.className = "statusChip error";
+        els.dailyDigestSchedulerRuntimeBadge.className = statusVariantClass("error");
       }
     });
     els.proceduralRefreshButton.addEventListener("click", async () => {
@@ -11912,7 +12216,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindProjectEvents();
     bindSkillEvents();
     bindMemoryDrawerEvents();
-    activateView("homeView");
+    activateView(initialViewId());
     try {
       await loadOverview();
       renderReleaseCheck();

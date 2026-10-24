@@ -269,9 +269,32 @@ function renderHealthCard(id: string, target: string, labelKey: string, label: s
           </button>`;
 }
 
+// Shared page header: subtitle and stamp sit in the same place on every view. The title itself is #pageTitle.
+function renderPageHead(leadId: string, leadKey: string, lead: string, stampId: string, meta = '', leadClass = ''): string {
+  return `
+        <header class="pageHead${leadClass.includes('pipeLead') ? ' pipeLeadRow' : ''}">
+          <div class="pageHeadCopy">
+            <p class="pageSub${leadClass ? ' ' + leadClass : ''}" id="${leadId}" data-i18n="${leadKey}">${lead}</p>${meta}
+          </div>
+          <span class="pageStamp" id="${stampId}"></span>
+        </header>`;
+}
+
+// Search field on the left of a toolbar. The clear control stays hidden until the field has text.
+function renderSearchField(id: string, labelKey: string, label: string, placeholderKey: string, placeholder: string, clearId: string, clearKey: string, clearLabel: string): string {
+  return `
+          <label class="memSearch viewSearch" for="${id}">
+            ${renderAdminIcon('search', 'memSearchIcon')}
+            <span class="visuallyHidden" data-i18n="${labelKey}">${label}</span>
+            <input class="memSearchInput" id="${id}" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="${placeholderKey}" placeholder="${placeholder}" />
+            <button class="memSearchClear" id="${clearId}" type="button" data-i18n-aria-label="${clearKey}" aria-label="${clearLabel}" hidden>${renderAdminIcon('close', 'memSearchClearIcon')}</button>
+          </label>`;
+}
+
 function renderHomeView(): string {
   return `
       <section id="homeView" class="appView is-active" aria-labelledby="pageTitle">
+        ${renderPageHead('homeLead', 'home.lead', 'Worker health, today\'s memories, and what needs attention.', 'homeUpdated')}
         <div class="homeHealth">${renderHealthCard('homeWorkerCard', 'settingsView', 'home.workerLabel', 'Worker')}${renderHealthCard('homeQueueCard', 'pipelineView', 'home.queueLabel', 'Queue')}${renderHealthCard('homeLlmCard', 'pipelineView', 'home.llmLabel', 'LLM today')}${renderHealthCard('homeDigestCard', 'digestsView', 'home.digestLabel', 'Last digest')}${renderHealthCard('homeVaultCard', 'digestsView', 'home.vaultLabel', 'Vault review')}
         </div>
 
@@ -310,8 +333,8 @@ function renderHomeView(): string {
                   <p class="allClearLead" id="homeStatusLead"></p>
                 </div>
                 <div class="statusMeta">
-                  <span class="statusMetaChip" id="homeHealthRingChip" data-tone="unknown"></span>
-                  <span class="statusMetaChip" id="homeStatusUpdated" hidden></span>
+                  <span class="statusMetaChip statusChip is-neutral" id="homeHealthRingChip" data-tone="unknown"></span>
+                  <span class="statusMetaChip statusChip is-info" id="homeStatusUpdated" hidden></span>
                 </div>
               </div>
             </div>
@@ -389,21 +412,26 @@ function renderActivityView(): string {
             <button class="actSegment" id="${item.id}" type="button" data-activity-range="${item.range}" aria-pressed="${item.range === '7d'}"${item.range === 'custom' ? ' aria-haspopup="dialog" aria-expanded="false" aria-controls="activityCustomPopover"' : ''} data-i18n="${item.key}">${item.label}</button>`).join('');
   return `
       <section id="activityView" class="appView activityView" aria-labelledby="pageTitle">
-        <div class="actSummary" id="activitySummary">
-          <span class="actSum" id="activitySumMemories">—</span><span class="actSumSep" aria-hidden="true">·</span>
-          <span class="actSum" id="activitySumOutcome"></span><span class="actSumSep" aria-hidden="true">·</span>
-          <span class="actSum" id="activitySumContext"></span><span class="actSumSep" aria-hidden="true">·</span>
-          <button class="actSum actSumToggle" id="activitySumLegacy" type="button" aria-pressed="false"></button>
-          <span class="actSpark" id="activitySparkline" role="img" data-i18n-aria-label="activity.sparkLabel" aria-label="Memories per day in this window"></span>
-        </div>
+        ${renderPageHead('activityLead', 'shell.activityLead', 'What your agents did in a time window: sessions, outcomes and context per project and agent.', 'activityUpdated', `
+            <div class="actSummary pageMeta" id="activitySummary">
+              <span class="actSum" id="activitySumMemories">—</span><span class="actSumSep" aria-hidden="true">·</span>
+              <span class="actSum" id="activitySumOutcome"></span><span class="actSumSep" aria-hidden="true">·</span>
+              <span class="actSum" id="activitySumContext"></span><span class="actSumSep" aria-hidden="true">·</span>
+              <button class="actSum actSumToggle" id="activitySumLegacy" type="button" aria-pressed="false"></button>
+              <span class="actSpark" id="activitySparkline" role="img" data-i18n-aria-label="activity.sparkLabel" aria-label="Memories per day in this window"></span>
+            </div>`)}
 
-        <div class="actToolbar glassSurface glassBlur" id="activityToolbar">
-          <div class="actSegmented" id="activityRangeControl" role="group" data-i18n-aria-label="activity.rangeLabel" aria-label="Time range">${segments}
-          </div>
-          <span class="actToolbarSep" aria-hidden="true"></span>${renderActivityPopup('activityProject', 'activity.project', 'Project')}${renderActivityPopup('activityAgent', 'activity.agent', 'Agent')}
+        <div class="actToolbar viewToolbar glassSurface glassBlur" id="activityToolbar">
+          <label class="memSearch viewSearch" for="activitySearchInput">
+            ${renderAdminIcon('search', 'memSearchIcon')}
+            <span class="visuallyHidden" data-i18n="activity.search">Search</span>
+            <input class="memSearchInput" id="activitySearchInput" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="activity.searchPlaceholder" placeholder="Search memories…" />
+            <button class="memSearchClear" id="activitySearchButton" type="button" data-nav-target="memoryView" data-focus-target="memorySearchInput" data-i18n-title="activity.searchMemory" title="Search memories" data-i18n-aria-label="activity.search" aria-label="Search">${renderAdminIcon('search', 'actIcon')}</button>
+          </label>${renderActivityPopup('activityProject', 'activity.project', 'Project')}${renderActivityPopup('activityAgent', 'activity.agent', 'Agent')}
           <div class="actToolbarEnd">
-            <span class="actRangeText"><span class="actRange" id="activityRangeLabel"></span><span class="actUpdated" id="activityUpdated"></span></span>
-            <button class="actIconButton" id="activitySearchButton" type="button" data-nav-target="memoryView" data-focus-target="memorySearchInput" data-i18n-title="activity.searchMemory" title="Search memories" data-i18n-aria-label="activity.search" aria-label="Search">${renderAdminIcon('search', 'actIcon')}</button>
+            <span class="actRangeText"><span class="actRange" id="activityRangeLabel"></span></span>
+            <div class="actSegmented rangeControl" id="activityRangeControl" role="group" data-i18n-aria-label="activity.rangeLabel" aria-label="Time range">${segments}
+            </div>
           </div>
         </div>
 
@@ -413,7 +441,7 @@ function renderActivityView(): string {
           <div class="actMain">
             <div class="actColumns" id="activityColumns" role="region" data-i18n-aria-label="activity.columnsLabel" aria-label="Memories by day" aria-busy="true">${renderActivityColumn(0)}${renderActivityColumn(1)}
             </div>
-            <div class="actNotice glassCard glassBlur" id="activityNotice" role="status" hidden>
+            <div class="actNotice emptyState glassCard glassBlur" id="activityNotice" role="status" hidden>
               <div class="placeholderIcon">${renderAdminIcon('activity', 'placeholderGlyph')}</div>
               <h2 class="actNoticeTitle" id="activityNoticeTitle"></h2>
               <p class="actNoticeLead" id="activityNoticeLead"></p>
@@ -496,10 +524,10 @@ function renderMemoryView(): string {
     `<div class="actPopover actMenu" id="${id}" role="listbox" data-i18n-aria-label="${key}" aria-label="${label}" hidden></div>`;
   return `
       <section id="memoryView" class="appView memoryView" aria-labelledby="pageTitle">
-        <p class="memLead" id="memoryLead" data-i18n="memory.lead">Search, filter, and browse saved memories across projects and agents.</p>
+        ${renderPageHead('memoryLead', 'memory.lead', 'Search, filter, and browse saved memories across projects and agents.', 'memoryUpdated', '', 'memLead')}
 
-        <div class="memToolbar glassSurface glassBlur" id="memoryToolbar" role="search" data-i18n-aria-label="memory.toolbarLabel" aria-label="Memory filters">
-          <label class="memSearch" for="memorySearchInput">
+        <div class="memToolbar viewToolbar glassSurface glassBlur" id="memoryToolbar" role="search" data-i18n-aria-label="memory.toolbarLabel" aria-label="Memory filters">
+          <label class="memSearch viewSearch" for="memorySearchInput">
             ${renderAdminIcon('search', 'memSearchIcon')}
             <span class="visuallyHidden" data-i18n="memory.searchLabel">Search memories</span>
             <input class="memSearchInput" id="memorySearchInput" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="memory.searchPlaceholder" placeholder="Search memories…" />
@@ -507,7 +535,7 @@ function renderMemoryView(): string {
           </label>
           <div class="memFilters">${renderMemoryPopup('memoryProject', 'memory.project', 'Project')}${renderMemoryPopup('memoryAgent', 'memory.agent', 'Agent')}${renderMemoryPopup('memoryKind', 'memory.kind', 'Kind')}${renderMemoryPopup('memorySource', 'memory.source', 'Source')}
           </div>
-          <div class="actSegmented memSegmented" id="memoryRangeControl" role="group" data-i18n-aria-label="memory.rangeLabel" aria-label="Time range">${segments}
+          <div class="actSegmented memSegmented rangeControl" id="memoryRangeControl" role="group" data-i18n-aria-label="memory.rangeLabel" aria-label="Time range">${segments}
           </div>
         </div>
 
@@ -516,7 +544,6 @@ function renderMemoryView(): string {
           <span class="memSumSep" aria-hidden="true">·</span>${kindSum('outcome', 'Outcome')}
           <span class="memSumSep" aria-hidden="true">·</span>${kindSum('context', 'Context')}
           <span class="memSumSep" aria-hidden="true">·</span>${kindSum('legacy', 'Legacy')}
-          <span class="memUpdated" id="memoryUpdated"></span>
         </div>
 
         <div class="memTop glassSurface glassBlur" id="memoryTopProjects" hidden>
@@ -528,7 +555,7 @@ function renderMemoryView(): string {
           <div class="memHead" id="memoryListHead" aria-hidden="true">${column('memory.colTime', 'Time')}${column('memory.colKind', 'Kind')}${column('memory.colTitle', 'Title / Summary')}${column('memory.colProject', 'Project')}${column('memory.colAgent', 'Agent')}${column('memory.colFacts', 'Facts', ' is-num')}${column('memory.colFiles', 'Files', ' is-num')}
           </div>
           <div class="memList" id="memoryList" role="region" data-i18n-aria-label="memory.listLabel" aria-label="Memories by day" aria-busy="true"></div>
-          <div class="actNotice memNotice glassCard glassBlur" id="memoryNotice" role="status" hidden>
+          <div class="actNotice emptyState memNotice glassCard glassBlur" id="memoryNotice" role="status" hidden>
             <div class="placeholderIcon" id="memoryNoticeIcon">${renderAdminIcon('memory', 'placeholderGlyph')}</div>
             <h2 class="actNoticeTitle" id="memoryNoticeTitle"></h2>
             <p class="actNoticeLead" id="memoryNoticeLead"></p>
@@ -611,17 +638,15 @@ function renderPipelineView(): string {
     `<div class="actPopover actMenu" id="${id}" role="listbox" data-i18n-aria-label="${key}" aria-label="${label}" hidden></div>`;
   return `
       <section id="pipelineView" class="appView pipelineView" aria-labelledby="pageTitle">
-        <div class="pipeLeadRow">
-          <p class="memLead pipeLead" id="pipelineLead" data-i18n="pipeline.lead">Track how finished tasks become durable memories, and spot failures fast.</p>
-          <span class="memUpdated" id="pipelineUpdated"></span>
-        </div>
+        ${renderPageHead('pipelineLead', 'pipeline.lead', 'Track how finished tasks become durable memories, and spot failures fast.', 'pipelineUpdated', '', 'memLead pipeLead')}
 
-        <div class="memToolbar pipeToolbar glassSurface glassBlur" id="pipelineToolbar" role="group" data-i18n-aria-label="pipeline.toolbarLabel" aria-label="Pipeline filters">
+        <div class="memToolbar viewToolbar pipeToolbar glassSurface glassBlur" id="pipelineToolbar" role="group" data-i18n-aria-label="pipeline.toolbarLabel" aria-label="Pipeline filters">
+          ${renderSearchField('pipelineSearchInput', 'pipeline.searchLabel', 'Search tasks', 'pipeline.searchPlaceholder', 'Search tasks…', 'pipelineSearchClear', 'pipeline.searchClear', 'Clear search')}
           <div class="pipeFilters">${renderMemoryPopup('pipelineProject', 'pipeline.project', 'Project')}${renderMemoryPopup('pipelineAgent', 'pipeline.agent', 'Agent')}${renderMemoryPopup('pipelineState', 'pipeline.state', 'State')}
             <button class="pipeFlagChip" id="pipelineFlaggedChip" type="button" hidden data-i18n="pipeline.flaggedChip" data-i18n-title="pipeline.flaggedRemove" title="Remove flagged duplicates">Flagged duplicates</button>
             <button class="pipeFlagChip pipeFallbackChip" id="pipelineFallbackChip" type="button" hidden data-i18n-title="pipeline.fallbackRemove" title="Remove the fallbacks-since filter">Fallbacks since</button>
           </div>
-          <div class="actSegmented memSegmented" id="pipelineRangeControl" role="group" data-i18n-aria-label="pipeline.rangeLabel" aria-label="Time range">${segments}
+          <div class="actSegmented memSegmented rangeControl" id="pipelineRangeControl" role="group" data-i18n-aria-label="pipeline.rangeLabel" aria-label="Time range">${segments}
             <span class="pipeRangeAll" id="pipelineRangeAll" hidden data-i18n="pipeline.rangeAll">All time</span>
           </div>
         </div>
@@ -645,7 +670,7 @@ function renderPipelineView(): string {
           <div class="memHead pipeHead" id="pipelineListHead" aria-hidden="true">${column('pipeline.colTime', 'Time')}${column('pipeline.colState', 'State')}${column('pipeline.colTask', 'Task / Title')}${column('pipeline.colProject', 'Project')}${column('pipeline.colAgent', 'Agent')}${column('pipeline.colLlm', 'LLM calls', ' is-num')}${column('pipeline.colAttempts', 'Attempts', ' is-num')}
           </div>
           <div class="memList pipeList" id="pipelineList" role="region" data-i18n-aria-label="pipeline.listLabel" aria-label="Tasks by day" aria-busy="true"></div>
-          <div class="actNotice memNotice glassCard glassBlur" id="pipelineNotice" role="status" hidden>
+          <div class="actNotice emptyState memNotice glassCard glassBlur" id="pipelineNotice" role="status" hidden>
             <div class="placeholderIcon" id="pipelineNoticeIcon">${renderAdminIcon('pipeline', 'placeholderGlyph')}</div>
             <h2 class="actNoticeTitle" id="pipelineNoticeTitle"></h2>
             <p class="actNoticeLead" id="pipelineNoticeLead"></p>
@@ -710,16 +735,14 @@ function renderDigestsView(): string {
     `<div class="actPopover actMenu" id="${id}" role="listbox" data-i18n-aria-label="${key}" aria-label="${label}" hidden></div>`;
   return `
       <section id="digestsView" class="appView digestsView" aria-labelledby="pageTitle">
-        <div class="pipeLeadRow digLeadRow">
-          <p class="memLead pipeLead" id="digLead" data-i18n="digests.lead">Nightly project digests and Vault review activity across your workspace.</p>
-          <span class="memUpdated" id="digUpdated"></span>
-        </div>
+        ${renderPageHead('digLead', 'digests.lead', 'Nightly project digests and Vault review activity across your workspace.', 'digUpdated', '', 'memLead pipeLead')}
 
-        <div class="memToolbar digToolbar digGlass glassSurface glassBlur" id="digToolbar" role="group" data-i18n-aria-label="digests.toolbarLabel" aria-label="Digest filters">
+        <div class="memToolbar viewToolbar digToolbar digGlass glassSurface glassBlur" id="digToolbar" role="search" data-i18n-aria-label="digests.toolbarLabel" aria-label="Digest filters">
+          ${renderSearchField('digSearchInput', 'digests.searchLabel', 'Search digests', 'digests.searchPlaceholder', 'Search digests…', 'digSearchClear', 'digests.searchClear', 'Clear search')}
           <div class="digFilters">${renderMemoryPopup('digProject', 'digests.project', 'Project')}${renderMemoryPopup('digAgent', 'digests.agent', 'Agent')}
             <button class="digStatusChip" id="digStatusChip" type="button" hidden data-i18n-title="digests.failedRemove" title="Remove the Failed filter"><span class="digStatusChipDot" aria-hidden="true"></span><span data-i18n="digests.failedChip">Failed</span>${renderAdminIcon('close', 'digStatusChipIcon')}</button>
           </div>
-          <div class="actSegmented memSegmented" id="digRangeControl" role="group" data-i18n-aria-label="digests.rangeLabel" aria-label="Time range">${segments}
+          <div class="actSegmented memSegmented rangeControl" id="digRangeControl" role="group" data-i18n-aria-label="digests.rangeLabel" aria-label="Time range">${segments}
           </div>
         </div>
 
@@ -728,7 +751,7 @@ function renderDigestsView(): string {
             <header class="digCardHead">
               <span class="digCardIcon" aria-hidden="true">${renderAdminIcon('digestDoc', 'digCardGlyph')}</span>
               <h2 class="digCardTitle" id="digNightlyTitle" data-i18n="digests.nightlyTitle">Nightly digest</h2>
-              <span class="digChip is-muted" id="digNightlyChip"><span class="digChipDot" aria-hidden="true"></span><span id="digNightlyChipText">—</span></span>
+              <span class="digChip statusChip is-neutral is-muted" id="digNightlyChip"><span class="digChipDot" aria-hidden="true"></span><span id="digNightlyChipText">—</span></span>
             </header>
             <div class="digStats">${renderDigestStat('digNextRun', 'moon', 'digests.nextRun', 'Next run')}${renderDigestStat('digLastRun', 'clock', 'digests.lastRun', 'Last run')}${renderDigestStat('digLastProjects', 'layers', 'digests.projectsLabel', 'Projects', true)}
             </div>
@@ -737,7 +760,7 @@ function renderDigestsView(): string {
             <header class="digCardHead">
               <span class="digCardIcon is-vault" aria-hidden="true">${renderAdminIcon('memory', 'digCardGlyph')}</span>
               <h2 class="digCardTitle" id="digVaultTitle" data-i18n="digests.vaultTitle">Vault review</h2>
-              <span class="digChip is-muted" id="digVaultChip"><span class="digChipDot" aria-hidden="true"></span><span id="digVaultChipText">—</span></span>
+              <span class="digChip statusChip is-neutral is-muted" id="digVaultChip"><span class="digChipDot" aria-hidden="true"></span><span id="digVaultChipText">—</span></span>
             </header>
             <div class="digStats digVaultStats">
               <div class="digStat" id="digVaultLast">
@@ -753,7 +776,7 @@ function renderDigestsView(): string {
 
         <div class="memBoard digBoard" id="digBoard">
           <div class="memList digList" id="digList" role="region" data-i18n-aria-label="digests.listLabel" aria-label="Digests by day" aria-busy="true"></div>
-          <div class="actNotice memNotice digGlass glassCard glassBlur" id="digNotice" role="status" hidden>
+          <div class="actNotice emptyState memNotice digGlass glassCard glassBlur" id="digNotice" role="status" hidden>
             <div class="placeholderIcon" id="digNoticeIcon">${renderAdminIcon('digestDoc', 'placeholderGlyph')}</div>
             <h2 class="actNoticeTitle" id="digNoticeTitle"></h2>
             <p class="actNoticeLead" id="digNoticeLead"></p>
@@ -814,13 +837,10 @@ function renderProjectsView(): string {
   const column = (key: string, label: string, extra: string = '') => `<span class="prjCol${extra}" data-i18n="${key}">${label}</span>`;
   return `
       <section id="projectsView" class="appView projectsView" aria-labelledby="pageTitle">
-        <div class="pipeLeadRow prjLeadRow">
-          <p class="memLead pipeLead" id="prjLead" data-i18n="shell.projectsLead">Every project with its startup context, state facts, digests and skills.</p>
-          <span class="memUpdated" id="prjUpdated"></span>
-        </div>
+        ${renderPageHead('prjLead', 'shell.projectsLead', 'Every project with its startup context, state facts, digests and skills.', 'prjUpdated', '', 'memLead pipeLead')}
 
-        <div class="memToolbar prjToolbar digGlass glassSurface glassBlur" id="prjToolbar" role="search" data-i18n-aria-label="projects.toolbarLabel" aria-label="Project filters">
-          <label class="memSearch prjSearch" for="prjSearchInput">
+        <div class="memToolbar viewToolbar prjToolbar digGlass glassSurface glassBlur" id="prjToolbar" role="search" data-i18n-aria-label="projects.toolbarLabel" aria-label="Project filters">
+          <label class="memSearch viewSearch prjSearch" for="prjSearchInput">
             ${renderAdminIcon('search', 'memSearchIcon')}
             <span class="visuallyHidden" data-i18n="projects.searchLabel">Search projects</span>
             <input class="memSearchInput" id="prjSearchInput" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="projects.searchPlaceholder" placeholder="Search projects" />
@@ -831,7 +851,7 @@ function renderProjectsView(): string {
             <span class="actPopupValue" id="prjSortValue" data-i18n="projects.sortLastActivity">Last activity</span>
             ${renderAdminIcon('chevronUpDown', 'actPopupIcon')}
           </button>
-          <div class="actSegmented memSegmented" id="prjRangeControl" role="group" data-i18n-aria-label="projects.rangeLabel" aria-label="Activity range">${segments}
+          <div class="actSegmented memSegmented rangeControl" id="prjRangeControl" role="group" data-i18n-aria-label="projects.rangeLabel" aria-label="Activity range">${segments}
           </div>
         </div>
 
@@ -848,7 +868,7 @@ function renderProjectsView(): string {
               <button class="memMore digGlass" id="prjLoadMore" type="button" hidden data-i18n="projects.loadMore">Load more</button>
             </div>
           </div>
-          <div class="actNotice memNotice digGlass glassCard glassBlur" id="prjNotice" role="status" hidden>
+          <div class="actNotice emptyState memNotice digGlass glassCard glassBlur" id="prjNotice" role="status" hidden>
             <div class="placeholderIcon" id="prjNoticeIcon">${renderAdminIcon('projects', 'placeholderGlyph')}</div>
             <h2 class="actNoticeTitle" id="prjNoticeTitle"></h2>
             <p class="actNoticeLead" id="prjNoticeLead"></p>
@@ -897,19 +917,16 @@ function renderSkillsView(): string {
   const column = (key: string, label: string, extra: string = '') => `<span class="prjCol${extra}" data-i18n="${key}">${label}</span>`;
   return `
       <section id="skillsView" class="appView skillsView" aria-labelledby="pageTitle">
-        <div class="pipeLeadRow prjLeadRow">
-          <p class="memLead pipeLead" id="sklLead" data-i18n="shell.skillsLead">Procedural skills, digest candidates and how often post-task reviews matched them.</p>
-          <span class="memUpdated" id="sklUpdated"></span>
-        </div>
+        ${renderPageHead('sklLead', 'shell.skillsLead', 'Procedural skills, digest candidates and how often post-task reviews matched them.', 'sklUpdated', '', 'memLead pipeLead')}
 
-        <div class="memToolbar prjToolbar sklToolbar digGlass glassSurface glassBlur" id="sklToolbar" role="search" data-i18n-aria-label="skills.toolbarLabel" aria-label="Skill filters">
-          <label class="memSearch prjSearch" for="sklSearchInput">
+        <div class="memToolbar viewToolbar prjToolbar sklToolbar digGlass glassSurface glassBlur" id="sklToolbar" role="search" data-i18n-aria-label="skills.toolbarLabel" aria-label="Skill filters">
+          <label class="memSearch viewSearch prjSearch" for="sklSearchInput">
             ${renderAdminIcon('search', 'memSearchIcon')}
             <span class="visuallyHidden" data-i18n="skills.searchLabel">Search skills</span>
             <input class="memSearchInput" id="sklSearchInput" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="skills.searchPlaceholder" placeholder="Search skills" />
             <button class="memSearchClear" id="sklSearchClear" type="button" data-i18n-aria-label="skills.searchClear" aria-label="Clear search" hidden>${renderAdminIcon('close', 'memSearchClearIcon')}</button>
           </label>${renderSkillPopup('sklProject', 'skills.project', 'Project', 'skills.projectAll', 'All projects')}${renderSkillPopup('sklSort', 'skills.sort', 'Sort', 'skills.sortRecent', 'Newest')}
-          <div class="actSegmented memSegmented" id="sklRangeControl" role="group" data-i18n-aria-label="skills.rangeLabel" aria-label="Match range">${ranges}
+          <div class="actSegmented memSegmented rangeControl" id="sklRangeControl" role="group" data-i18n-aria-label="skills.rangeLabel" aria-label="Match range">${ranges}
           </div>
         </div>
 
@@ -926,7 +943,7 @@ function renderSkillsView(): string {
             <div class="prjHead sklHead" id="sklListHead" aria-hidden="true">${column('skills.colSkill', 'Skill', ' is-name')}${column('skills.colProject', 'Project')}<span class="prjCol" id="sklColThird" data-i18n="skills.colSource">Source</span><span class="prjCol" id="sklColFourth" data-i18n="skills.colSteps">Steps</span><span class="prjCol"></span>
             </div>
             <div class="prjList sklList" id="sklList" role="region" data-i18n-aria-label="skills.listLabel" aria-label="Skills" aria-busy="true"></div>
-            <div class="sklEmpty" id="sklEmpty" role="status" hidden>
+            <div class="sklEmpty emptyState" id="sklEmpty" role="status" hidden>
               <span class="sklEmptyIcon" id="sklEmptyIcon" aria-hidden="true">${renderAdminIcon('star', 'sklEmptyGlyph')}</span>
               <p class="sklEmptyTitle" id="sklEmptyTitle"></p>
               <p class="sklEmptyLead" id="sklEmptyLead" hidden></p>
@@ -937,7 +954,7 @@ function renderSkillsView(): string {
               <button class="sklMore" id="sklLoadMore" type="button" hidden data-i18n="skills.loadMore">Load more</button>
             </div>
           </div>
-          <div class="actNotice memNotice digGlass glassCard glassBlur" id="sklNotice" role="status" hidden>
+          <div class="actNotice emptyState memNotice digGlass glassCard glassBlur" id="sklNotice" role="status" hidden>
             <div class="placeholderIcon" id="sklNoticeIcon">${renderAdminIcon('sparkle', 'placeholderGlyph')}</div>
             <h2 class="actNoticeTitle" id="sklNoticeTitle"></h2>
             <p class="actNoticeLead" id="sklNoticeLead"></p>
@@ -994,7 +1011,7 @@ function renderSettingsSwitch(kind: 'read' | 'write', title: string, lead: strin
                   <h3 class="setSwitchTitle" id="set${kind === 'read' ? 'Read' : 'Write'}Title" data-i18n="settings.${kind}Title">${title}</h3>
                   <p class="setSwitchLead" id="${kind}PolicyMeta">${lead}</p>
                 </div>
-                <span id="${kind}PolicyState" class="setChip" data-i18n="settings.loading">Loading…</span>
+                <span id="${kind}PolicyState" class="setChip statusChip is-neutral" data-i18n="settings.loading">Loading…</span>
                 <span class="setChanged" id="set${kind === 'read' ? 'Read' : 'Write'}Changed"></span>
                 <span class="iosSwitch setSwitch"><input id="${kind}Toggle" type="checkbox" role="switch" aria-labelledby="set${kind === 'read' ? 'Read' : 'Write'}Title" /><span class="track" aria-hidden="true"></span></span>
               </div>`;
@@ -1017,10 +1034,7 @@ function renderSettingsView(): string {
                     <option value="${n}">${n === 1 ? '1 day' : `${n} days`}</option>`).join('');
   return `
       <section id="settingsView" class="appView settingsView" aria-labelledby="pageTitle">
-        <div class="pipeLeadRow prjLeadRow">
-          <p class="memLead pipeLead" id="setLead" data-i18n="settings.lead">Memory switches, LLM connection, digest scheduler and version information.</p>
-          <span class="memUpdated" id="setUpdated"></span>
-        </div>
+        ${renderPageHead('setLead', 'settings.lead', 'Memory switches, LLM connection, digest scheduler and version information.', 'setUpdated', '', 'memLead pipeLead')}
 
         <div class="setLayout">
           <nav class="setNav digGlass glassCard glassBlur" id="setNav" data-i18n-aria-label="settings.sectionsLabel" aria-label="Settings sections">
@@ -1055,7 +1069,7 @@ function renderSettingsView(): string {
               <div class="setKeyRow">
                 <input class="setInput is-mono" id="setLlmKeyMasked" type="text" readonly tabindex="-1" aria-labelledby="setLlmKeyLabel" />
                 <input class="setInput" id="setLlmKeyInput" type="password" autocomplete="new-password" spellcheck="false" aria-labelledby="setLlmKeyLabel" data-i18n-placeholder="settings.llmNewKeyPlaceholder" placeholder="Paste the new key" hidden />
-                <span class="setChip" id="setLlmKeyChip"></span>
+                <span class="setChip statusChip is-neutral" id="setLlmKeyChip"></span>
                 <button class="sklAction is-secondary setButton" id="setLlmReplaceKey" type="button" aria-controls="setLlmKeyInput" aria-expanded="false" data-i18n="settings.llmReplaceKey">Replace key</button>
               </div>
               <p class="setHint" id="setLlmKeyHint" hidden></p>
@@ -1074,7 +1088,7 @@ function renderSettingsView(): string {
             </details>
             <div class="setFoot">
               <p class="setNote" id="setLlmNote" role="status" aria-live="polite"></p>
-              <span class="setChip" id="setLlmTestChip" hidden></span>
+              <span class="setChip statusChip is-neutral" id="setLlmTestChip" hidden></span>
               <span class="setMuted" id="setLlmTestedAt"></span>
               <button class="sklAction is-outline setButton" id="setLlmTest" type="button" data-i18n="settings.llmTest">Test connection</button>
               <button class="sklAction is-primary setButton" id="setLlmSave" type="button" data-i18n="settings.llmSave">Save</button>
@@ -1111,7 +1125,7 @@ function renderSettingsView(): string {
             <div class="setAbout">
               <dl class="setFacts">
                 <div class="setFact"><dt data-i18n="settings.aboutVersion">Version</dt><dd><span class="setVersion" id="setVersion">—</span></dd></div>
-                <div class="setFact"><dt data-i18n="settings.aboutLatest">Latest release</dt><dd><span class="setVersion" id="setLatest">—</span><span class="setChip" id="setReleaseChip" hidden></span></dd></div>
+                <div class="setFact"><dt data-i18n="settings.aboutLatest">Latest release</dt><dd><span class="setVersion" id="setLatest">—</span><span class="setChip statusChip is-neutral" id="setReleaseChip" hidden></span></dd></div>
               </dl>
               <div class="setAboutSide">
                 <div class="setAboutActions">
@@ -1147,35 +1161,16 @@ export function renderAdminWorkbenchMarkup(): string {
       <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderDigestsView()}${renderProjectsView()}${renderSkillsView()}${renderPlaceholderViews()}${renderSettingsView()}
 
       <section id="devToolsView" class="appView devToolsView" aria-labelledby="pageTitle">
-    <p class="devToolsLead" data-i18n="devtools.lead">Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.</p>
+    ${renderPageHead('devToolsLead', 'devtools.lead', 'Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.', 'devToolsUpdated', '', 'devToolsLead')}
+    <div class="devStatusStrip" id="devStatusStrip">
+      <div id="statusText" class="statusValue statusChip is-info" data-i18n="hero.loadingWorkbenchStatus">Loading workbench status...</div>
+      <div id="policyUpdatedAt" class="finePrint"></div>
+      <p class="devStatusNote" data-i18n="hero.workbenchNotesLead">
+        Loopback-only UI. Structured state stays explicit-only. Search diagnostics expose ranking
+        quality without changing the current search algorithm.
+      </p>
+    </div>
     <section class="hero legacyOverview">
-      <div class="heroLayout">
-        <div>
-          <div class="heroTopRow">
-            <span class="eyebrow" data-i18n="hero.eyebrow">AgentMemory Admin Workbench</span>
-          </div>
-          <h2 class="legacyHeroTitle" data-i18n="hero.title">Runtime Console for Shared Agent Context</h2>
-          <p class="lead" data-i18n="hero.lead">
-            Inspect runtime policy, structured state, startup context health, hybrid search behavior,
-            and the raw observation ledger from one local-only control room.
-          </p>
-        </div>
-        <div class="heroAside">
-          <div class="statusCard glassPanel">
-            <div class="statusLabel" data-i18n="hero.currentRuntime">Current Runtime</div>
-            <div id="statusText" class="statusValue" data-i18n="hero.loadingWorkbenchStatus">Loading workbench status...</div>
-            <div id="policyUpdatedAt" class="finePrint" style="margin-top: 10px;"></div>
-          </div>
-          <div class="infoCard glassPanel">
-            <div class="metaLabel" data-i18n="hero.workbenchNotes">Workbench Notes</div>
-            <p class="panelLead" style="margin-top: 10px;" data-i18n="hero.workbenchNotesLead">
-              Loopback-only UI. Structured state stays explicit-only. Search diagnostics expose ranking
-              quality without changing the current search algorithm.
-            </p>
-          </div>
-        </div>
-      </div>
-
       <div class="statsGrid">
         <div class="metricTile">
           <div class="metaLabel" data-i18n="metrics.observations">Observations</div>
@@ -1240,7 +1235,7 @@ export function renderAdminWorkbenchMarkup(): string {
                 <div class="metaLabel" data-i18n="runtime.releaseSection">Release Update</div>
                 <h3 class="policyTitle" style="margin-top: 8px;" data-i18n="runtime.releaseTitle">GitHub Release status</h3>
               </div>
-              <span id="releaseStatusBadge" class="statusChip warning" data-i18n="runtime.releaseStatusUnknown">Not checked</span>
+              <span id="releaseStatusBadge" class="statusChip is-warning warning" data-i18n="runtime.releaseStatusUnknown">Not checked</span>
             </div>
             <p class="panelLead" style="margin-top: 10px;" data-i18n="runtime.releaseLead">
               Compare this checkout against the latest published GitHub Release. The check is read-only and never runs bootstrap for you.
@@ -1281,7 +1276,7 @@ export function renderAdminWorkbenchMarkup(): string {
                 <div class="metaLabel" data-i18n="runtime.dailyDigestSection">Daily Digest</div>
                 <h3 class="policyTitle" style="margin-top: 8px;" data-i18n="runtime.dailyDigestTitle">Manual memory synthesis</h3>
               </div>
-              <span id="dailyDigestStatusBadge" class="statusChip warning" data-i18n="runtime.dailyDigestIdle">Idle</span>
+              <span id="dailyDigestStatusBadge" class="statusChip is-warning warning" data-i18n="runtime.dailyDigestIdle">Idle</span>
             </div>
             <p class="panelLead" style="margin-top: 10px;" data-i18n="runtime.dailyDigestLead">
               Run the same daily memory digest job that the worker schedules automatically, then inspect the latest saved digest.
@@ -1314,7 +1309,7 @@ export function renderAdminWorkbenchMarkup(): string {
                   Control automatic daily digest catch-up without changing the digest selection policy.
                 </p>
               </div>
-              <span id="dailyDigestSchedulerRuntimeBadge" class="statusChip warning" data-i18n="runtime.dailyDigestSchedulerLoading">Loading</span>
+              <span id="dailyDigestSchedulerRuntimeBadge" class="statusChip is-warning warning" data-i18n="runtime.dailyDigestSchedulerLoading">Loading</span>
             </div>
             <label class="checkRow" style="margin-top: 14px;">
               <input id="dailyDigestSchedulerEnabledInput" type="checkbox" />
