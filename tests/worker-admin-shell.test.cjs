@@ -361,10 +361,10 @@ test('Activity drawer clamps a long Facts list and wraps tool names at separator
   assert.equal(result.tools, true);
 });
 
-test('Activity day pills hide at zero, headings read "Fri, Oct 16" and zh-CN ranges keep the dash tight', () => {
+test('Activity day pills hide at zero, headings use the shared date formatter and zh-CN ranges keep the dash tight', () => {
   const column = extractClientFunction(script, 'renderActivityColumn');
   assert.match(column, /setHidden\(pill, !act\.payload \|\| count === 0/);
-  assert.match(column, /weekday: "short", month: "short", day: "numeric"/);
+  assert.match(column, /formatUiDate\(date, "day"\)/);
   for (const index of [0, 1]) {
     for (const kind of ['Outcome', 'Context', 'Legacy']) assert.match(elementTag(`activityColumn${index}${kind}`), /\bhidden\b/);
   }

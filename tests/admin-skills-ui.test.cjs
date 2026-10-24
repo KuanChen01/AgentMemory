@@ -193,6 +193,9 @@ function skillsContext(writeEnabled = true) {
     ${uiClientFunction('formatCount')}
     ${uiClientFunction('parseTimestamp')}
     ${uiClientFunction('parseLocalDay')}
+    ${uiClientFunction('formatUiDate')}
+    ${uiClientFunction('statusVariantClass')}
+    ${uiClientFunction('statusChip')}
     ${uiClientFunction('formatShortDate')}
     ${uiClientFunction('calendarDaysAgo')}
     ${uiClientFunction('projectAgo')}

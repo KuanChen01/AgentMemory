@@ -203,6 +203,9 @@ function loadRenderers(context) {
     ${uiClientFunction('formatCount')}
     ${uiClientFunction('parseTimestamp')}
     ${uiClientFunction('parseLocalDay')}
+    ${uiClientFunction('formatUiDate')}
+    ${uiClientFunction('statusVariantClass')}
+    ${uiClientFunction('statusChip')}
     ${uiClientFunction('formatShortDate')}
     ${uiClientFunction('calendarDaysAgo')}
     ${uiClientFunction('findProjectItem')}
