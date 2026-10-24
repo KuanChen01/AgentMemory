@@ -7,67 +7,238 @@ import { ADMIN_UI_HEALTH_CHECKS, ADMIN_UI_ICONS } from './admin-ui-markup';
 import { ADMIN_UI_WALLPAPERS } from './admin-ui-theme';
 
 export const ADMIN_UI_DEV_TOOLS_STORAGE_KEY = 'agentmemory.admin.devTools';
-// Background picker settings (preset or custom, tone, sliders). The custom image itself lives in IndexedDB.
-export const ADMIN_UI_BACKGROUND_STORAGE_KEY = 'am.bg';
-export const ADMIN_UI_BACKGROUND_DEFAULTS = { preset: 'aurora', tone: 'auto', blur: 12, dim: 0, opacity: 30 };
+// Theme settings (mode plus a light set and a dark set). Each set's image lives in IndexedDB.
+// am.bg is the v2.2.1 key. It is read once for migration and never written or removed.
+export const ADMIN_UI_THEME_STORAGE_KEY = 'am.theme';
+export const ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY = 'am.bg';
+export const ADMIN_UI_THEME_DEFAULTS = {
+  v: 1,
+  mode: 'auto',
+  light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+  dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+  // Which set owns the v2.2.1 IndexedDB "custom" image. null until that record is seen.
+  legacyImageSlot: null,
+};
+const ADMIN_UI_LEGACY_WALLPAPER_LUMAS = {
+  aurora: 0.9,
+  sunset: 0.82,
+  lagoon: 0.84,
+  mist: 0.93,
+  night: 0.1,
+  graphite: 0.16,
+};
 
-// Runs in <head> before the body is parsed, so the saved wallpaper and glass tone apply before first paint.
-// It also exposes the normalise/apply helpers the main client script reuses (window.__amBackground).
-export function renderAdminBackgroundBootScript(): string {
+// Runs in <head> before the body is parsed, so the saved theme applies before first paint.
+// It also exposes the normalise/apply helpers the main client script reuses (window.__amTheme).
+export function renderAdminThemeBootScript(): string {
   const lumas = Object.fromEntries(ADMIN_UI_WALLPAPERS.map((wallpaper) => [wallpaper.id, wallpaper.luma]));
   return `
   (function () {
-    var KEY = ${JSON.stringify(ADMIN_UI_BACKGROUND_STORAGE_KEY)};
-    var DEFAULTS = ${JSON.stringify(ADMIN_UI_BACKGROUND_DEFAULTS)};
+    var KEY = ${JSON.stringify(ADMIN_UI_THEME_STORAGE_KEY)};
+    var LEGACY_KEY = ${JSON.stringify(ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY)};
+    var DEFAULTS = ${JSON.stringify(ADMIN_UI_THEME_DEFAULTS)};
     var LUMAS = ${JSON.stringify(lumas)};
+    var LEGACY_LUMAS = ${JSON.stringify(ADMIN_UI_LEGACY_WALLPAPER_LUMAS)};
     function clampInt(value, min, max, fallback) {
       var number = Number(value);
       if (value === null || value === undefined || value === "" || !isFinite(number)) return fallback;
       return Math.min(max, Math.max(min, Math.round(number)));
     }
-    function normalize(raw) {
+    function normalizeSet(raw, slot) {
+      var fallback = slot === "dark" ? DEFAULTS.dark : DEFAULTS.light;
       var source = raw && typeof raw === "object" ? raw : {};
+      var wallpaper = source.wallpaper === "custom" || source.wallpaper === fallback.wallpaper ? source.wallpaper : fallback.wallpaper;
       var luma = Number(source.customLuma);
       return {
-        preset: source.preset === "custom" || Object.prototype.hasOwnProperty.call(LUMAS, source.preset) ? source.preset : DEFAULTS.preset,
+        wallpaper: wallpaper,
         tone: source.tone === "light" || source.tone === "dark" ? source.tone : "auto",
-        blur: clampInt(source.blur, 0, 40, DEFAULTS.blur),
-        dim: clampInt(source.dim, 0, 60, DEFAULTS.dim),
-        opacity: clampInt(source.opacity, 10, 80, DEFAULTS.opacity),
+        blur: clampInt(source.blur, 0, 40, fallback.blur),
+        dim: clampInt(source.dim, 0, 60, fallback.dim),
+        opacity: clampInt(source.opacity, 10, 80, fallback.opacity),
         customLuma: source.customLuma !== null && source.customLuma !== undefined && isFinite(luma) ? Math.min(1, Math.max(0, luma)) : null,
-        customColor: /^#[0-9a-f]{6}$/i.test(String(source.customColor || "")) ? String(source.customColor) : null,
-        // A stored choice is pinned, including settings saved before this flag existed. Only Reset
-        // (pinned: false) or a fresh profile lets Activity use its own backdrop.
-        pinned: !!(raw && typeof raw === "object") && source.pinned !== false
+        customColor: /^#[0-9a-f]{6}$/i.test(String(source.customColor || "")) ? String(source.customColor) : null
       };
     }
-    // Auto picks dark glass when the wallpaper, after the Dim slider, is closer to black than to white.
-    function resolveTone(settings) {
-      if (settings.tone !== "auto") return settings.tone;
-      var luma = settings.preset === "custom" ? (settings.customLuma === null ? 0.75 : settings.customLuma) : LUMAS[settings.preset];
-      return luma * (1 - settings.dim / 100) < 0.5 ? "dark" : "light";
+    function normalize(raw) {
+      var source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+      return {
+        v: 1,
+        mode: source.mode === "light" || source.mode === "dark" ? source.mode : "auto",
+        light: normalizeSet(source.light, "light"),
+        dark: normalizeSet(source.dark, "dark"),
+        legacyImageSlot: source.legacyImageSlot === "light" || source.legacyImageSlot === "dark" ? source.legacyImageSlot : null
+      };
+    }
+    function clampUnit(value) {
+      var number = Number(value);
+      if (value === null || value === undefined || value === "" || !isFinite(number)) return null;
+      return Math.min(1, Math.max(0, number));
+    }
+    // image is present only when the legacy IndexedDB "custom" record exists: a luma number, or {luma, color}.
+    function legacyImageInfo(old, image) {
+      if (image === undefined || image === null || image === false) return null;
+      var luma = null;
+      var color = null;
+      if (typeof image === "number") luma = clampUnit(image);
+      else if (typeof image === "object") {
+        luma = clampUnit(image.luma);
+        color = /^#[0-9a-f]{6}$/i.test(String(image.color || "")) ? String(image.color) : null;
+      } else return null;
+      if (luma === null && old && typeof old === "object" && !Array.isArray(old)) luma = clampUnit(old.customLuma);
+      if (luma === null) luma = 0.75;
+      return { luma: luma, color: color };
+    }
+    // Old glass mode: an explicit tone wins, otherwise luma scaled by Dim. Removed presets keep their old lumas.
+    function legacyMode(old) {
+      if (old.tone === "light" || old.tone === "dark") return old.tone;
+      var dim = clampInt(old.dim, 0, 60, 0);
+      var luma = 0.75;
+      if (old.preset === "custom") {
+        var custom = Number(old.customLuma);
+        luma = old.customLuma !== null && old.customLuma !== undefined && isFinite(custom) ? Math.min(1, Math.max(0, custom)) : 0.75;
+      } else if (Object.prototype.hasOwnProperty.call(LEGACY_LUMAS, old.preset)) {
+        luma = LEGACY_LUMAS[old.preset];
+      }
+      return luma * (1 - dim / 100) < 0.5 ? "dark" : "light";
+    }
+    function migrateLegacy(oldBg, image) {
+      var settings = normalize(null);
+      var legacySlot = null;
+      var preset = "";
+      if (oldBg && typeof oldBg === "object" && !Array.isArray(oldBg)) {
+        var slot = legacyMode(oldBg);
+        preset = typeof oldBg.preset === "string" ? oldBg.preset : "";
+        var mode = "auto";
+        var set = {
+          wallpaper: slot === "dark" ? DEFAULTS.dark.wallpaper : DEFAULTS.light.wallpaper,
+          tone: oldBg.tone === "light" || oldBg.tone === "dark" ? oldBg.tone : "auto",
+          blur: oldBg.blur,
+          dim: oldBg.dim,
+          opacity: oldBg.opacity,
+          customLuma: null,
+          customColor: null
+        };
+        if (preset === "mist") settings.light.wallpaper = "mist";
+        else if (preset === "graphite") settings.dark.wallpaper = "graphite";
+        else if (preset === "custom") {
+          set.wallpaper = "custom";
+          set.customLuma = oldBg.customLuma;
+          set.customColor = oldBg.customColor;
+          mode = slot;
+          legacySlot = slot;
+          settings.legacyImageSlot = slot;
+        }
+        settings[slot] = set;
+        settings.mode = mode;
+      }
+      // An upload that is no longer selected still belongs to one set. Wallpaper and mode stay as migrated.
+      if (preset !== "custom") {
+        var info = legacyImageInfo(oldBg, image);
+        if (info) {
+          var imageSlot = info.luma < 0.5 ? "dark" : "light";
+          settings.legacyImageSlot = imageSlot;
+          settings[imageSlot].customLuma = info.luma;
+          settings[imageSlot].customColor = info.color;
+        }
+      }
+      return { settings: normalize(settings), legacySlot: legacySlot };
+    }
+    function resolveMode(settings, prefersDark) {
+      var mode = settings && (settings.mode === "light" || settings.mode === "dark") ? settings.mode : "auto";
+      return mode === "auto" ? (prefersDark ? "dark" : "light") : mode;
+    }
+    function activeSet(settings, prefersDark) {
+      var normalized = normalize(settings);
+      return normalized[resolveMode(normalized, !!prefersDark)];
+    }
+    function resolveTone(set) {
+      var source = set && typeof set === "object" ? set : {};
+      if (source.tone === "light" || source.tone === "dark") return source.tone;
+      var dim = clampInt(source.dim, 0, 60, 0);
+      var luma = 0.75;
+      if (source.wallpaper === "custom") {
+        var custom = Number(source.customLuma);
+        luma = source.customLuma !== null && source.customLuma !== undefined && isFinite(custom) ? Math.min(1, Math.max(0, custom)) : 0.75;
+      } else if (Object.prototype.hasOwnProperty.call(LUMAS, source.wallpaper)) {
+        luma = LUMAS[source.wallpaper];
+      }
+      return luma * (1 - dim / 100) < 0.5 ? "dark" : "light";
+    }
+    function systemPrefersDark() {
+      try {
+        return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      } catch (_error) {
+        return false;
+      }
     }
     function apply(settings) {
+      var normalized = normalize(settings);
+      var mode = resolveMode(normalized, systemPrefersDark());
+      var set = normalized[mode];
       var root = document.documentElement;
-      root.setAttribute("data-bg", settings.preset);
-      root.setAttribute("data-glass", resolveTone(settings));
-      root.style.setProperty("--bg-blur", settings.blur + "px");
-      root.style.setProperty("--bg-brightness", String(1 - settings.dim / 100));
-      root.style.setProperty("--glass-scale", String(Math.round((settings.opacity / DEFAULTS.opacity) * 1000) / 1000));
-      if (settings.customColor) {
-        root.style.setProperty("--bg-custom-color", settings.customColor);
-      } else {
-        root.style.removeProperty("--bg-custom-color");
-      }
+      root.setAttribute("data-theme", mode);
+      root.setAttribute("data-bg", set.wallpaper);
+      root.setAttribute("data-glass", resolveTone(set));
+      root.style.setProperty("--bg-blur", set.blur + "px");
+      root.style.setProperty("--bg-brightness", String(1 - set.dim / 100));
+      root.style.setProperty("--glass-scale", String(Math.round((set.opacity / DEFAULTS.light.opacity) * 1000) / 1000));
+      if (set.customColor) root.style.setProperty("--bg-custom-color", set.customColor);
+      else root.style.removeProperty("--bg-custom-color");
+      root.style.setProperty("color-scheme", mode);
     }
     function read() {
+      var storedText = null;
       try {
-        return normalize(JSON.parse(window.localStorage.getItem(KEY) || "null"));
+        storedText = window.localStorage.getItem(KEY);
       } catch (_error) {
-        return normalize(null);
+        storedText = null;
       }
+      if (storedText !== null && storedText !== undefined) {
+        try {
+          return normalize(JSON.parse(storedText));
+        } catch (_error) {
+          return normalize(null);
+        }
+      }
+      var legacyText = null;
+      try {
+        legacyText = window.localStorage.getItem(LEGACY_KEY);
+      } catch (_error) {
+        legacyText = null;
+      }
+      if (legacyText === null || legacyText === undefined) return normalize(null);
+      var legacy = null;
+      try {
+        legacy = JSON.parse(legacyText);
+      } catch (_error) {
+        legacy = null;
+      }
+      var migrated = migrateLegacy(legacy);
+      try {
+        window.localStorage.setItem(KEY, JSON.stringify(migrated.settings));
+      } catch (_error) {}
+      return migrated.settings;
     }
-    window.__amBackground = { key: KEY, defaults: DEFAULTS, normalize: normalize, resolveTone: resolveTone, apply: apply, read: read };
+    window.__amTheme = {
+      key: KEY,
+      legacyKey: LEGACY_KEY,
+      defaults: DEFAULTS,
+      normalize: normalize,
+      migrateLegacy: migrateLegacy,
+      resolveMode: resolveMode,
+      activeSet: activeSet,
+      resolveTone: resolveTone,
+      apply: apply,
+      read: read
+    };
+    try {
+      var scheme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+      var onScheme = function () {
+        var settings = read();
+        if (settings.mode === "auto") apply(settings);
+      };
+      if (scheme && scheme.addEventListener) scheme.addEventListener("change", onScheme);
+    } catch (_error) {}
     apply(read());
   })();
   `;
@@ -81,10 +252,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const UI_DICTIONARY = ${JSON.stringify(ADMIN_UI_TRANSLATIONS)};
   const UI_ICONS = ${JSON.stringify(ADMIN_UI_ICONS)};
   const DEV_TOOLS_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_DEV_TOOLS_STORAGE_KEY)};
-  const BG_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_BACKGROUND_STORAGE_KEY)};
+  const THEME_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_THEME_STORAGE_KEY)};
+  const LEGACY_BG_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY)};
   const BG_DB_NAME = "agentmemory-admin-ui";
   const BG_DB_STORE = "wallpapers";
-  const BG_DB_KEY = "custom";
+  const BG_DB_LEGACY_KEY = "custom";
   const BG_MAX_EDGE = 2560;
   const BG_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
   const HEALTH_CHECKS = ${JSON.stringify(ADMIN_UI_HEALTH_CHECKS.map(({ key, id, card, labelKey }) => ({ key, id, card, labelKey })))};
@@ -663,10 +835,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     homeHealthRingChip: document.getElementById("homeHealthRingChip"),
     homeRecentRows: document.getElementById("homeRecentRows"),
     bgPickerButton: document.getElementById("bgPickerButton"),
+    bgModeValue: document.getElementById("bgModeValue"),
     bgPopover: document.getElementById("bgPopover"),
     bgPopoverClose: document.getElementById("bgPopoverClose"),
     bgPresetButtons: Array.from(document.querySelectorAll("[data-bg-preset]")),
     bgCustomTile: document.getElementById("bgPresetCustom"),
+    bgCustomThumb: document.querySelector("#bgPresetCustom .bgThumbCustom"),
+    bgModeButtons: Array.from(document.querySelectorAll("[data-theme-mode]")),
+    bgSetButtons: Array.from(document.querySelectorAll("[data-theme-set]")),
     bgUploadButton: document.getElementById("bgUploadButton"),
     bgUploadInput: document.getElementById("bgUploadInput"),
     bgToneButtons: Array.from(document.querySelectorAll("[data-bg-tone]")),
@@ -932,14 +1108,16 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setConfirmCancel: document.getElementById("setConfirmCancel"),
   };
 
-  // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
+  // Theme panel state. The popover lives outside the polled views, so a refresh never touches it.
   const bg = {
-    api: window.__amBackground || null,
+    api: window.__amTheme || null,
     settings: null,
     open: false,
-    objectUrl: "",
-    customAvailable: false,
-    statusKey: "bg.savedHint",
+    editing: "light",
+    objectUrls: { light: "", dark: "" },
+    customAvailable: { light: false, dark: false },
+    customMeta: { light: { luma: null, color: null }, dark: { luma: null, color: null } },
+    statusKey: "theme.savedHint",
     statusError: false,
     busy: false,
   };
@@ -1254,7 +1432,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     syncLocaleButtons();
     syncPageTitle();
     rerenderStatusLines();
-    renderBackgroundControls();
+    renderThemeControls();
     renderOverview();
     renderHome();
     renderActivity();
@@ -10653,7 +10831,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function setBackgroundStatus(key, isError) {
     bg.statusKey = key;
     bg.statusError = !!isError;
-    renderBackgroundControls();
+    renderThemeControls();
   }
 
   function syncRange(input, output, value, label) {
@@ -10665,62 +10843,99 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setText(output, label);
   }
 
-  function renderBackgroundControls() {
+  function editingSlot() {
+    return bg.editing === "dark" ? "dark" : "light";
+  }
+
+  function systemPrefersDark() {
+    try {
+      return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function renderThemeControls() {
     if (!bg.settings) return;
     const settings = bg.settings;
+    const slot = editingSlot();
+    const set = settings[slot];
+    const modeKey = settings.mode === "light" ? "theme.modeLight" : settings.mode === "dark" ? "theme.modeDark" : "theme.modeAuto";
+    setText(els.bgModeValue, t(modeKey));
+    setAttr(els.bgModeValue, "data-i18n", modeKey);
+    els.bgModeButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", button.getAttribute("data-theme-mode") === settings.mode ? "true" : "false");
+    });
+    els.bgSetButtons.forEach((button) => {
+      setAttr(button, "aria-selected", button.getAttribute("data-theme-set") === slot ? "true" : "false");
+    });
     els.bgPresetButtons.forEach((button) => {
-      const selected = button.getAttribute("data-bg-preset") === settings.preset;
+      const preset = button.getAttribute("data-bg-preset");
+      let visible = false;
+      if (preset === "custom") visible = !!bg.customAvailable[slot];
+      else if (preset === "mist") visible = slot === "light";
+      else if (preset === "graphite") visible = slot === "dark";
+      setHidden(button, !visible);
+      const selected = visible && preset === set.wallpaper;
       button.classList.toggle("is-selected", selected);
       setAttr(button, "aria-pressed", selected ? "true" : "false");
     });
-    setHidden(els.bgCustomTile, !bg.customAvailable);
+    const meta = bg.customMeta[slot] || {};
+    const url = bg.objectUrls[slot];
+    const color = meta.color || set.customColor || "#8a93a6";
+    if (els.bgCustomThumb) {
+      els.bgCustomThumb.style.background = url ? 'url("' + url + '") center / cover no-repeat, ' + color : color;
+    }
     els.bgToneButtons.forEach((button) => {
-      setAttr(button, "aria-pressed", button.getAttribute("data-bg-tone") === settings.tone ? "true" : "false");
+      setAttr(button, "aria-pressed", button.getAttribute("data-bg-tone") === set.tone ? "true" : "false");
     });
-    syncRange(els.bgBlurInput, els.bgBlurValue, settings.blur, settings.blur + "px");
-    syncRange(els.bgDimInput, els.bgDimValue, settings.dim, settings.dim + "%");
-    syncRange(els.bgOpacityInput, els.bgOpacityValue, settings.opacity, settings.opacity + "%");
+    syncRange(els.bgBlurInput, els.bgBlurValue, set.blur, set.blur + "px");
+    syncRange(els.bgDimInput, els.bgDimValue, set.dim, set.dim + "%");
+    syncRange(els.bgOpacityInput, els.bgOpacityValue, set.opacity, set.opacity + "%");
     setText(els.bgStatus, t(bg.statusKey));
     if (els.bgStatus) els.bgStatus.classList.toggle("is-error", bg.statusError);
     setAttr(els.bgPickerButton, "aria-expanded", bg.open ? "true" : "false");
   }
 
-  function persistBackground() {
+  function persistTheme() {
     try {
-      window.localStorage.setItem(BG_STORAGE_KEY, JSON.stringify(bg.settings));
+      window.localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(bg.settings));
     } catch (_error) {
-      setBackgroundStatus("bg.storageFailed", true);
+      setBackgroundStatus("theme.storageFailed", true);
     }
   }
 
-  // Applies live through the data attributes and :root variables the boot script also uses.
-  function updateBackground(patch, persist) {
-    if (!bg.api) return;
-    bg.settings = bg.api.normalize(Object.assign({}, bg.settings, patch));
-    applyBackdrop();
-    renderBackgroundControls();
-    if (persist) persistBackground();
+  // Patches the set being edited (or patch.slot) and repaints the active set. Mode is separate from glass tone.
+  function updateTheme(patch, persist) {
+    if (!bg.api || !bg.settings) return;
+    const slot = patch.slot === "dark" || patch.slot === "light" ? patch.slot : editingSlot();
+    const next = {
+      v: 1,
+      mode: patch.mode === "light" || patch.mode === "dark" || patch.mode === "auto" ? patch.mode : bg.settings.mode,
+      legacyImageSlot: bg.settings.legacyImageSlot,
+      light: Object.assign({}, bg.settings.light),
+      dark: Object.assign({}, bg.settings.dark),
+    };
+    if (patch.set) next[slot] = Object.assign({}, next[slot], patch.set);
+    bg.settings = bg.api.normalize(next);
+    applyTheme();
+    renderThemeControls();
+    if (persist) persistTheme();
   }
 
-  // Activity, Memory, Pipeline and Digests have their own default backdrop (artwork, light or dark with the system).
-  // It shows while the user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
-  function usesActivityBackdrop() {
-    const settings = bg.settings;
-    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView" || state.activeView === "projectsView" || state.activeView === "skillsView" || state.activeView === "settingsView") && !!settings && !settings.pinned &&
-      settings.preset === bg.api.defaults.preset && settings.tone === "auto";
+  function syncActiveWallpaperImage() {
+    if (!bg.api || !bg.settings) return;
+    const mode = bg.api.resolveMode(bg.settings, systemPrefersDark());
+    const url = bg.settings[mode].wallpaper === "custom" ? bg.objectUrls[mode] : "";
+    if (url) document.documentElement.style.setProperty("--bg-image", 'url("' + url + '")');
+    else document.documentElement.style.removeProperty("--bg-image");
   }
 
-  function applyBackdrop() {
+  // The same theme on every view. The boot script paints it before first load; navigation calls this again.
+  function applyTheme() {
     if (!bg.api || !bg.settings) return;
     bg.api.apply(bg.settings);
-    const root = document.documentElement;
-    if (!usesActivityBackdrop()) {
-      if (root.hasAttribute("data-act-bg")) root.removeAttribute("data-act-bg");
-      return;
-    }
-    const scheme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    root.setAttribute("data-act-bg", scheme);
-    root.setAttribute("data-glass", scheme);
+    syncActiveWallpaperImage();
   }
 
   function openWallpaperDb() {
@@ -10765,30 +10980,144 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }));
   }
 
-  function useWallpaperBlob(blob) {
-    const previous = bg.objectUrl;
-    bg.objectUrl = URL.createObjectURL(blob);
-    document.documentElement.style.setProperty("--bg-image", 'url("' + bg.objectUrl + '")');
-    bg.customAvailable = true;
+  function useSetBlob(slot, blob) {
+    const previous = bg.objectUrls[slot];
+    bg.objectUrls[slot] = URL.createObjectURL(blob);
+    bg.customAvailable[slot] = true;
     if (previous) URL.revokeObjectURL(previous);
+    syncActiveWallpaperImage();
   }
 
-  async function loadStoredWallpaper() {
-    let record = null;
+  // Copies the legacy "custom" record into slot when that slot is still empty. Never deletes or overwrites "custom".
+  async function copyLegacyWallpaper(slot) {
+    let existing = null;
     try {
-      record = await withWallpaperStore("readonly", (store) => store.get(BG_DB_KEY));
+      existing = await withWallpaperStore("readonly", (store) => store.get(slot));
     } catch (_error) {
-      record = null;
+      return;
     }
-    if (record && record.blob instanceof Blob) {
-      useWallpaperBlob(record.blob);
-    } else if (bg.settings && bg.settings.preset === "custom") {
-      // The image was cleared with the site data (or never stored): fall back to the default preset.
-      updateBackground({ preset: bg.api.defaults.preset, pinned: false }, true);
-      bg.statusKey = "bg.customMissing";
+    if (existing) return;
+    let legacy = null;
+    try {
+      legacy = await withWallpaperStore("readonly", (store) => store.get(BG_DB_LEGACY_KEY));
+    } catch (_error) {
+      legacy = null;
+    }
+    if (!legacy) return;
+    try {
+      await withWallpaperStore("readwrite", (store) => store.put(legacy, slot));
+    } catch (_error) {
+      // The legacy record stays under its own key either way.
+    }
+  }
+
+  // missing: true only when the key was read and has no usable blob. A thrown read is not "missing".
+  async function readWallpaper(key) {
+    try {
+      const record = await withWallpaperStore("readonly", (store) => store.get(key));
+      const usable = !!(record && record.blob instanceof Blob);
+      return { record: usable ? record : null, missing: !usable };
+    } catch (_error) {
+      return { record: null, missing: false };
+    }
+  }
+
+  function rememberWallpaper(slot, record) {
+    const meta = bg.customMeta[slot] || { luma: null, color: null };
+    bg.customMeta[slot] = {
+      luma: record.luma === undefined || record.luma === null ? meta.luma : record.luma,
+      color: record.color || meta.color || null,
+    };
+    useSetBlob(slot, record.blob);
+  }
+
+  async function loadSetWallpaper(slot) {
+    const own = await readWallpaper(slot);
+    if (own.record) {
+      rememberWallpaper(slot, own.record);
+      return;
+    }
+    if (!own.missing) return;
+    // The copy into this set may have failed. The legacy key still holds the image; keep the selection.
+    if (bg.settings && bg.settings.legacyImageSlot === slot) {
+      const legacy = await readWallpaper(BG_DB_LEGACY_KEY);
+      if (legacy.record) {
+        rememberWallpaper(slot, legacy.record);
+        await copyLegacyWallpaper(slot);
+        return;
+      }
+      if (!legacy.missing) return;
+    }
+    if (!bg.settings || bg.settings[slot].wallpaper !== "custom") return;
+    const next = {
+      v: 1,
+      mode: bg.settings.mode,
+      legacyImageSlot: bg.settings.legacyImageSlot,
+      light: Object.assign({}, bg.settings.light),
+      dark: Object.assign({}, bg.settings.dark),
+    };
+    next[slot] = Object.assign({}, next[slot], { wallpaper: slot === "dark" ? "graphite" : "mist" });
+    bg.settings = bg.api.normalize(next);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(bg.settings));
+      bg.statusKey = "theme.customMissing";
+      bg.statusError = true;
+    } catch (_error) {
+      bg.statusKey = "theme.storageFailed";
       bg.statusError = true;
     }
-    renderBackgroundControls();
+  }
+
+  // Parks a legacy upload on one set when am.theme does not name a slot yet. Does not delete "custom".
+  async function adoptLegacyImage() {
+    if (!bg.api || !bg.settings) return;
+    let slot = bg.settings.legacyImageSlot === "light" || bg.settings.legacyImageSlot === "dark" ? bg.settings.legacyImageSlot : "";
+    if (!slot) {
+      let oldBg = null;
+      try {
+        const raw = window.localStorage.getItem(LEGACY_BG_STORAGE_KEY);
+        if (raw) oldBg = JSON.parse(raw);
+      } catch (_error) {
+        oldBg = null;
+      }
+      const legacy = await readWallpaper(BG_DB_LEGACY_KEY);
+      if (legacy.record) {
+        const computed = bg.api.migrateLegacy(oldBg, { luma: legacy.record.luma, color: legacy.record.color });
+        const assigned = computed.settings.legacyImageSlot;
+        if (assigned === "light" || assigned === "dark") {
+          const presetCustom = !!(oldBg && oldBg.preset === "custom");
+          const next = {
+            v: 1,
+            mode: bg.settings.mode,
+            legacyImageSlot: assigned,
+            light: Object.assign({}, bg.settings.light),
+            dark: Object.assign({}, bg.settings.dark),
+          };
+          if (!presetCustom) {
+            next[assigned] = Object.assign({}, next[assigned], {
+              customLuma: computed.settings[assigned].customLuma,
+              customColor: computed.settings[assigned].customColor,
+            });
+            bg.customMeta[assigned] = {
+              luma: computed.settings[assigned].customLuma,
+              color: computed.settings[assigned].customColor,
+            };
+          }
+          bg.settings = bg.api.normalize(next);
+          persistTheme();
+          slot = assigned;
+        }
+      }
+    }
+    if (slot === "light" || slot === "dark") await copyLegacyWallpaper(slot);
+  }
+
+  async function loadStoredWallpapers() {
+    await adoptLegacyImage();
+    await loadSetWallpaper("light");
+    await loadSetWallpaper("dark");
+    applyTheme();
+    renderThemeControls();
   }
 
   // Sampled alpha scan. stride 4 checks every 4th pixel of every 4th row so a 2560px canvas stays cheap.
@@ -10888,25 +11217,27 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   async function handleWallpaperUpload(file) {
     if (!file || bg.busy) return;
+    const slot = editingSlot();
     if (!/^image\\//.test(String(file.type || ""))) {
-      setBackgroundStatus("bg.uploadNotImage", true);
+      setBackgroundStatus("theme.uploadNotImage", true);
       return;
     }
     if (file.size > BG_MAX_UPLOAD_BYTES) {
-      setBackgroundStatus("bg.uploadTooLarge", true);
+      setBackgroundStatus("theme.uploadTooLarge", true);
       return;
     }
     bg.busy = true;
-    setBackgroundStatus("bg.uploadWorking", false);
+    setBackgroundStatus("theme.uploadWorking", false);
     let prepared;
     try {
       prepared = await prepareWallpaper(file);
     } catch (_error) {
       bg.busy = false;
-      setBackgroundStatus("bg.uploadFailed", true);
+      setBackgroundStatus("theme.uploadFailed", true);
       return;
     }
-    useWallpaperBlob(prepared.blob);
+    useSetBlob(slot, prepared.blob);
+    bg.customMeta[slot] = { luma: prepared.luma, color: prepared.color };
     let stored = true;
     try {
       await withWallpaperStore("readwrite", (store) => store.put({
@@ -10916,25 +11247,28 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         luma: prepared.luma,
         color: prepared.color,
         savedAt: new Date().toISOString(),
-      }, BG_DB_KEY));
+      }, slot));
     } catch (_error) {
       stored = false;
     }
     bg.busy = false;
-    updateBackground({ preset: "custom", customLuma: prepared.luma, customColor: prepared.color, pinned: true }, true);
-    setBackgroundStatus(stored ? "bg.uploadSaved" : "bg.uploadSessionOnly", !stored);
+    updateTheme({ slot: slot, set: { wallpaper: "custom", customLuma: prepared.luma, customColor: prepared.color } }, true);
+    setBackgroundStatus(stored ? "theme.uploadSaved" : "theme.uploadSessionOnly", !stored);
   }
 
   function setBackgroundPickerOpen(open, restoreFocus) {
     if (!els.bgPopover) return;
     bg.open = !!open;
+    if (bg.open && bg.api && bg.settings) bg.editing = bg.api.resolveMode(bg.settings, systemPrefersDark());
     setHidden(els.bgPopover, !bg.open);
     els.bgPopover.classList.toggle("is-active", bg.open);
-    renderBackgroundControls();
+    renderThemeControls();
     if (bg.open) {
       const selected = els.bgPresetButtons.find((button) => button.classList.contains("is-selected") && !button.hidden);
-      (selected || els.bgPresetButtons[0]).focus();
-    } else if (restoreFocus) {
+      const fallback = els.bgPresetButtons.find((button) => !button.hidden);
+      const target = selected || fallback || els.bgPresetButtons[0];
+      if (target) target.focus();
+    } else if (restoreFocus && els.bgPickerButton) {
       els.bgPickerButton.focus();
     }
   }
@@ -10945,33 +11279,60 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
     bg.settings = bg.api.read();
-    applyBackdrop();
-    renderBackgroundControls();
-    void loadStoredWallpaper();
+    bg.editing = bg.api.resolveMode(bg.settings, systemPrefersDark());
+    ["light", "dark"].forEach((slot) => {
+      bg.customMeta[slot] = { luma: bg.settings[slot].customLuma, color: bg.settings[slot].customColor };
+    });
+    applyTheme();
+    renderThemeControls();
+    void loadStoredWallpapers();
   }
 
   function bindBackgroundEvents() {
     if (!bg.api || !els.bgPopover) return;
     const schemeQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
-    if (schemeQuery && schemeQuery.addEventListener) schemeQuery.addEventListener("change", applyBackdrop);
+    if (schemeQuery && schemeQuery.addEventListener) {
+      schemeQuery.addEventListener("change", () => {
+        if (!bg.settings || bg.settings.mode !== "auto") return;
+        applyTheme();
+        renderThemeControls();
+      });
+    }
     els.bgPickerButton.addEventListener("click", () => setBackgroundPickerOpen(!bg.open, false));
     els.bgPopoverClose.addEventListener("click", () => setBackgroundPickerOpen(false, true));
     els.bgDoneButton.addEventListener("click", () => setBackgroundPickerOpen(false, true));
+    els.bgSetButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const slot = button.getAttribute("data-theme-set");
+        if (slot !== "light" && slot !== "dark") return;
+        bg.editing = slot;
+        renderThemeControls();
+      });
+    });
+    els.bgModeButtons.forEach((button) => {
+      button.addEventListener("click", () => updateTheme({ mode: button.getAttribute("data-theme-mode") }, true));
+    });
     els.bgPresetButtons.forEach((button) => {
       button.addEventListener("click", () => {
         const preset = button.getAttribute("data-bg-preset");
-        if (preset === "custom" && !bg.customAvailable) return;
-        updateBackground({ preset, pinned: true }, true);
+        const slot = editingSlot();
+        if (preset === "custom") {
+          if (!bg.customAvailable[slot]) return;
+          const meta = bg.customMeta[slot] || {};
+          updateTheme({ set: { wallpaper: "custom", customLuma: meta.luma, customColor: meta.color } }, true);
+          return;
+        }
+        updateTheme({ set: { wallpaper: preset } }, true);
       });
     });
     els.bgToneButtons.forEach((button) => {
-      button.addEventListener("click", () => updateBackground({ tone: button.getAttribute("data-bg-tone") }, true));
+      button.addEventListener("click", () => updateTheme({ set: { tone: button.getAttribute("data-bg-tone") } }, true));
     });
     [[els.bgBlurInput, "blur"], [els.bgDimInput, "dim"], [els.bgOpacityInput, "opacity"]].forEach(([input, field]) => {
       if (!input) return;
       // Live while dragging; written to storage once the value settles.
-      input.addEventListener("input", () => updateBackground({ [field]: Number(input.value) }, false));
-      input.addEventListener("change", () => persistBackground());
+      input.addEventListener("input", () => updateTheme({ set: { [field]: Number(input.value) } }, false));
+      input.addEventListener("change", () => persistTheme());
     });
     els.bgUploadButton.addEventListener("click", () => els.bgUploadInput.click());
     els.bgUploadInput.addEventListener("change", () => {
@@ -10980,9 +11341,19 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       void handleWallpaperUpload(file);
     });
     els.bgResetButton.addEventListener("click", () => {
-      const defaults = bg.api.defaults;
-      updateBackground({ preset: defaults.preset, tone: defaults.tone, blur: defaults.blur, dim: defaults.dim, opacity: defaults.opacity, pinned: false }, true);
-      setBackgroundStatus("bg.resetDone", false);
+      const defaults = bg.api.defaults[editingSlot()];
+      updateTheme({
+        set: {
+          wallpaper: defaults.wallpaper,
+          tone: defaults.tone,
+          blur: defaults.blur,
+          dim: defaults.dim,
+          opacity: defaults.opacity,
+          customLuma: null,
+          customColor: null,
+        },
+      }, true);
+      setBackgroundStatus("theme.resetDone", false);
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && bg.open) {
@@ -11766,7 +12137,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
     syncNavItems();
     syncPageTitle();
-    applyBackdrop();
+    applyTheme();
     if (nextView === "homeView") {
       void refreshHomeData(false);
     }

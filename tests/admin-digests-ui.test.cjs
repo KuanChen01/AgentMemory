@@ -116,7 +116,7 @@ test('Digests client reads digest-list by covered day with the tz offset, and th
   assert.match(load, /error\.status === 400/);
   assert.match(load, /mergeDigestDays\(dig\.days, days\)/);
   assert.match(uiClientFunction('renderDigestList'), /item\.covered_day/);
-  assert.match(uiClientFunction('usesActivityBackdrop'), /state\.activeView === "digestsView"/);
+  assert.doesNotMatch(uiScript, /usesActivityBackdrop|data-act-bg/);
   assert.match(uiClientFunction('memoryDrawerIsDocked'), /host === "digestsView"/);
   assert.match(uiClientFunction('applyReadPolicyToViews'), /dig\.readsDisabled = true/);
   assert.match(uiClientFunction('activateView'), /showDigestsView\(\)/);

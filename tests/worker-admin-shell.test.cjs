@@ -9,13 +9,13 @@ const { randomUUID } = require('node:crypto');
 
 const { renderAdminPageHtml } = require('../dist/services/admin-ui.js');
 const { ADMIN_UI_TRANSLATIONS } = require('../dist/services/admin-ui-copy.js');
-const { ADMIN_UI_NAV_ITEMS, ADMIN_UI_DEV_PANELS, ADMIN_UI_HEALTH_CHECKS } = require('../dist/services/admin-ui-markup.js');
+const { ADMIN_UI_NAV_ITEMS, ADMIN_UI_DEV_PANELS, ADMIN_UI_HEALTH_CHECKS, ADMIN_UI_ICONS } = require('../dist/services/admin-ui-markup.js');
 const { ADMIN_UI_THEME, ADMIN_UI_WALLPAPERS } = require('../dist/services/admin-ui-theme.js');
-const { ACTIVITY_BG_DARK_WEBP, ACTIVITY_BG_LIGHT_WEBP } = require('../dist/services/admin-ui-bg-assets.js');
 const {
-  ADMIN_UI_BACKGROUND_STORAGE_KEY,
-  ADMIN_UI_BACKGROUND_DEFAULTS,
-  renderAdminBackgroundBootScript,
+  ADMIN_UI_THEME_STORAGE_KEY,
+  ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY,
+  ADMIN_UI_THEME_DEFAULTS,
+  renderAdminThemeBootScript,
 } = require('../dist/services/admin-ui-client.js');
 const { DatabaseManager } = require('../dist/services/db.js');
 const { withWorker } = require('./helpers/task-worker.cjs');
@@ -123,8 +123,8 @@ test('every i18n key used by the markup and the shell exists in en and zh-CN', (
   const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
   const used = new Set();
   for (const match of html.matchAll(/data-i18n(?:-placeholder|-title|-aria-label)?="([^"]+)"/g)) used.add(match[1]);
-  for (const match of script.matchAll(/\bt\("((?:nav|home|shell|devtools|bg)\.[\w.]+)"/g)) used.add(match[1]);
-  for (const match of script.matchAll(/"((?:nav|home|shell|devtools|bg)\.[A-Za-z0-9.]+)"/g)) used.add(match[1]);
+  for (const match of script.matchAll(/\bt\("((?:nav|home|shell|devtools|theme)\.[\w.]+)"/g)) used.add(match[1]);
+  for (const match of script.matchAll(/"((?:nav|home|shell|devtools|theme)\.[A-Za-z0-9.]+)"/g)) used.add(match[1]);
   for (const item of [...ADMIN_UI_NAV_ITEMS, ...ADMIN_UI_DEV_PANELS, ...ADMIN_UI_WALLPAPERS]) used.add(item.key);
   for (const check of ADMIN_UI_HEALTH_CHECKS) used.add(check.labelKey);
   assert.ok(used.size > 50);
@@ -134,11 +134,11 @@ test('every i18n key used by the markup and the shell exists in en and zh-CN', (
     assert.ok(Object.prototype.hasOwnProperty.call(zh, key), `zh-CN is missing ${key}`);
   }
   // New shell namespaces must stay in parity between the two locales.
-  const shellKeys = (dict) => Object.keys(dict).filter((key) => /^(nav|home|shell|devtools|bg)\./.test(key)).sort();
+  const shellKeys = (dict) => Object.keys(dict).filter((key) => /^(nav|home|shell|devtools|theme)\./.test(key)).sort();
   assert.deepEqual(shellKeys(zh), shellKeys(en));
   assert.equal(zh['home.allClear'], '一切正常');
   assert.equal(zh['nav.devTools'], '开发者工具');
-  assert.equal(zh['bg.title'], '背景');
+  assert.equal(zh['theme.title'], '主题');
   for (const key of shellKeys(en)) {
     assert.ok(String(en[key]).trim() && String(zh[key]).trim(), `${key} must not be empty`);
   }
@@ -180,28 +180,38 @@ test('health ring copy reads naturally in both locales', () => {
   assert.equal(format(zh['home.checksPassing'], { n: 4, total: 5 }), '4 / 5 项通过');
 });
 
-test('sidebar Background row opens a labelled popover with presets, upload, tone, sliders and reset', () => {
+test('sidebar Theme row opens a labelled panel with mode, sets, presets, upload, tone, sliders and reset', () => {
   const sidebar = html.slice(html.indexOf('id="appSidebar"'), html.indexOf('</aside>'));
   const button = elementTag('bgPickerButton');
-  assert.ok(sidebar.includes('id="bgPickerButton"'), 'Background row sits in the sidebar');
-  assert.ok(sidebar.includes('id="bgSwatch"'));
+  assert.ok(sidebar.includes('id="bgPickerButton"'), 'Theme row sits in the sidebar');
+  const themeRow = sidebar.slice(sidebar.indexOf('id="bgPickerButton"'), sidebar.indexOf('class="devToggle"'));
+  assert.doesNotMatch(themeRow, /bgSwatch|iosSwitch/);
+  assert.ok(sidebar.includes(ADMIN_UI_ICONS.theme), 'theme icon');
+  assert.ok(sidebar.includes(ADMIN_UI_ICONS.chevronRight), 'trailing chevron');
+  assert.match(sidebar, /id="bgModeValue"/);
+  assert.match(sidebar, /class="sidebarRowValue"/);
+  assert.match(sidebar, /data-i18n="theme\.title"/);
+  assert.match(sidebar, />Theme</);
   assert.match(button, /aria-controls="bgPopover"/);
   assert.match(button, /aria-expanded="false"/);
   assert.match(button, /aria-haspopup="dialog"/);
-  assert.match(sidebar, /data-i18n="bg\.title"/);
+  assert.doesNotMatch(sidebar, /background/i);
+  assert.doesNotMatch(ADMIN_UI_THEME, /\.bgSwatch\b/);
 
-  // The popover is a sibling of the sidebar: inside it, the sidebar's backdrop-filter would clip its blur.
+  // The panel is a sibling of the sidebar: inside it, the sidebar's backdrop-filter would clip its blur.
   assert.ok(!sidebar.includes('id="bgPopover"'));
   const popoverTag = elementTag('bgPopover');
   assert.match(popoverTag, /role="dialog"/);
   assert.match(popoverTag, /aria-labelledby="bgPopoverTitle"/);
   assert.match(popoverTag, /\bhidden\b/);
   elementTag('bgPopoverTitle');
-  assert.match(elementTag('bgPopoverClose'), /data-i18n-aria-label="bg\.close"/);
+  assert.match(elementTag('bgPopoverClose'), /data-i18n-aria-label="theme\.close"/);
 
   const popover = html.slice(html.indexOf('id="bgPopover"'), html.indexOf('</section>', html.indexOf('id="bgPopover"')));
+  assert.doesNotMatch(popover, /background/i);
+  assert.doesNotMatch(popover, /背景/);
   assert.deepEqual(ADMIN_UI_WALLPAPERS.map((wallpaper) => [wallpaper.id, wallpaper.tone]), [
-    ['aurora', 'light'], ['sunset', 'light'], ['lagoon', 'light'], ['mist', 'light'], ['night', 'dark'], ['graphite', 'dark'],
+    ['mist', 'light'], ['graphite', 'dark'],
   ]);
   const presets = [...popover.matchAll(/data-bg-preset="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(presets, [...ADMIN_UI_WALLPAPERS.map((wallpaper) => wallpaper.id), 'custom']);
@@ -210,11 +220,23 @@ test('sidebar Background row opens a labelled popover with presets, upload, tone
     assert.match(ADMIN_UI_THEME, new RegExp(`html\\[data-bg="${wallpaper.id}"\\]`));
     assert.match(ADMIN_UI_THEME, new RegExp(`\\.bgThumb\\[data-wall="${wallpaper.id}"\\]`));
   }
+  assert.doesNotMatch(ADMIN_UI_THEME, /data-bg="(?:aurora|sunset|lagoon|night)"/);
   assert.match(elementTag('bgPresetCustom'), /\bhidden\b/);
   elementTag('bgUploadButton');
   const upload = elementTag('bgUploadInput');
   assert.match(upload, /type="file"/);
   assert.match(upload, /accept="image\/\*"/);
+
+  const mode = elementTag('bgModeControl');
+  assert.match(mode, /role="group"/);
+  assert.match(mode, /aria-labelledby="bgModeLabel"/);
+  assert.deepEqual([...popover.matchAll(/data-theme-mode="([^"]+)"/g)].map((match) => match[1]), ['auto', 'light', 'dark']);
+  const sets = elementTag('bgSetControl');
+  assert.match(sets, /role="tablist"/);
+  assert.deepEqual([...popover.matchAll(/data-theme-set="([^"]+)"/g)].map((match) => match[1]), ['light', 'dark']);
+  assert.match(elementTag('bgSetLight'), /data-i18n="theme\.tabLight"/);
+  assert.match(elementTag('bgSetLight'), /data-i18n-aria-label="theme\.tabLightAria"/);
+  assert.match(elementTag('bgSetDark'), /data-i18n-aria-label="theme\.tabDarkAria"/);
 
   const tone = elementTag('bgToneControl');
   assert.match(tone, /role="group"/);
@@ -311,9 +333,6 @@ test('Activity drawer clamps long summaries, the Earlier panel stays in the view
   assert.match(script, /data-narrative-toggle/);
   // The client script is a template string, so the shipped page must still escape the character class.
   assert.match(script, /trimmed\.match\(\/\[\{\}\\\[\\\]\]\/g\)/);
-  const swatchCss = ADMIN_UI_THEME.slice(ADMIN_UI_THEME.indexOf('.bgSwatch {'), ADMIN_UI_THEME.indexOf('.bgSwatch::after'));
-  assert.doesNotMatch(swatchCss, /wallpaper-swatch/);
-  assert.match(swatchCss, /border-radius:\s*999px/);
   assert.equal(ADMIN_UI_TRANSLATIONS.en['activity.drawerShowMore'], 'Show more');
   assert.equal(ADMIN_UI_TRANSLATIONS.en['activity.drawerShowLess'], 'Show less');
   assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['activity.drawerShowMore'], '显示更多');
@@ -393,32 +412,14 @@ test('Activity gives every visible project its own dot colour until the palette 
   assert.equal(result.upper, result.first[1], 'paths match case-insensitively');
 });
 
-test('Activity shows its own default backdrop until the user picks a background', () => {
-  assert.match(ADMIN_UI_THEME, /html\[data-act-bg="light"\] \{\s*--wallpaper:/);
-  assert.match(ADMIN_UI_THEME, /html\[data-act-bg="dark"\] \{\s*--wallpaper:/);
-  const uses = extractClientFunction(script, 'usesActivityBackdrop');
-  assert.match(uses, /state\.activeView === "activityView"/);
-  assert.match(uses, /!settings\.pinned/);
-  assert.match(uses, /settings\.tone === "auto"/);
-  assert.match(extractClientFunction(script, 'applyBackdrop'), /prefers-color-scheme: dark/);
-  // Picking a preset or uploading pins the choice; Reset returns to the default.
-  assert.match(script, /updateBackground\(\{ preset, pinned: true \}, true\)/);
-  assert.match(script, /pinned: false \}, true\)/);
-  const boot = renderAdminBackgroundBootScript();
-  assert.match(boot, /pinned: !!\(raw && typeof raw === "object"\) && source\.pinned !== false/);
-  const pinnedFor = (stored) => {
-    const context = {
-      document: { documentElement: { setAttribute() {}, style: { setProperty() {}, removeProperty() {} } } },
-      localStorage: { getItem() { return stored; } },
-    };
-    context.window = context;
-    vm.runInNewContext(boot, context);
-    return context.window.__amBackground.read().pinned;
-  };
-  assert.equal(pinnedFor(null), false);
-  assert.equal(pinnedFor(JSON.stringify({ preset: 'night', blur: 8 })), true);
-  assert.equal(pinnedFor(JSON.stringify({ preset: 'aurora', pinned: false })), false);
-  assert.equal(pinnedFor(JSON.stringify({ preset: 'sunset', pinned: true })), true);
+test('every view shares one theme and the client has no activity backdrop path', () => {
+  assert.doesNotMatch(script, /data-act-bg/);
+  assert.doesNotMatch(script, /usesActivityBackdrop/);
+  assert.doesNotMatch(ADMIN_UI_THEME, /data-act-bg/);
+  assert.doesNotMatch(renderAdminThemeBootScript(), /data-act-bg|usesActivityBackdrop/);
+  assert.match(script, /function applyTheme\(/);
+  assert.match(extractClientFunction(script, 'activateView'), /applyTheme\(\)/);
+  assert.match(script, /removeProperty\("--bg-image"\)/);
 });
 
 test('Earlier legacy and mixed days include compacted memories in the count', () => {
@@ -508,24 +509,34 @@ test('the first poll after midnight reloads a Today or Yesterday window loaded b
   assert.equal(result.localDay, '');
 });
 
-test('Activity default backdrop uses the light and dark artwork', () => {
-  function actWallpaper(scheme) {
-    const start = ADMIN_UI_THEME.indexOf(`html[data-act-bg="${scheme}"] {`);
-    assert.ok(start >= 0, scheme);
-    return ADMIN_UI_THEME.slice(start, ADMIN_UI_THEME.indexOf('}', start));
+test('theme copy has no background wording in either locale', () => {
+  const en = ADMIN_UI_TRANSLATIONS.en;
+  const zh = ADMIN_UI_TRANSLATIONS['zh-CN'];
+  assert.equal(en['theme.title'], 'Theme');
+  assert.equal(zh['theme.title'], '主题');
+  assert.equal(en['theme.lead'], 'Light and dark sets, each with its own wallpaper and glass');
+  assert.equal(zh['theme.lead'], '浅色、深色各一套，可分别设置壁纸和玻璃');
+  assert.equal(en['theme.modeAuto'], 'Auto');
+  assert.equal(en['theme.modeLight'], 'Light');
+  assert.equal(en['theme.modeDark'], 'Dark');
+  assert.equal(zh['theme.modeAuto'], '跟随系统');
+  assert.equal(zh['theme.modeLight'], '浅色');
+  assert.equal(zh['theme.modeDark'], '深色');
+  assert.equal(en['theme.tabLight'], 'Light set');
+  assert.equal(en['theme.tabDark'], 'Dark set');
+  assert.equal(zh['theme.tabLight'], '浅色');
+  assert.equal(zh['theme.tabDark'], '深色');
+  assert.equal(zh['theme.tabLightAria'], '浅色主题');
+  assert.equal(zh['theme.tabDarkAria'], '深色主题');
+  for (const [locale, dict] of [['en', en], ['zh-CN', zh]]) {
+    for (const [key, value] of Object.entries(dict)) {
+      if (!key.startsWith('theme.')) continue;
+      assert.equal(/background/i.test(String(value)), false, `${locale} ${key}`);
+      assert.equal(String(value).includes('背景'), false, `${locale} ${key}`);
+    }
   }
-  const light = actWallpaper('light');
-  const dark = actWallpaper('dark');
-  assert.ok(light.includes(ACTIVITY_BG_LIGHT_WEBP));
-  assert.ok(dark.includes(ACTIVITY_BG_DARK_WEBP));
-  assert.equal(light.includes(ACTIVITY_BG_DARK_WEBP), false);
-  assert.equal(dark.includes(ACTIVITY_BG_LIGHT_WEBP), false);
-  assert.match(light, /center \/ cover no-repeat, #e7eefb/);
-  assert.match(dark, /center \/ cover no-repeat, #0b1226/);
-  assert.match(light, /--wallpaper-base:\s*#e7eefb/);
-  assert.match(dark, /--wallpaper-base:\s*#0b1226/);
-  assert.doesNotMatch(light, /radial-gradient/);
-  assert.doesNotMatch(dark, /radial-gradient/);
+  assert.equal(Object.keys(en).some((key) => key.startsWith('bg.')), false);
+  assert.equal(Object.keys(zh).some((key) => key.startsWith('bg.')), false);
 });
 
 test('top bar keeps Read and Write in one compact pill and the language in a menu', () => {
@@ -660,7 +671,7 @@ test('Memory client reads /admin/api/memories, debounces search and polls only t
     assert.match(filtered, guard);
   }
   assert.match(extractClientFunction(script, 'pollVisibleView'), /memoryCanPoll\(\)/);
-  assert.match(extractClientFunction(script, 'usesActivityBackdrop'), /state\.activeView === "memoryView"/);
+  assert.doesNotMatch(script, /usesActivityBackdrop|data-act-bg/);
   const merged = vm.runInNewContext(`
     ${extractClientFunction(script, 'mergeMemoryDays')}
     mergeMemoryDays([{ day: '2026-10-16', count: 4 }, { day: '2026-10-15', count: 9 }], [{ day: '2026-10-15', count: 9 }, { day: '2026-10-14', count: 2 }]);
@@ -953,9 +964,9 @@ test('custom wallpaper rejects files over 10 MB before decode and keeps transpar
   assert.ok(prepareAt >= 0, 'prepareWallpaper call inside handleWallpaperUpload');
   assert.ok(sizeAt < prepareAt, 'size check runs before decode');
   assert.ok(busyAt > sizeAt, 'oversized files return before bg.busy is set');
-  assert.match(upload, /setBackgroundStatus\("bg\.uploadTooLarge", true\)/);
-  assert.equal(ADMIN_UI_TRANSLATIONS.en['bg.uploadTooLarge'], 'That image is larger than 10 MB. Pick a smaller one.');
-  assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['bg.uploadTooLarge'], '图片超过 10 MB，请换一张小一点的。');
+  assert.match(upload, /setBackgroundStatus\("theme\.uploadTooLarge", true\)/);
+  assert.equal(ADMIN_UI_TRANSLATIONS.en['theme.uploadTooLarge'], 'That image is larger than 10 MB. Pick a smaller one.');
+  assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['theme.uploadTooLarge'], '图片超过 10 MB，请换一张小一点的。');
 
   const width = 8;
   const height = 8;
@@ -984,44 +995,218 @@ test('custom wallpaper rejects files over 10 MB before decode and keeps transpar
   assert.deepEqual([...result.opaqueTypes], ['image/jpeg']);
 });
 
-test('background settings persist under am.bg and apply in <head> before first paint', () => {
-  assert.equal(ADMIN_UI_BACKGROUND_STORAGE_KEY, 'am.bg');
-  assert.deepEqual(ADMIN_UI_BACKGROUND_DEFAULTS, { preset: 'aurora', tone: 'auto', blur: 12, dim: 0, opacity: 30 });
-  const head = html.slice(0, html.indexOf('<body>'));
-  const boot = head.match(/<script id="amBackgroundBoot">([\s\S]*?)<\/script>/);
-  assert.ok(boot, 'boot script is inlined in <head>');
-  assert.match(boot[1], /"am\.bg"/);
-  assert.match(script, /BG_STORAGE_KEY = "am\.bg"/);
-  assert.doesNotThrow(() => new vm.Script(boot[1]));
-  assert.equal(boot[1], renderAdminBackgroundBootScript());
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
-  const run = (stored) => {
-    const attributes = {};
-    const styles = {};
-    const documentElement = {
-      setAttribute: (name, value) => { attributes[name] = String(value); },
-      style: {
-        setProperty: (name, value) => { styles[name] = String(value); },
-        removeProperty: (name) => { delete styles[name]; },
-      },
-    };
-    const window = { localStorage: { getItem: (key) => (key === 'am.bg' && stored !== undefined ? JSON.stringify(stored) : null) } };
-    vm.runInNewContext(boot[1], { window, document: { documentElement } });
-    return { attributes, styles, api: window.__amBackground };
+function runThemeBoot({ theme, legacy, prefersDark = false } = {}) {
+  const storage = {};
+  if (theme !== undefined) storage['am.theme'] = typeof theme === 'string' ? theme : JSON.stringify(theme);
+  if (legacy !== undefined) storage['am.bg'] = typeof legacy === 'string' ? legacy : JSON.stringify(legacy);
+  const legacySnapshot = storage['am.bg'];
+  const attributes = {};
+  const styles = {};
+  const writes = [];
+  const listeners = [];
+  const media = { matches: !!prefersDark };
+  const documentElement = {
+    setAttribute: (name, value) => { attributes[name] = String(value); },
+    style: {
+      setProperty: (name, value) => { styles[name] = String(value); },
+      removeProperty: (name) => { delete styles[name]; },
+    },
   };
+  const window = {
+    localStorage: {
+      getItem: (key) => (Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : null),
+      setItem: (key, value) => { writes.push([key, String(value)]); storage[key] = String(value); },
+      removeItem: (key) => { writes.push(['remove', key]); delete storage[key]; },
+    },
+    matchMedia: () => ({
+      get matches() { return media.matches; },
+      addEventListener: (_type, fn) => { listeners.push(fn); },
+    }),
+  };
+  vm.runInNewContext(renderAdminThemeBootScript(), { window, document: { documentElement } });
+  return { api: window.__amTheme, storage, writes, attributes, styles, media, listeners, legacySnapshot };
+}
 
-  const fresh = run(undefined);
-  assert.deepEqual(fresh.attributes, { 'data-bg': 'aurora', 'data-glass': 'light' });
-  assert.deepEqual(fresh.styles, { '--bg-blur': '12px', '--bg-brightness': '1', '--glass-scale': '1' });
-  assert.equal(run({ preset: 'night' }).attributes['data-glass'], 'dark');
-  assert.equal(run({ preset: 'graphite', tone: 'light' }).attributes['data-glass'], 'light');
-  assert.equal(run({ preset: 'mist', dim: 60 }).attributes['data-glass'], 'dark');
-  const custom = run({ preset: 'custom', customLuma: 0.21, customColor: '#334455', blur: 99, dim: -5, opacity: 60 });
-  assert.deepEqual(custom.attributes, { 'data-bg': 'custom', 'data-glass': 'dark' });
-  assert.deepEqual(custom.styles, { '--bg-blur': '40px', '--bg-brightness': '1', '--glass-scale': '2', '--bg-custom-color': '#334455' });
-  assert.equal(run({ preset: 'custom', customLuma: 0.8 }).attributes['data-glass'], 'light');
-  assert.equal(run({ preset: 'nope', tone: 'neon' }).attributes['data-bg'], 'aurora');
-  assert.equal(typeof fresh.api.normalize, 'function');
+test('theme settings persist under am.theme and apply in <head> before first paint', () => {
+  assert.equal(ADMIN_UI_THEME_STORAGE_KEY, 'am.theme');
+  assert.equal(ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY, 'am.bg');
+  assert.deepEqual(ADMIN_UI_THEME_DEFAULTS, {
+    v: 1,
+    mode: 'auto',
+    light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    legacyImageSlot: null,
+  });
+  const head = html.slice(0, html.indexOf('<body>'));
+  const boot = head.match(/<script id="amThemeBoot">([\s\S]*?)<\/script>/);
+  assert.ok(boot, 'boot script is inlined in <head>');
+  assert.doesNotMatch(head, /amBackgroundBoot/);
+  assert.match(boot[1], /"am\.theme"/);
+  assert.match(script, /THEME_STORAGE_KEY = "am\.theme"/);
+  assert.doesNotMatch(script, /localStorage\.setItem\(\s*LEGACY_BG_STORAGE_KEY|localStorage\.setItem\(\s*"am\.bg"/);
+  assert.doesNotThrow(() => new vm.Script(boot[1]));
+  assert.equal(boot[1], renderAdminThemeBootScript());
+
+  const lightStyles = { '--bg-blur': '12px', '--bg-brightness': '1', '--glass-scale': '1', 'color-scheme': 'light' };
+  const freshLight = runThemeBoot({ prefersDark: false });
+  assert.deepEqual(freshLight.attributes, { 'data-theme': 'light', 'data-bg': 'mist', 'data-glass': 'light' });
+  assert.deepEqual(freshLight.styles, lightStyles);
+  assert.deepEqual(freshLight.writes, []);
+
+  const freshDark = runThemeBoot({ prefersDark: true });
+  assert.deepEqual(freshDark.attributes, { 'data-theme': 'dark', 'data-bg': 'graphite', 'data-glass': 'dark' });
+  assert.equal(freshDark.styles['color-scheme'], 'dark');
+  assert.deepEqual(freshDark.writes, []);
+
+  freshLight.media.matches = true;
+  freshLight.listeners.forEach((fn) => fn());
+  assert.equal(freshLight.attributes['data-theme'], 'dark');
+  assert.equal(freshLight.attributes['data-bg'], 'graphite');
+  assert.equal(freshLight.attributes['data-glass'], 'dark');
+  assert.equal(freshLight.styles['color-scheme'], 'dark');
+  assert.deepEqual(freshLight.writes, []);
+
+  const pinned = runThemeBoot({
+    theme: { v: 1, mode: 'light', light: ADMIN_UI_THEME_DEFAULTS.light, dark: ADMIN_UI_THEME_DEFAULTS.dark },
+    prefersDark: true,
+  });
+  assert.equal(pinned.attributes['data-theme'], 'light');
+  assert.equal(pinned.attributes['data-bg'], 'mist');
+  pinned.media.matches = false;
+  pinned.listeners.forEach((fn) => fn());
+  assert.equal(pinned.attributes['data-theme'], 'light');
+  assert.equal(pinned.attributes['data-bg'], 'mist');
+
+  const legacyRaw = JSON.stringify({ preset: 'night', blur: 8 });
+  const migratedBoot = runThemeBoot({ legacy: legacyRaw, prefersDark: false });
+  assert.equal(migratedBoot.storage['am.bg'], legacyRaw);
+  assert.deepEqual(migratedBoot.writes.map(([key]) => key), ['am.theme']);
+  assert.equal(JSON.parse(migratedBoot.storage['am.theme']).dark.blur, 8);
+  assert.equal(JSON.parse(migratedBoot.storage['am.theme']).mode, 'auto');
+  assert.doesNotMatch(boot[1], /setItem\(\s*LEGACY_KEY|setItem\(\s*"am\.bg"|removeItem\(\s*(?:LEGACY_KEY|"am\.bg")/);
+
+  // A custom image stays on screen: mode follows the old glass, and the boot paint uses that set.
+  const customRaw = JSON.stringify({ preset: 'custom', customLuma: 0.2, customColor: '#112233', blur: 3 });
+  const customBoot = runThemeBoot({ legacy: customRaw, prefersDark: false });
+  assert.equal(customBoot.storage['am.bg'], customRaw);
+  assert.deepEqual(customBoot.writes.map(([key]) => key), ['am.theme']);
+  assert.equal(customBoot.attributes['data-theme'], 'dark');
+  assert.equal(customBoot.attributes['data-bg'], 'custom');
+  assert.equal(customBoot.attributes['data-glass'], 'dark');
+  assert.equal(customBoot.styles['--bg-custom-color'], '#112233');
+  assert.equal(customBoot.styles['--bg-image'], undefined);
+  assert.equal(customBoot.styles['color-scheme'], 'dark');
+});
+
+test('theme normalize and legacy migration keep both sets and never drop stored images', () => {
+  const { api } = runThemeBoot();
+  const defaults = plain(api.normalize(null));
+  assert.deepEqual(defaults, ADMIN_UI_THEME_DEFAULTS);
+  assert.deepEqual(plain(api.normalize({
+    mode: 'neon',
+    light: { wallpaper: 'aurora', blur: 99, opacity: 5, customColor: 'blue' },
+    dark: { wallpaper: 'mist', tone: 'dark' },
+  })), {
+    v: 1,
+    mode: 'auto',
+    light: { wallpaper: 'mist', tone: 'auto', blur: 40, dim: 0, opacity: 10, customLuma: null, customColor: null },
+    dark: { wallpaper: 'graphite', tone: 'dark', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    legacyImageSlot: null,
+  });
+
+  const migrated = (old) => plain(api.migrateLegacy(old));
+  const mist = migrated({ preset: 'mist', blur: 20, dim: 10, opacity: 40 });
+  assert.equal(mist.legacySlot, null);
+  assert.equal(mist.settings.mode, 'auto');
+  assert.deepEqual(mist.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 20, dim: 10, opacity: 40, customLuma: null, customColor: null });
+  assert.deepEqual(mist.settings.dark, defaults.dark);
+
+  const graphite = migrated({ preset: 'graphite', blur: 4 });
+  assert.equal(graphite.legacySlot, null);
+  assert.equal(graphite.settings.mode, 'auto');
+  assert.deepEqual(graphite.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 4, dim: 0, opacity: 30, customLuma: null, customColor: null });
+  assert.deepEqual(graphite.settings.light, defaults.light);
+
+  const aurora = migrated({ preset: 'aurora', blur: 18, dim: 6, opacity: 50 });
+  assert.equal(aurora.legacySlot, null);
+  assert.equal(aurora.settings.mode, 'auto');
+  assert.deepEqual(aurora.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 18, dim: 6, opacity: 50, customLuma: null, customColor: null });
+  assert.deepEqual(aurora.settings.dark, defaults.dark);
+
+  const night = migrated({ preset: 'night', blur: 8, opacity: 22 });
+  assert.equal(night.legacySlot, null);
+  assert.equal(night.settings.mode, 'auto');
+  assert.deepEqual(night.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 8, dim: 0, opacity: 22, customLuma: null, customColor: null });
+  assert.deepEqual(night.settings.light, defaults.light);
+
+  const customDark = migrated({ preset: 'custom', customLuma: 0.2, customColor: '#112233', blur: 3 });
+  assert.equal(customDark.legacySlot, 'dark');
+  assert.equal(customDark.settings.legacyImageSlot, 'dark');
+  assert.equal(customDark.settings.mode, 'dark');
+  assert.deepEqual(customDark.settings.dark, { wallpaper: 'custom', tone: 'auto', blur: 3, dim: 0, opacity: 30, customLuma: 0.2, customColor: '#112233' });
+  assert.deepEqual(customDark.settings.light, defaults.light);
+
+  const customLight = migrated({ preset: 'custom', customLuma: 0.8 });
+  assert.equal(customLight.legacySlot, 'light');
+  assert.equal(customLight.settings.legacyImageSlot, 'light');
+  assert.equal(customLight.settings.mode, 'light');
+  assert.equal(customLight.settings.light.wallpaper, 'custom');
+  assert.equal(customLight.settings.light.customLuma, 0.8);
+  assert.deepEqual(customLight.settings.dark, defaults.dark);
+
+  // The upload is no longer selected. It still lands on the dark set; wallpaper and mode stay put.
+  const parked = plain(api.migrateLegacy({ preset: 'mist', blur: 20, dim: 10, opacity: 40 }, 0.2));
+  assert.equal(parked.legacySlot, null);
+  assert.equal(parked.settings.legacyImageSlot, 'dark');
+  assert.equal(parked.settings.mode, 'auto');
+  assert.deepEqual(parked.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 20, dim: 10, opacity: 40, customLuma: null, customColor: null });
+  assert.deepEqual(parked.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: 0.2, customColor: null });
+  const parkedColor = plain(api.migrateLegacy({ preset: 'aurora' }, { luma: null, color: '#abcdef' }));
+  assert.equal(parkedColor.settings.legacyImageSlot, 'light');
+  assert.equal(parkedColor.settings.mode, 'auto');
+  assert.equal(parkedColor.settings.light.wallpaper, 'mist');
+  assert.equal(parkedColor.settings.dark.wallpaper, 'graphite');
+  assert.equal(parkedColor.settings.light.customLuma, 0.75);
+  assert.equal(parkedColor.settings.light.customColor, '#abcdef');
+
+  const toneWins = migrated({ preset: 'aurora', tone: 'dark', blur: 7 });
+  assert.equal(toneWins.legacySlot, null);
+  assert.equal(toneWins.settings.mode, 'auto');
+  assert.deepEqual(toneWins.settings.dark, { wallpaper: 'graphite', tone: 'dark', blur: 7, dim: 0, opacity: 30, customLuma: null, customColor: null });
+  assert.deepEqual(toneWins.settings.light, defaults.light);
+
+  const mistTone = migrated({ preset: 'mist', tone: 'dark', blur: 4 });
+  assert.equal(mistTone.legacySlot, null);
+  assert.equal(mistTone.settings.mode, 'auto');
+  assert.equal(mistTone.settings.light.wallpaper, 'mist');
+  assert.equal(mistTone.settings.light.blur, 12);
+  assert.deepEqual(mistTone.settings.dark, { wallpaper: 'graphite', tone: 'dark', blur: 4, dim: 0, opacity: 30, customLuma: null, customColor: null });
+
+  for (const junk of [null, 'nope', [], { preset: 'nope', tone: 'neon' }]) {
+    const result = migrated(junk);
+    assert.equal(result.legacySlot, null);
+    assert.deepEqual(result.settings, defaults);
+  }
+
+  assert.equal(api.resolveMode(defaults, false), 'light');
+  assert.equal(api.resolveMode(defaults, true), 'dark');
+  assert.equal(api.resolveMode(plain(api.normalize({ mode: 'dark' })), false), 'dark');
+  assert.equal(plain(api.activeSet(defaults, true)).wallpaper, 'graphite');
+  assert.equal(plain(api.activeSet(defaults, false)).wallpaper, 'mist');
+  assert.equal(api.resolveTone(defaults.light), 'light');
+  assert.equal(api.resolveTone(defaults.dark), 'dark');
+  assert.equal(api.resolveTone({ wallpaper: 'custom', tone: 'auto', dim: 0, customLuma: 0.2 }), 'dark');
+  assert.equal(api.resolveTone({ wallpaper: 'custom', tone: 'auto', dim: 0, customLuma: null }), 'light');
+  // Mist at full Dim crosses the 0.5 threshold (0.93 × 0.4).
+  assert.equal(api.resolveTone({ wallpaper: 'mist', tone: 'auto', dim: 60 }), 'dark');
+  assert.equal(api.resolveTone({ wallpaper: 'graphite', tone: 'light', dim: 0 }), 'light');
+  assert.equal(plain(api.normalize({ legacyImageSlot: 'dark', mode: 'light' })).legacyImageSlot, 'dark');
+  assert.equal(plain(api.normalize({ legacyImageSlot: 'nope' })).legacyImageSlot, null);
+  assert.equal(defaults.legacyImageSlot, null);
 });
 
 test('glass surfaces are driven by :root variables and the wallpaper is one static layer', () => {

@@ -16,6 +16,7 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   pause: '<circle cx="12" cy="12" r="8.5"/><path d="M10 9v6M14 9v6"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-9 8.5"/>',
+  theme: '<path d="M12 7.1A3.4 3.4 0 0 0 15.6 12 5.1 5.1 0 1 1 12 7.1z"/><path d="M12 2.6v2M12 19.4v2M4.8 4.8l1.4 1.4M17.8 17.8l1.4 1.4M2.6 12h2M19.4 12h2M4.8 19.2l1.4-1.4M17.8 6.2l1.4-1.4"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   file: '<path d="M6.5 3.5h7l4.5 4.5v11.5a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z"/><path d="M13.5 3.5V8H18"/>',
@@ -128,10 +129,11 @@ function renderSidebar(): string {
         </div>
       </nav>
       <div class="sidebarFooter">
-        <button class="sidebarRow bgPickerButton" id="bgPickerButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="bgPopover" data-i18n-title="bg.open" title="Change the background">
-          ${renderAdminIcon('image', 'navIcon')}
-          <span class="devToggleLabel" data-i18n="bg.title">Background</span>
-          <span class="bgSwatch" id="bgSwatch" aria-hidden="true"></span>
+        <button class="sidebarRow bgPickerButton" id="bgPickerButton" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="bgPopover" data-i18n-title="theme.open" title="Change the theme">
+          ${renderAdminIcon('theme', 'navIcon')}
+          <span class="devToggleLabel" data-i18n="theme.title">Theme</span>
+          <span class="sidebarRowValue" id="bgModeValue" data-i18n="theme.modeAuto">Auto</span>
+          ${renderAdminIcon('chevronRight', 'sidebarChevron')}
         </button>
         <label class="devToggle" for="devToolsToggle" data-i18n-title="shell.devToolsToggleHint" title="Show the legacy workbench panels">
           ${renderAdminIcon('terminal', 'navIcon')}
@@ -151,7 +153,7 @@ function renderRange(id: string, labelKey: string, label: string, min: number, m
           </div>`;
 }
 
-// Background picker. A sibling of the sidebar rather than a child: the sidebar's backdrop-filter makes it a
+// Theme panel. A sibling of the sidebar rather than a child: the sidebar's backdrop-filter makes it a
 // backdrop root, so a popover inside it could only frost the sidebar itself, not the page behind.
 function renderBackgroundPopover(): string {
   const thumbPanes = '<i class="bgPane bgPaneSide"></i><i class="bgPane bgPaneTop"></i><i class="bgPane bgPaneMain"></i>';
@@ -164,37 +166,51 @@ function renderBackgroundPopover(): string {
     <section class="bgPopover" id="bgPopover" role="dialog" aria-labelledby="bgPopoverTitle" hidden>
       <header class="bgHead">
         <div>
-          <h2 class="bgTitle" id="bgPopoverTitle" data-i18n="bg.title">Background</h2>
-          <p class="bgLead" data-i18n="bg.lead">Presets, or your own image</p>
+          <h2 class="bgTitle" id="bgPopoverTitle" data-i18n="theme.title">Theme</h2>
+          <p class="bgLead" data-i18n="theme.lead">Light and dark sets, each with its own wallpaper and glass</p>
         </div>
-        <button class="bgClose" id="bgPopoverClose" type="button" data-i18n-aria-label="bg.close" aria-label="Close">${renderAdminIcon('close', 'bgCloseIcon')}</button>
+        <button class="bgClose" id="bgPopoverClose" type="button" data-i18n-aria-label="theme.close" aria-label="Close">${renderAdminIcon('close', 'bgCloseIcon')}</button>
       </header>
-      <div class="bgTiles" id="bgPresetList" role="group" data-i18n-aria-label="bg.presetsLabel" aria-label="Wallpaper">${presets}
+      <div class="bgFields">
+        <div class="bgField">
+          <span class="bgFieldLabel" id="bgModeLabel" data-i18n="theme.mode">Mode</span>
+          <div class="bgSegmented" id="bgModeControl" role="group" aria-labelledby="bgModeLabel">
+            <button class="bgSegment" type="button" data-theme-mode="auto" aria-pressed="true" data-i18n="theme.modeAuto">Auto</button>
+            <button class="bgSegment" type="button" data-theme-mode="light" aria-pressed="false" data-i18n="theme.modeLight">Light</button>
+            <button class="bgSegment" type="button" data-theme-mode="dark" aria-pressed="false" data-i18n="theme.modeDark">Dark</button>
+          </div>
+        </div>
+      </div>
+      <div class="bgSetTabs" id="bgSetControl" role="tablist" data-i18n-aria-label="theme.setsLabel" aria-label="Theme sets">
+        <button class="bgSegment" id="bgSetLight" type="button" role="tab" data-theme-set="light" aria-selected="true" aria-controls="bgPresetList" data-i18n="theme.tabLight" data-i18n-aria-label="theme.tabLightAria" aria-label="Light theme">Light set</button>
+        <button class="bgSegment" id="bgSetDark" type="button" role="tab" data-theme-set="dark" aria-selected="false" aria-controls="bgPresetList" data-i18n="theme.tabDark" data-i18n-aria-label="theme.tabDarkAria" aria-label="Dark theme">Dark set</button>
+      </div>
+      <div class="bgTiles" id="bgPresetList" role="group" data-i18n-aria-label="theme.presetsLabel" aria-label="Wallpaper">${presets}
         <button class="bgTile" id="bgPresetCustom" type="button" data-bg-preset="custom" aria-pressed="false" hidden>
           <span class="bgThumb bgThumbCustom">${thumbPanes}</span>
-          <span class="bgTileLabel" data-i18n="bg.customImage">My image</span>
+          <span class="bgTileLabel" data-i18n="theme.customImage">My image</span>
         </button>
         <button class="bgTile bgUploadTile" id="bgUploadButton" type="button">
-          <span class="bgThumb bgThumbUpload">${renderAdminIcon('plus', 'bgPlusIcon')}<span data-i18n="bg.upload">Upload</span></span>
-          <span class="bgTileLabel" data-i18n="bg.uploadLabel">Custom image</span>
+          <span class="bgThumb bgThumbUpload">${renderAdminIcon('plus', 'bgPlusIcon')}<span data-i18n="theme.upload">Upload</span></span>
+          <span class="bgTileLabel" data-i18n="theme.uploadLabel">Custom image</span>
         </button>
         <input class="visuallyHidden" id="bgUploadInput" type="file" accept="image/*" tabindex="-1" aria-hidden="true" />
       </div>
       <div class="bgFields">
         <div class="bgField">
-          <span class="bgFieldLabel" id="bgToneLabel" data-i18n="bg.tone">Glass tone</span>
+          <span class="bgFieldLabel" id="bgToneLabel" data-i18n="theme.tone">Glass tone</span>
           <div class="bgSegmented" id="bgToneControl" role="group" aria-labelledby="bgToneLabel">
-            <button class="bgSegment" type="button" data-bg-tone="auto" aria-pressed="true" data-i18n="bg.toneAuto">Auto</button>
-            <button class="bgSegment" type="button" data-bg-tone="light" aria-pressed="false" data-i18n="bg.toneLight">Light</button>
-            <button class="bgSegment" type="button" data-bg-tone="dark" aria-pressed="false" data-i18n="bg.toneDark">Dark</button>
+            <button class="bgSegment" type="button" data-bg-tone="auto" aria-pressed="true" data-i18n="theme.toneAuto">Auto</button>
+            <button class="bgSegment" type="button" data-bg-tone="light" aria-pressed="false" data-i18n="theme.toneLight">Light</button>
+            <button class="bgSegment" type="button" data-bg-tone="dark" aria-pressed="false" data-i18n="theme.toneDark">Dark</button>
           </div>
-        </div>${renderRange('bgBlur', 'bg.blur', 'Wallpaper blur', 0, 40)}${renderRange('bgDim', 'bg.dim', 'Dim', 0, 60)}${renderRange('bgOpacity', 'bg.opacity', 'Glass opacity', 10, 80)}
+        </div>${renderRange('bgBlur', 'theme.blur', 'Wallpaper blur', 0, 40)}${renderRange('bgDim', 'theme.dim', 'Dim', 0, 60)}${renderRange('bgOpacity', 'theme.opacity', 'Glass opacity', 10, 80)}
       </div>
       <footer class="bgFoot">
         <span class="bgStatus" id="bgStatus" role="status" aria-live="polite">Saved on this browser · text adapts to the wallpaper</span>
         <span class="bgActions">
-          <button class="bgButton" id="bgResetButton" type="button" data-i18n="bg.reset">Reset</button>
-          <button class="bgButton is-primary" id="bgDoneButton" type="button" data-i18n="bg.done">Done</button>
+          <button class="bgButton" id="bgResetButton" type="button" data-i18n="theme.reset">Reset</button>
+          <button class="bgButton is-primary" id="bgDoneButton" type="button" data-i18n="theme.done">Done</button>
         </span>
       </footer>
     </section>`;

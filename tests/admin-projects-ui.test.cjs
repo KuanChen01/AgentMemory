@@ -147,7 +147,7 @@ test('Projects client wiring: sequencing, stale cursor, reads off, backdrop, doc
   assert.match(policy, /prj\.seq \+= 1/);
   assert.match(policy, /els\.prjList\.innerHTML = ""/);
   assert.match(policy, /loadProjects\("reset"\)/);
-  assert.match(uiClientFunction('usesActivityBackdrop'), /state\.activeView === "projectsView"/);
+  assert.doesNotMatch(uiScript, /usesActivityBackdrop|data-act-bg/);
   assert.match(uiClientFunction('memoryDrawerIsDocked'), /host === "projectsView"/);
   assert.match(uiClientFunction('activateView'), /showProjectsView\(\)/);
   const open = uiClientFunction('openProjectDrawer');
