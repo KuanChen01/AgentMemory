@@ -332,12 +332,12 @@ ${WALLPAPER_CSS}
   }
 
   /* Only the visible outer legacy surfaces blur (hero, tab dock, the open panel); nested and hidden
-     cards stay plain translucent to keep GPU cost low. */
-  .devToolsView.is-active .hero,
-  .devToolsView.is-active .dock,
-  .devToolsView.is-active .viewPanel.is-active {
-    backdrop-filter: blur(26px) saturate(1.45);
-    -webkit-backdrop-filter: blur(26px) saturate(1.45);
+     cards stay plain translucent to keep GPU cost low. Blur stays on the active view, same as .glassBlur. */
+  .appView.devToolsView.is-active .hero,
+  .appView.devToolsView.is-active .dock,
+  .appView.devToolsView.is-active .viewPanel.is-active {
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
   }
 
   .hero {
@@ -1296,10 +1296,10 @@ ${WALLPAPER_CSS}
     font-size: 13.5px;
   }
 
-  /* Legacy panels keep their original 16px base size and their own light surfaces and ink. */
+  /* Developer tools shares the shell ink. Glass surfaces are restyled at the end of this sheet. */
   .devToolsView {
-    color: var(--ink);
-    font-size: 16px;
+    color: var(--text);
+    font-size: 14.5px;
   }
 
   /* Sidebar: one floating blurred panel. */
@@ -2519,7 +2519,7 @@ ${WALLPAPER_CSS}
   }
 
   /* Dark glass (dark presets, dark uploads, or the Dark tone): the same surfaces with a deep-blue tint and
-     light text. Legacy Developer tools panels keep their own light surfaces. */
+     light text. Developer tools reads these tokens too. */
   html[data-glass="dark"] {
     --glass-rgb-top: 40, 48, 90;
     --glass-rgb-bottom: 20, 24, 56;
@@ -10631,6 +10631,561 @@ ${WALLPAPER_CSS}
 
     .setAboutActions {
       justify-content: flex-start;
+    }
+  }
+
+  /* ---------- Developer tools ---------- */
+
+  /* The legacy workbench, drawn with the same glass cards, pill fields and buttons as Settings.
+     Surfaces use --glass-fill / --glass-shadow / --glass-border; ink follows --glass-text*. */
+  .devToolsView .hero,
+  .devToolsView .dock,
+  .devToolsView .viewPanel,
+  .devToolsView .card,
+  .devToolsView .glassPanel,
+  .devToolsView .metricTile,
+  .devToolsView .scoreCard {
+    position: relative;
+    isolation: isolate;
+    min-width: 0;
+    max-width: 100%;
+    background: var(--glass-fill);
+    border: 1px solid transparent;
+    box-shadow: var(--glass-shadow);
+    color: var(--glass-text);
+  }
+
+  .devToolsView .hero,
+  .devToolsView .viewPanel {
+    border-radius: 24px;
+    padding: 18px 20px 20px;
+  }
+
+  .devToolsView .dock {
+    border-radius: 20px;
+    padding: 6px;
+  }
+
+  .devToolsView .card,
+  .devToolsView .glassPanel,
+  .devToolsView .metricTile,
+  .devToolsView .scoreCard {
+    border-radius: 22px;
+  }
+
+  .devToolsView .card,
+  .devToolsView .statusCard,
+  .devToolsView .infoCard {
+    padding: 16px 18px;
+  }
+
+  .devToolsView .hero::before,
+  .devToolsView .dock::before,
+  .devToolsView .viewPanel::before,
+  .devToolsView .card::before,
+  .devToolsView .glassPanel::before,
+  .devToolsView .metricTile::before,
+  .devToolsView .scoreCard::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--glass-specular);
+  }
+
+  .devToolsView .hero::after,
+  .devToolsView .dock::after,
+  .devToolsView .viewPanel::after,
+  .devToolsView .card::after,
+  .devToolsView .glassPanel::after,
+  .devToolsView .metricTile::after,
+  .devToolsView .scoreCard::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    padding: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--glass-border);
+    box-shadow: none;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  .devToolsView .hero {
+    overflow: visible;
+  }
+
+  .devToolsView .metricTile:hover,
+  .devToolsView .card:hover,
+  .devToolsView .scoreCard:hover {
+    transform: none;
+    background: var(--glass-fill);
+  }
+
+  .devToolsView .legacyHeroTitle,
+  .devToolsView .panelTitle,
+  .devToolsView .policyTitle,
+  .devToolsView .statusValue,
+  .devToolsView .metricValue {
+    color: var(--glass-text);
+  }
+
+  .devToolsView .legacyHeroTitle {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .devToolsView .panelTitle {
+    font-size: 21px;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+  }
+
+  .devToolsView .policyTitle {
+    font-size: 16px;
+    font-weight: 650;
+  }
+
+  .devToolsView .lead,
+  .devToolsView .panelLead,
+  .devToolsView .subtle,
+  .devToolsView .finePrint,
+  .devToolsView .listMeta,
+  .devToolsView .statusLine,
+  .devToolsView .checkRow,
+  .devToolsView .proceduralSteps,
+  .devToolsView .sectionEyebrow,
+  .devToolsView .statusLabel {
+    color: var(--glass-text-2);
+  }
+
+  .devToolsView .sectionEyebrow,
+  .devToolsView .statusLabel {
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .devToolsView .fieldLabel {
+    color: var(--glass-text);
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .devToolsView .metaLabel {
+    color: var(--glass-text-2);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .devToolsView .card > .metaLabel,
+  .devToolsView .glassPanel > .metaLabel {
+    color: var(--glass-text);
+    font-size: 15.5px;
+    font-weight: 650;
+  }
+
+  .devToolsView .eyebrow {
+    background: var(--chip-fill);
+    border: 1px solid transparent;
+    box-shadow: var(--pill-shadow);
+    color: var(--shell-accent);
+  }
+
+  /* Summary tiles: the same quiet slab as the Projects stats. */
+  .devToolsView .metricTile {
+    min-height: 86px;
+    padding: 14px 16px;
+  }
+
+  .devToolsView .metricValue {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .devToolsView .metricsRow,
+  .devToolsView .llmStatusGrid {
+    gap: 10px;
+  }
+
+  .devToolsView .metricBadge {
+    flex: 1 1 148px;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+    min-height: 64px;
+    padding: 10px 14px;
+    border: 1px solid transparent;
+    border-radius: 18px;
+    background: var(--pill-fill);
+    box-shadow: var(--pill-shadow);
+    color: var(--glass-text);
+    font-size: 15px;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+
+  .devToolsView .metricBadge strong {
+    color: var(--glass-text-2);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .devToolsView .tag,
+  .devToolsView .pill,
+  .devToolsView .scoreBadge,
+  .devToolsView .statusChip {
+    max-width: 100%;
+    min-width: 0;
+    border: 1px solid transparent;
+    background: var(--chip-fill);
+    box-shadow: inset 0 1px 0 var(--chip-highlight);
+    color: var(--glass-text-2);
+    overflow-wrap: anywhere;
+  }
+
+  .devToolsView .scoreBadge strong,
+  .devToolsView .tag {
+    color: var(--glass-text);
+  }
+
+  .devToolsView .statusChip.success,
+  .devToolsView .policyBadge.enabled {
+    background: rgba(20, 133, 93, 0.13);
+    color: var(--success);
+  }
+
+  .devToolsView .statusChip.error,
+  .devToolsView .policyBadge.disabled {
+    background: rgba(185, 59, 66, 0.12);
+    color: var(--danger);
+  }
+
+  .devToolsView .statusChip.warning,
+  .devToolsView .policyBadge.saving {
+    background: rgba(180, 111, 8, 0.13);
+    color: var(--warning);
+  }
+
+  .devToolsView .segmentButton {
+    border-radius: var(--pill-radius);
+    padding: 8px 12px;
+    color: var(--glass-text-2);
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+
+  .devToolsView .segmentButton.is-active {
+    background: var(--pill-fill);
+    box-shadow: var(--pill-shadow);
+    color: var(--glass-text);
+  }
+
+  .devToolsView .toolbar,
+  .devToolsView .toolbar.compact,
+  .devToolsView .toolbar.wide,
+  .devToolsView .toolbar.proceduralToolbar {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  }
+
+  .devToolsView .toolbar label,
+  .devToolsView .stack label {
+    min-width: 0;
+  }
+
+  .devToolsView .textInput,
+  .devToolsView .selectInput,
+  .devToolsView .dateInput,
+  .devToolsView .numberInput,
+  .devToolsView .textArea {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid transparent;
+    background: var(--pill-fill);
+    box-shadow: var(--pill-shadow);
+    color: var(--glass-text);
+  }
+
+  .devToolsView .textInput,
+  .devToolsView .selectInput,
+  .devToolsView .dateInput,
+  .devToolsView .numberInput {
+    height: 36px;
+    padding: 0 16px;
+    border-radius: var(--pill-radius);
+  }
+
+  .devToolsView .textArea {
+    min-height: 96px;
+    padding: 10px 16px;
+    border-radius: 16px;
+    line-height: 1.45;
+  }
+
+  .devToolsView .textInput::placeholder,
+  .devToolsView .textArea::placeholder {
+    color: var(--glass-text-3);
+  }
+
+  .devToolsView .textInput:hover,
+  .devToolsView .dateInput:hover,
+  .devToolsView .numberInput:hover,
+  .devToolsView .textArea:hover,
+  .devToolsView .selectInput:hover {
+    background: var(--pill-fill);
+    border-color: transparent;
+  }
+
+  .devToolsView label:has(> .selectInput) {
+    position: relative;
+  }
+
+  .devToolsView label:has(> .selectInput) > .selectInput {
+    appearance: none;
+    padding-right: 36px;
+  }
+
+  .devToolsView label:has(> .selectInput)::after {
+    content: "";
+    position: absolute;
+    right: 16px;
+    bottom: 14px;
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid var(--glass-text-2);
+    border-bottom: 1.5px solid var(--glass-text-2);
+    transform: rotate(45deg);
+    pointer-events: none;
+  }
+
+  .devToolsView .textInput:focus,
+  .devToolsView .textInput:focus-visible,
+  .devToolsView .selectInput:focus,
+  .devToolsView .selectInput:focus-visible,
+  .devToolsView .dateInput:focus,
+  .devToolsView .dateInput:focus-visible,
+  .devToolsView .numberInput:focus,
+  .devToolsView .numberInput:focus-visible,
+  .devToolsView .textArea:focus,
+  .devToolsView .textArea:focus-visible {
+    outline: none;
+    border-color: transparent;
+    box-shadow: var(--pill-shadow), 0 0 0 3px rgba(10, 132, 255, 0.22);
+  }
+
+  .devToolsView .textInput:disabled,
+  .devToolsView .numberInput:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  /* Primary matches the Settings save button; secondary is the ghost. */
+  .devToolsView .button {
+    width: fit-content;
+    max-width: 100%;
+    min-height: 36px;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    font-size: 14.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .devToolsView .button.primary {
+    background: linear-gradient(180deg, #3a8bff, #1f6ff0);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 6px 16px -8px rgba(31, 111, 240, 0.80);
+    color: #ffffff;
+  }
+
+  .devToolsView .button.primary:hover {
+    filter: brightness(1.05);
+  }
+
+  .devToolsView .button.secondary,
+  .devToolsView .button.ghost {
+    background: var(--pill-fill);
+    box-shadow: var(--pill-shadow);
+    color: var(--shell-accent);
+  }
+
+  .devToolsView .button.secondary:hover,
+  .devToolsView .button.ghost:hover {
+    background: var(--shell-hover);
+  }
+
+  .devToolsView .button:focus-visible {
+    outline: none;
+    box-shadow: var(--pill-shadow), 0 0 0 3px rgba(10, 132, 255, 0.28);
+  }
+
+  .devToolsView .buttonSlot {
+    justify-content: flex-start;
+  }
+
+  .devToolsView .emptyState {
+    border: 1px solid var(--shell-line);
+    border-radius: 14px;
+    background: var(--chip-fill);
+    box-shadow: inset 0 1px 0 var(--chip-highlight);
+    color: var(--glass-text-3);
+  }
+
+  .devToolsView .divider {
+    height: 1px;
+    background: var(--shell-line);
+  }
+
+  /* Nested rows sit in a soft well. Tables, pre and code use the same inset. */
+  .devToolsView .factCard,
+  .devToolsView .summaryCard,
+  .devToolsView .obsCard,
+  .devToolsView .recordItem,
+  .devToolsView pre,
+  .devToolsView .mono,
+  .devToolsView table,
+  .devToolsView .llmTestResult {
+    border: 1px solid var(--shell-line);
+    border-radius: 14px;
+    background: var(--chip-fill);
+    box-shadow: inset 0 1px 0 var(--chip-highlight);
+    color: var(--glass-text);
+  }
+
+  .devToolsView pre,
+  .devToolsView .mono,
+  .devToolsView .llmTestResult,
+  .devToolsView table {
+    padding: 12px 14px;
+  }
+
+  .devToolsView code {
+    padding: 1px 6px;
+    border: 1px solid var(--shell-line);
+    border-radius: 8px;
+    background: var(--chip-fill);
+    color: var(--glass-text);
+  }
+
+  .devToolsView table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+  }
+
+  .devToolsView th,
+  .devToolsView td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--shell-line);
+    color: var(--glass-text);
+    text-align: left;
+  }
+
+  .devToolsView tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .devToolsView .factCard:hover,
+  .devToolsView .summaryCard:hover,
+  .devToolsView .obsCard:hover,
+  .devToolsView .recordItem:hover {
+    transform: none;
+    background: var(--chip-fill);
+  }
+
+  .devToolsView .recordItem {
+    font: inherit;
+    text-align: left;
+  }
+
+  .devToolsView .recordItem.active,
+  .devToolsView .recordItem.active:hover,
+  .devToolsView .proceduralSkillCard.is-selected,
+  .devToolsView .proceduralSkillCard.is-selected:hover {
+    border-color: transparent;
+    background: var(--pill-fill);
+    box-shadow: var(--pill-shadow), inset 0 0 0 1px rgba(10, 132, 255, 0.34);
+  }
+
+  .devToolsView .renderedBlock {
+    overflow: auto;
+  }
+
+  .devToolsView .renderedBlock pre {
+    margin-top: 4px;
+  }
+
+  html[data-glass="dark"] .devToolsView {
+    color-scheme: dark;
+  }
+
+  html[data-glass="dark"] .devToolsView .button.primary {
+    background: linear-gradient(180deg, #3d8dff, #2365e6);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 0 18px -6px rgba(60, 140, 255, 0.70);
+  }
+
+  html[data-glass="dark"] .devToolsView .statusChip.success,
+  html[data-glass="dark"] .devToolsView .policyBadge.enabled {
+    background: color-mix(in srgb, var(--ok) 22%, transparent);
+    color: var(--ok);
+  }
+
+  html[data-glass="dark"] .devToolsView .statusChip.error,
+  html[data-glass="dark"] .devToolsView .policyBadge.disabled {
+    background: color-mix(in srgb, var(--err) 22%, transparent);
+    color: var(--err-ink);
+  }
+
+  html[data-glass="dark"] .devToolsView .statusChip.warning,
+  html[data-glass="dark"] .devToolsView .policyBadge.saving {
+    background: color-mix(in srgb, var(--warn) 22%, transparent);
+    color: var(--warn-ink);
+  }
+
+  html[data-glass="dark"] .devToolsView .statusDot {
+    background: var(--ok);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 18%, transparent);
+  }
+
+  html[data-glass="dark"] .devToolsView .statusLine.warning .statusDot {
+    background: var(--warn);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 18%, transparent);
+  }
+
+  html[data-glass="dark"] .devToolsView .statusLine.error .statusDot {
+    background: var(--err);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--err) 18%, transparent);
+  }
+
+  @media (max-width: 720px) {
+    .devToolsView .hero,
+    .devToolsView .viewPanel,
+    .devToolsView .card,
+    .devToolsView .glassPanel {
+      padding: 14px;
+      border-radius: 18px;
+    }
+
+    .devToolsView .legacyHeroTitle {
+      font-size: 24px;
+    }
+
+    .devToolsView .panelTitle {
+      font-size: 18px;
+    }
+
+    .devToolsView .button {
+      white-space: normal;
     }
   }
 `;
