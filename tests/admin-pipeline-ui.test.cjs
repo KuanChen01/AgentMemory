@@ -479,6 +479,10 @@ function pipelineBehaviourPrelude() {
         readsDisabled: false, stale: false, seq: 0, busySeq: 0, moreSeq: 0, vaultSeq: 0, vaultAt: 0,
         rowNodes: new Map(), groupNodes: new Map(),
       },
+      projects: {
+        items: [], summary: null, nextCursor: null, loaded: false, error: "", errorStatus: 0,
+        readsDisabled: false, stale: false, seq: 0, busySeq: 0, moreSeq: 0, rowNodes: new Map(),
+      },
     };
     const document = { hidden: false };
     const window = { scrolls: 0, scrollTo(x, y) { this.scrolls += 1; this.x = x; this.y = y; } };
@@ -527,6 +531,9 @@ function pipelineBehaviourPrelude() {
     function loadDigests() {}
     function loadDigestCards() {}
     function openDigestDrawer() {}
+    function renderProjects() {}
+    function loadProjects() {}
+    function openProjectDrawer() {}
     function renderMemory() {}
     function renderActivityEarlier() {}
     function renderMemoryDrawer() {}
