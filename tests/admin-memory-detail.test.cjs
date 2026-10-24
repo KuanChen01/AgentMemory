@@ -292,7 +292,7 @@ test('memory detail lists tasks by rowid, flags fallback only when that row id m
     eventCount: 7,
     evidenceCount: 3,
     llmCalls: 5,
-    lastError: `${'e'.repeat(300)}TAIL`,
+    lastError: `${'word '.repeat(60)}TAIL`,
     sourceKind: 'task',
     trigger: 'idle',
     createdAt: '2026-10-18 01:00:00',
@@ -328,7 +328,7 @@ test('memory detail lists tasks by rowid, flags fallback only when that row id m
   assert.equal(detail.tasks[0].status, 'saved');
   assert.equal(detail.tasks[0].task_id, 'task-other');
   assert.equal(detail.tasks[0].source_kind, 'tool');
-  assert.equal(detail.tasks[1].last_error, 'e'.repeat(300));
+  assert.equal(detail.tasks[1].last_error, 'word '.repeat(60));
   assert.equal(detail.tasks[1].last_error.length, 300);
   assert.equal(detail.tasks[1].status, 'fallback');
   assert.equal(detail.tasks[1].task_id, 'task-fb');

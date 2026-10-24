@@ -259,19 +259,55 @@ export function redactLlmTestPayload<T extends Record<string, any>>(
   payload: T,
   apiKey?: unknown,
   env: NodeJS.ProcessEnv = process.env,
+  extraSecrets: string[] = [],
 ): T {
-  const secret = effectiveLlmTestApiKey(apiKey, env);
-  if (!secret || !payload || typeof payload !== 'object') return payload;
+  const secrets = [effectiveLlmTestApiKey(apiKey, env), ...extraSecrets]
+    .filter((s) => typeof s === 'string' && s.length > 0)
+    // Longest first, so a key that contains another key is replaced whole.
+    .sort((a, b) => b.length - a.length);
+  if (secrets.length === 0 || !payload || typeof payload !== 'object') return payload;
   const next: Record<string, any> = { ...payload };
   for (const field of LLM_TEST_REDACTED_FIELDS) {
-    if (typeof next[field] === 'string') next[field] = redactLlmSecret(next[field], secret);
+    if (typeof next[field] !== 'string') continue;
+    let text = next[field] as string;
+    for (const secret of secrets) text = redactLlmSecret(text, secret);
+    next[field] = text;
   }
   return next as T;
 }
 
+const LLM_AUTH_HEADER = /auth|key|token|secret|cookie|session|signature|password/i;
+
+/** Secret values carried by outgoing auth headers: the whole value and, for "Bearer x" / "Basic x", the credential part. */
+export function llmHeaderSecrets(headers: Record<string, string>): string[] {
+  const out: string[] = [];
+  for (const [name, value] of Object.entries(headers)) {
+    if (!LLM_AUTH_HEADER.test(name)) continue;
+    const text = String(value ?? '').trim();
+    if (!text) continue;
+    out.push(text);
+    const scheme = /^\S+\s+(\S.*)$/.exec(text);
+    if (scheme) out.push(scheme[1].trim());
+  }
+  return out;
+}
+
+/** Redact first, then clip, so a clip can never leave a partial secret behind. */
+function redactThenClip(text: string, max: number, secrets: string[]): string {
+  let out = String(text ?? '');
+  for (const secret of [...secrets].filter(Boolean).sort((a, b) => b.length - a.length)) out = redactLlmSecret(out, secret);
+  return out.slice(0, max);
+}
+
 function parseCustomHeaders(headersText: string): Record<string, string> {
   if (!headersText) return {};
-  const parsed = JSON.parse(headersText);
+  let parsed: any;
+  try {
+    parsed = JSON.parse(headersText);
+  } catch {
+    // The engine's parse message quotes the input, which may hold a credential.
+    throw new Error('AGENTMEM_LLM_HEADERS must be valid JSON.');
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('AGENTMEM_LLM_HEADERS must be a JSON object.');
   }
@@ -292,7 +328,9 @@ export async function testLlmConnection(
   const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
-  const seal = (result: LlmConnectionTestResult): LlmConnectionTestResult => redactLlmTestPayload(result, apiKey);
+  let headerSecrets: string[] = [];
+  const seal = (result: LlmConnectionTestResult): LlmConnectionTestResult =>
+    redactLlmTestPayload(result, apiKey, process.env, headerSecrets);
 
   try {
     if (!apiKey && !isLocalEndpoint(apiUrl)) {
@@ -313,6 +351,8 @@ export async function testLlmConnection(
     if (!headers.Authorization && !headers.authorization && apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
     }
+    headerSecrets = llmHeaderSecrets(headers);
+    const allSecrets = [apiKey, ...headerSecrets];
 
     const response = await fetch(requestUrl, {
       body: JSON.stringify({
@@ -333,7 +373,7 @@ export async function testLlmConnection(
     const latencyMs = Date.now() - startedAt;
     if (!response.ok) {
       return seal({
-        error: text.slice(0, 500) || response.statusText,
+        error: redactThenClip(text, 500, allSecrets) || response.statusText,
         latencyMs,
         model,
         ok: false,
@@ -343,11 +383,11 @@ export async function testLlmConnection(
       });
     }
 
-    let contentPreview = text.slice(0, 160);
+    let contentPreview = redactThenClip(text, 160, allSecrets);
     try {
       const payload = JSON.parse(text);
       recordLlmUsage('connection_test', payload, latencyMs);
-      contentPreview = String(payload.choices?.[0]?.message?.content || contentPreview).slice(0, 160);
+      contentPreview = redactThenClip(String(payload.choices?.[0]?.message?.content || contentPreview), 160, allSecrets);
     } catch (_error) {
       // Keep the raw preview when the provider returns non-JSON success content.
     }
