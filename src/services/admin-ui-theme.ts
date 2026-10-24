@@ -5589,6 +5589,13 @@ ${WALLPAPER_CSS}
     display: none !important;
   }
 
+  .pipeFallbackChip {
+    background: var(--p-warn-fill);
+    color: var(--p-warn-ink);
+    box-shadow: inset 0 0 0 1px var(--p-warn-dot);
+    white-space: nowrap;
+  }
+
   /* All time is an internal range (Home links). It is a state of this control, not a fifth permanent button. */
   .pipeRangeAll {
     display: inline-flex;
@@ -5611,20 +5618,25 @@ ${WALLPAPER_CSS}
 
   .pipePause {
     display: flex;
-    justify-content: flex-end;
-    margin: 2px 18px 0;
-    padding: 0;
+    align-items: center;
+    width: fit-content;
+    min-height: 34px;
+    margin: 16px 2px 0 auto;
+    padding: 0 14px;
     border: 0;
-    background: transparent;
-    color: var(--text-3);
+    border-radius: 999px;
+    background: var(--p-warn-fill);
+    color: var(--p-warn-ink);
+    box-shadow: inset 0 0 0 1px var(--p-warn-dot);
     font: inherit;
-    font-size: 12.5px;
-    line-height: 1.4;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
     cursor: pointer;
   }
 
   .pipePause:hover {
-    color: var(--text-2);
+    filter: brightness(1.06);
   }
 
   .pipePause[hidden] {

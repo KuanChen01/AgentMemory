@@ -128,6 +128,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     homeSummary: null,
     homeSummaryAt: 0,
     homeSummaryInFlight: null,
+    // Distinct task ids with a fallback result since local midnight. Null until that list has been counted.
+    homeFallbackTaskCount: null,
+    homeFallbackFrom: "",
+    homeFallbackSeq: 0,
+    homeFallbackInFlight: null,
     digestSchedulerAt: 0,
     digestSchedulerAppliedStamp: "",
     homeSignatures: {},
@@ -244,8 +249,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       project: "",
       agent: "",
       // One state, or "" for all. flagged limits the list to needs_confirmation duplicate flags.
+      // fallbackFrom is an ISO instant: tasks with a fallback result at or after that time, any final state.
       state: "",
       flagged: false,
+      fallbackFrom: "",
       range: "7d",
       customFrom: "",
       customTo: "",
@@ -268,6 +275,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       moreSeq: 0,
       lastScrollAt: 0,
       openPopover: "",
+      // A refresh whose page missed the loaded tail sets this. Manual reload clears it.
+      updatesPaused: false,
       rowNodes: new Map(),
       groupNodes: new Map(),
       signatures: {},
@@ -648,6 +657,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipelineRangeCustom: document.getElementById("pipelineRangeCustom"),
     pipelineRangeAll: document.getElementById("pipelineRangeAll"),
     pipelineFlaggedChip: document.getElementById("pipelineFlaggedChip"),
+    pipelineFallbackChip: document.getElementById("pipelineFallbackChip"),
     pipelineUpdatesPaused: document.getElementById("pipelineUpdatesPaused"),
     pipelineProjectButton: document.getElementById("pipelineProjectButton"),
     pipelineProjectValue: document.getElementById("pipelineProjectValue"),
@@ -2407,9 +2417,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const stuck = Number(overview.queue.stuck_tasks || 0);
       const duplicates = Number(overview.queue.duplicate_flags || 0);
       // The card opens Pipeline on what it warns about, or on the queue when all is well.
-      // Stuck and duplicate counts cover all history, so those links use the internal all-time range.
-      setAttr(els.homeQueueCard, "data-pipeline-state", stuck > 0 ? "stuck" : duplicates > 0 ? "duplicate" : "queued");
-      setAttr(els.homeQueueCard, "data-pipeline-range", stuck > 0 || duplicates > 0 ? "all" : "7d");
+      // Stuck covers all history. Pending duplicates are needs_confirmation flags, so state=duplicate misses them.
+      if (stuck > 0) {
+        setAttr(els.homeQueueCard, "data-pipeline-state", "stuck");
+        setAttr(els.homeQueueCard, "data-pipeline-range", "all");
+        setAttr(els.homeQueueCard, "data-pipeline-flagged", "");
+      } else if (duplicates > 0) {
+        setAttr(els.homeQueueCard, "data-pipeline-state", "");
+        setAttr(els.homeQueueCard, "data-pipeline-range", "all");
+        setAttr(els.homeQueueCard, "data-pipeline-flagged", "1");
+      } else {
+        setAttr(els.homeQueueCard, "data-pipeline-state", "queued");
+        setAttr(els.homeQueueCard, "data-pipeline-range", "7d");
+        setAttr(els.homeQueueCard, "data-pipeline-flagged", "");
+      }
       renderHealthCard(
         els.homeQueueCard,
         stuck > 0 || duplicates > 0 ? "warn" : "ok",
@@ -2423,15 +2444,29 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     // TODO(api): llm usage. Calls, latency and tokens per day need an endpoint over logs/llm-usage-*.jsonl;
     // until then this card reports today's task-summary success rate (saved vs raw fallback) from task_results.
     if (!summary) {
+      setAttr(els.homeLlmCard, "data-pipeline-fallback-from", "");
+      setAttr(els.homeLlmCard, "data-pipeline-range", "");
+      setAttr(els.homeLlmCard, "data-pipeline-state", "");
+      setAttr(els.homeLlmCard, "data-pipeline-flagged", "");
       renderHealthCard(els.homeLlmCard, "idle", "—", t("home.loading"), t("home.llmHint"));
     } else {
       const tasks = summary.tasks_today || {};
       const total = Number(tasks.total || 0);
       if (total === 0) {
+        setAttr(els.homeLlmCard, "data-pipeline-fallback-from", "");
+        setAttr(els.homeLlmCard, "data-pipeline-range", "");
+        setAttr(els.homeLlmCard, "data-pipeline-state", "");
+        setAttr(els.homeLlmCard, "data-pipeline-flagged", "");
         renderHealthCard(els.homeLlmCard, "idle", "—", t("home.llmNoTasks"), t("home.llmHint"));
       } else {
-        const fallback = Number(tasks.fallback || 0);
-        const rate = Math.round(((total - fallback) / total) * 100);
+        const rowFallback = Number(tasks.fallback || 0);
+        const fallback = homeFallbackCount(summary);
+        const rate = Math.round(((total - rowFallback) / total) * 100);
+        const link = fallback > 0 ? homeFallbackPipelineLink() : null;
+        setAttr(els.homeLlmCard, "data-pipeline-fallback-from", link ? link.fallbackFrom : "");
+        setAttr(els.homeLlmCard, "data-pipeline-range", link ? "all" : "");
+        setAttr(els.homeLlmCard, "data-pipeline-state", "");
+        setAttr(els.homeLlmCard, "data-pipeline-flagged", "");
         renderHealthCard(
           els.homeLlmCard,
           rate < 80 ? "error" : rate < 95 ? "warn" : "ok",
@@ -2627,11 +2662,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       items.push({ severity: "warn", text: t("home.attnDuplicates", { n: queue.duplicate_flags }), target: "pipelineView", pipelineFlagged: "1", pipelineRange: "all" });
     }
     if (summary) {
-      const fallback = Number(summary.tasks_today && summary.tasks_today.fallback || 0);
+      const fallback = homeFallbackCount(summary);
       if (fallback > 0) {
-        // tasks_today.fallback counts by result time. A Today range filters task created_at, so it can miss a
-        // result that landed today for an older task. All time + fallback is a superset of every counted task, newest first.
-        items.push({ severity: "warn", text: t("home.attnFallbacks", { n: fallback }), target: "pipelineView", pipelineState: "fallback", pipelineRange: "all" });
+        // Result time, not task created_at. fallback_from is local midnight and the list is not windowed by from/to.
+        const link = homeFallbackPipelineLink();
+        items.push({ severity: "warn", text: t("home.attnFallbacks", { n: fallback }), target: "pipelineView", pipelineRange: link.range, pipelineFallbackFrom: link.fallbackFrom });
       }
       const failed = summary.digests && Array.isArray(summary.digests.failed_recent) ? summary.digests.failed_recent : [];
       failed.forEach((digest) => {
@@ -2732,6 +2767,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         (item.pipelineState ? ' data-pipeline-state="' + item.pipelineState + '"' : '') +
         (item.pipelineRange ? ' data-pipeline-range="' + item.pipelineRange + '"' : '') +
         (item.pipelineFlagged ? ' data-pipeline-flagged="' + item.pipelineFlagged + '"' : '') +
+        (item.pipelineFallbackFrom ? ' data-pipeline-fallback-from="' + escapeHtml(item.pipelineFallbackFrom) + '"' : '') +
         (item.digestStatus ? ' data-digest-status="' + escapeHtml(item.digestStatus) + '"' : '') +
         (item.digestProject ? ' data-digest-project="' + escapeHtml(item.digestProject) + '"' : '') +
         (item.digestDate ? ' data-digest-date="' + escapeHtml(item.digestDate) + '"' : '') +
@@ -2818,6 +2854,75 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return [stats.observations, stats.dailyDigests, stats.currentStateFacts, tasks.tasks, tasks.llm_calls].join("|");
   }
 
+  function homeFallbackPipelineLink() {
+    return { fallbackFrom: localMidnightIso(), range: "all" };
+  }
+
+  // The summary counts fallback result rows. The list is one row per task, so the card uses the distinct count
+  // once that request has finished for today's midnight. Until then, and if it fails, the row count stands.
+  function homeFallbackCount(summary) {
+    const from = localMidnightIso();
+    if (state.homeFallbackFrom === from && Number.isInteger(state.homeFallbackTaskCount)) return state.homeFallbackTaskCount;
+    return Number(summary && summary.tasks_today && summary.tasks_today.fallback || 0);
+  }
+
+  function countDistinctFallbackTasks(pages) {
+    const ids = new Set();
+    (Array.isArray(pages) ? pages : []).forEach((page) => {
+      (Array.isArray(page) ? page : []).forEach((item) => {
+        if (item && item.task_id) ids.add(String(item.task_id));
+      });
+    });
+    return ids.size;
+  }
+
+  async function loadHomeFallbackTaskCount() {
+    const from = localMidnightIso();
+    const running = state.homeFallbackInFlight;
+    if (running && running.from === from) return running.promise;
+    const seq = (state.homeFallbackSeq || 0) + 1;
+    state.homeFallbackSeq = seq;
+    const job = (async () => {
+      const pages = [];
+      let cursor = "";
+      try {
+        let complete = false;
+        for (let page = 0; page < 20; page += 1) {
+          const params = new URLSearchParams({
+            tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+            limit: "100",
+            stats: "0",
+            fallback_from: from,
+          });
+          if (cursor) params.set("cursor", cursor);
+          const payload = await fetchJson("/admin/api/pipeline?" + params.toString());
+          if (seq !== state.homeFallbackSeq) return;
+          if (!payload || payload.disabled) return;
+          pages.push(Array.isArray(payload.items) ? payload.items : []);
+          const next = payload.next_cursor || "";
+          if (!next || next === cursor) {
+            complete = true;
+            break;
+          }
+          cursor = next;
+        }
+        if (seq !== state.homeFallbackSeq) return;
+        // Twenty pages still left a cursor, so the distinct total is short. Keep the summary row count.
+        if (!complete) return;
+        state.homeFallbackTaskCount = countDistinctFallbackTasks(pages);
+        state.homeFallbackFrom = from;
+        renderHome();
+      } catch (error) {
+        // Keep the summary row count until a later poll.
+      }
+    })();
+    const tracked = job.finally(() => {
+      if (state.homeFallbackInFlight && state.homeFallbackInFlight.promise === tracked) state.homeFallbackInFlight = null;
+    });
+    state.homeFallbackInFlight = { from, promise: tracked };
+    return tracked;
+  }
+
   async function loadHomeSummary() {
     if (state.homeSummaryInFlight) return state.homeSummaryInFlight;
     state.homeSummaryAt = Date.now();
@@ -2828,7 +2933,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     state.homeSummaryInFlight = fetchJson("/admin/api/home-summary?" + params.toString())
       .then((payload) => {
         state.homeSummary = payload;
+        const rowFallback = Number(payload && payload.tasks_today && payload.tasks_today.fallback || 0);
+        if (!(rowFallback > 0)) {
+          state.homeFallbackSeq = (state.homeFallbackSeq || 0) + 1;
+          state.homeFallbackTaskCount = null;
+          state.homeFallbackFrom = "";
+          state.homeFallbackInFlight = null;
+        }
         renderHome();
+        if (rowFallback > 0) void loadHomeFallbackTaskCount();
       })
       .finally(() => {
         state.homeSummaryInFlight = null;
@@ -2856,6 +2969,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function shiftDays(date, days) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+  }
+
+  // Local midnight as the UTC instant the pipeline API normalizes fallback_from to.
+  function localMidnightIso(now) {
+    return shiftDays(now || new Date(), 0).toISOString();
   }
 
   function formatCount(value) {
@@ -5501,7 +5619,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function pipelineKey() {
     const pipe = state.pipeline;
     const win = getPipelineRange();
-    return JSON.stringify([pipe.project.toLowerCase(), pipe.agent.toLowerCase(), pipe.state, pipe.flagged ? "1" : "", pipe.range, pipe.customFrom, pipe.customTo,
+    return JSON.stringify([pipe.project.toLowerCase(), pipe.agent.toLowerCase(), pipe.state, pipe.flagged ? "1" : "", pipe.fallbackFrom || "", pipe.range, pipe.customFrom, pipe.customTo,
       win.from ? localDayKey(win.from) : ""]);
   }
 
@@ -5523,18 +5641,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (pipe.agent) params.set("agent", pipe.agent);
     if (pipe.state) params.set("state", pipe.state);
     if (pipe.flagged) params.set("flagged", "1");
+    if (pipe.fallbackFrom) params.set("fallback_from", pipe.fallbackFrom);
     if (cursor) params.set("cursor", cursor);
     return "/admin/api/pipeline?" + params.toString();
   }
 
   function isPipelineFiltered() {
     const pipe = state.pipeline;
-    return !!(pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.range !== "7d");
+    return !!(pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.fallbackFrom || pipe.range !== "7d");
   }
 
   // More rows are on screen than one request can refresh (the limit max is PIPELINE_MAX_PAGE). The poll pauses
   // instead of splicing a fresh head onto a stale tail.
   function pipelinePollPaused() {
+    if (state.pipeline.updatesPaused) return true;
     const loaded = Array.isArray(state.pipeline.items) ? state.pipeline.items.length : 0;
     return loaded + PIPELINE_REFRESH_HEADROOM > PIPELINE_MAX_PAGE;
   }
@@ -5560,8 +5680,47 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       Date.now() - pipe.lastScrollAt > MEMORY_SCROLL_IDLE_MS;
   }
 
-  // mode: "reset" loads page 1, "more" appends the next page, "refresh" replaces the loaded rows when they still
-  // fit in one request. Past that, refresh does not run. Only the newest request may write state.
+  // Keep every loaded task when the refresh page still contains the tail. New rows before that tail are prepended,
+  // rows the page skipped stay in their previous order, and the visible row is held in place after render.
+  function mergePipelineRefresh(previous, incoming, anchorId) {
+    if (!anchorId) return incoming.slice();
+    const anchorAt = incoming.findIndex((item) => item && String(item.task_id || "") === anchorId);
+    if (anchorAt < 0) return previous.slice();
+    const fresh = new Map();
+    incoming.forEach((item) => { if (item && item.task_id) fresh.set(String(item.task_id), item); });
+    const prevIds = new Set(previous.map((item) => item && item.task_id ? String(item.task_id) : ""));
+    const newer = [];
+    const older = [];
+    incoming.forEach((item, index) => {
+      if (!item || !item.task_id || prevIds.has(String(item.task_id))) return;
+      if (index < anchorAt) newer.push(item); else older.push(item);
+    });
+    const kept = previous.map((item) => (item && fresh.get(String(item.task_id))) || item);
+    return newer.concat(kept, older);
+  }
+
+  // The task row the reader is on: the first [data-task-id] row still at or below the top of the viewport.
+  // Pass a task id to measure that same row again after the list renders.
+  function pipelineTaskAnchor(taskId) {
+    const list = els.pipelineList;
+    if (!list || typeof list.querySelectorAll !== "function") return null;
+    const wantId = taskId ? String(taskId) : "";
+    const rows = list.querySelectorAll("[data-task-id]");
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      if (!row || typeof row.getBoundingClientRect !== "function" || typeof row.getAttribute !== "function") continue;
+      const id = row.getAttribute("data-task-id");
+      if (!id || (wantId && String(id) !== wantId)) continue;
+      const top = row.getBoundingClientRect().top;
+      if (typeof top !== "number" || (!wantId && top < 0)) continue;
+      return { id: String(id), top };
+    }
+    return null;
+  }
+
+  // mode: "reset" loads page 1, "more" appends the next page, "refresh" merges when the last loaded task is still
+  // in the page and pauses otherwise. A list longer than one request pauses before the fetch. Only the newest
+  // request may write state.
   async function loadPipeline(mode) {
     const pipe = state.pipeline;
     const key = pipelineKey();
@@ -5585,11 +5744,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       pipe.error = "";
       pipe.stale = true;
       pipe.moreSeq = 0;
+      pipe.updatesPaused = false;
       // The old cursor is bound to the old filters.
       pipe.nextCursor = null;
       pipe.window = null;
     }
     if (mode === "more") pipe.moreSeq = seq;
+    let restoreScroll = false;
     renderPipeline();
     try {
       const payload = await fetchJson(pipelineUrl(win, limit, cursor));
@@ -5605,6 +5766,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         pipe.readsDisabled = true;
         pipe.error = "";
         pipe.refreshFailed = false;
+        pipe.updatesPaused = false;
         // Drop rows that are already on screen. Page 1, a poll and load-more all land here.
         pipe.groupNodes.clear();
         pipe.rowNodes.clear();
@@ -5621,7 +5783,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           pipe.items = pipe.items.concat(incoming.filter((item) => !seen.has(item.task_id)));
           pipe.days = mergeMemoryDays(pipe.days, days);
           pipe.nextCursor = payload.next_cursor || null;
+        } else if (mode === "refresh") {
+          const anchorId = pipe.items.length ? String(pipe.items[pipe.items.length - 1].task_id || "") : "";
+          const containsAnchor = !anchorId || incoming.some((item) => item && String(item.task_id || "") === anchorId);
+          if (!containsAnchor) {
+            pipe.updatesPaused = true;
+          } else {
+            pipe.updatesPaused = false;
+            pipe.items = mergePipelineRefresh(pipe.items, incoming, anchorId);
+            pipe.days = mergeMemoryDays(pipe.days, days);
+            pipe.nextCursor = payload.next_cursor || null;
+            pipe.window = win;
+            restoreScroll = true;
+          }
         } else {
+          pipe.updatesPaused = false;
           pipe.items = incoming;
           pipe.days = mergeMemoryDays([], days);
           pipe.nextCursor = payload.next_cursor || null;
@@ -5667,7 +5843,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (seq === pipe.seq) {
         pipe.stale = false;
         renderPipelinePauseHint();
+        // At the top, prepended rows should simply appear. Otherwise hold the first visible task row.
+        const anchor = restoreScroll && (Number(window.scrollY) || 0) > 0 ? pipelineTaskAnchor() : null;
         renderPipeline();
+        if (anchor && window && typeof window.scrollBy === "function") {
+          const next = pipelineTaskAnchor(anchor.id);
+          if (next) window.scrollBy(0, next.top - anchor.top);
+        }
       }
     }
   }
@@ -5678,12 +5860,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   function clearPipelineFilters() {
-    setPipelineFilters({ project: "", agent: "", state: "", flagged: false, range: "7d", customFrom: "", customTo: "" });
+    setPipelineFilters({ project: "", agent: "", state: "", flagged: false, fallbackFrom: "", range: "7d", customFrom: "", customTo: "" });
   }
 
   // Home's queue and attention links land here with one state picked; activateView then loads page 1.
   // range "all" sends no from/to. flagged "1" is the needs_confirmation duplicate-flag filter.
-  function presetPipelineFilters(stateValue, range, flagged) {
+  function presetPipelineFilters(stateValue, range, flagged, fallbackFrom) {
     Object.assign(state.pipeline, {
       project: "",
       agent: "",
@@ -5692,6 +5874,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       customFrom: "",
       customTo: "",
       flagged: flagged === "1",
+      fallbackFrom: typeof fallbackFrom === "string" && fallbackFrom ? fallbackFrom : "",
     });
   }
 
@@ -5765,6 +5948,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(els.pipelineRangeAll, !allTime);
     setAttr(els.pipelineRangeAll, "aria-current", allTime ? "true" : null);
     setHidden(els.pipelineFlaggedChip, !pipe.flagged);
+    setHidden(els.pipelineFallbackChip, !pipe.fallbackFrom);
+    if (pipe.fallbackFrom) {
+      const since = parseTimestamp(pipe.fallbackFrom);
+      setText(els.pipelineFallbackChip, t("pipeline.fallbackChip", { time: since ? formatPipelineStamp(since) : pipe.fallbackFrom }));
+      setAttr(els.pipelineFallbackChip, "title", t("pipeline.fallbackRemove"));
+    }
     // A custom range names its days on the segment itself.
     let customText = t("pipeline.rangeCustom");
     const start = parseLocalDay(pipe.customFrom);
@@ -5873,7 +6062,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       notice = { tone: " is-error", title: t("pipeline.errorTitle"), lead: pipe.error, action: ["retry", t("pipeline.retry")] };
     } else if (pipe.loaded && !pipe.stale && !pipe.items.length) {
       // Quiet weeks are common: offer a wider window before anything else.
-      if (pipe.project || pipe.agent || pipe.state || pipe.flagged) {
+      if (pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.fallbackFrom) {
         notice = { tone: "", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
       } else if (pipe.range === "today") {
         notice = { tone: "", title: t("pipeline.emptyTodayTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show7d")] };
@@ -6175,6 +6364,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }
       if (event.target.closest("#pipelineFlaggedChip")) {
         setPipelineFilters({ flagged: false });
+        return;
+      }
+      if (event.target.closest("#pipelineFallbackChip")) {
+        setPipelineFilters({ fallbackFrom: "" });
         return;
       }
       if (event.target.closest("#pipelineLoadMore")) {
@@ -9863,6 +10056,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipe.refreshFailed = false;
     pipe.stale = false;
     pipe.readsDisabled = true;
+    pipe.updatesPaused = false;
     pipe.groupNodes.clear();
     pipe.rowNodes.clear();
     pipe.busySeq = 0;
@@ -10592,8 +10786,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         activatePanel(devPanel);
       }
       // Home's queue card and attention items open Pipeline filtered to the state they count.
-      if (trigger.hasAttribute("data-pipeline-state") || trigger.hasAttribute("data-pipeline-flagged")) {
-        presetPipelineFilters(trigger.getAttribute("data-pipeline-state"), trigger.getAttribute("data-pipeline-range"), trigger.getAttribute("data-pipeline-flagged"));
+      if (trigger.hasAttribute("data-pipeline-state") || trigger.hasAttribute("data-pipeline-flagged") || trigger.hasAttribute("data-pipeline-fallback-from")) {
+        presetPipelineFilters(trigger.getAttribute("data-pipeline-state"), trigger.getAttribute("data-pipeline-range"), trigger.getAttribute("data-pipeline-flagged"), trigger.getAttribute("data-pipeline-fallback-from"));
       }
       if (trigger.hasAttribute("data-digest-status") || trigger.hasAttribute("data-digest-project")) {
         presetDigestFilters(trigger.getAttribute("data-digest-project"), trigger.getAttribute("data-digest-status"), trigger.getAttribute("data-digest-date"));

@@ -184,13 +184,17 @@ test('Home queue and attention links open Pipeline with the matching state', () 
   const attention = uiClientFunction('collectAttentionItems');
   assert.match(attention, /home\.attnStuck[^\n]*pipelineState: "stuck"[^\n]*pipelineRange: "all"/);
   assert.match(attention, /home\.attnDuplicates[^\n]*pipelineFlagged: "1"[^\n]*pipelineRange: "all"/);
-  assert.match(attention, /home\.attnFallbacks[^\n]*pipelineState: "fallback"[^\n]*pipelineRange: "all"/);
-  assert.match(attention, /superset of every counted task/);
+  assert.match(attention, /home\.attnFallbacks[^\n]*pipelineRange: link\.range[^\n]*pipelineFallbackFrom: link\.fallbackFrom/);
+  assert.doesNotMatch(attention, /pipelineState:\s*"fallback"/);
+  assert.doesNotMatch(attention, /superset of every counted task/);
   assert.match(uiClientFunction('renderHomeAttention'), /data-pipeline-state="/);
   assert.match(uiClientFunction('renderHomeAttention'), /data-pipeline-flagged="/);
+  assert.match(uiClientFunction('renderHomeAttention'), /data-pipeline-fallback-from="/);
   assert.match(uiClientFunction('renderHomeHealth'), /setAttr\(els\.homeQueueCard, "data-pipeline-state"/);
-  assert.match(uiClientFunction('renderHomeHealth'), /stuck > 0 \|\| duplicates > 0 \? "all" : "7d"/);
+  assert.match(uiClientFunction('renderHomeHealth'), /setAttr\(els\.homeQueueCard, "data-pipeline-flagged", "1"\)/);
+  assert.match(uiClientFunction('renderHomeHealth'), /setAttr\(els\.homeQueueCard, "data-pipeline-state", "queued"\)/);
   assert.match(uiClientFunction('bindEvents'), /presetPipelineFilters\(trigger\.getAttribute\("data-pipeline-state"\)/);
+  assert.match(uiClientFunction('bindEvents'), /data-pipeline-fallback-from/);
   const preset = vm.runInNewContext(`
     const PIPELINE_STATES = ["queued", "processing", "saved", "skipped", "duplicate", "fallback", "failed", "stuck"];
     const state = { pipeline: { project: "lumen-notes", agent: "codex", state: "", range: "custom", customFrom: "2026-10-01", customTo: "2026-10-02" } };
@@ -204,16 +208,19 @@ test('Home queue and attention links open Pipeline with the matching state', () 
     presetPipelineFilters("", "all", "1");
     ({ stuck, bogus, fallback, flagged: Object.assign({}, state.pipeline) });
   `);
-  assert.deepEqual(JSON.parse(JSON.stringify(preset.stuck)), { project: '', agent: '', state: 'stuck', range: '30d', customFrom: '', customTo: '', flagged: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(preset.stuck)), { project: '', agent: '', state: 'stuck', range: '30d', customFrom: '', customTo: '', flagged: false, fallbackFrom: '' });
   assert.equal(preset.bogus.state, '');
   assert.equal(preset.bogus.range, '7d');
   assert.equal(preset.bogus.flagged, false);
+  assert.equal(preset.bogus.fallbackFrom, '');
   assert.equal(preset.fallback.state, 'fallback');
   assert.equal(preset.fallback.range, 'all');
   assert.equal(preset.fallback.flagged, false);
+  assert.equal(preset.fallback.fallbackFrom, '');
   assert.equal(preset.flagged.state, '');
   assert.equal(preset.flagged.range, 'all');
   assert.equal(preset.flagged.flagged, true);
+  assert.equal(preset.flagged.fallbackFrom, '');
 });
 
 test('Pipeline rows and the task drawer escape hostile titles and errors', () => {
@@ -468,10 +475,10 @@ function pipelineBehaviourPrelude() {
       activity: { earlier: { key: "", payload: null, loading: false, error: "", readsDisabled: false, message: "", seq: 0, loadedAt: 0 } },
       drawer: { id: "", task: "", taskItem: null, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0 },
       pipeline: {
-        project: "", agent: "", state: "", flagged: false, range: "7d", customFrom: "", customTo: "",
+        project: "", agent: "", state: "", flagged: false, fallbackFrom: "", range: "7d", customFrom: "", customTo: "",
         items: [], days: [], stages: null, facets: null, nextCursor: null, window: null, key: "",
         loaded: false, loadedAt: 0, error: "", readsDisabled: false, refreshFailed: false, stale: false,
-        seq: 0, busySeq: 0, moreSeq: 0, lastScrollAt: 0, openPopover: "",
+        seq: 0, busySeq: 0, moreSeq: 0, lastScrollAt: 0, openPopover: "", updatesPaused: false,
         rowNodes: new Map(), groupNodes: new Map(), signatures: {},
       },
       digests: {
@@ -485,7 +492,7 @@ function pipelineBehaviourPrelude() {
       },
     };
     const document = { hidden: false };
-    const window = { scrolls: 0, scrollTo(x, y) { this.scrolls += 1; this.x = x; this.y = y; } };
+    const window = { scrolls: 0, scrollX: 0, scrollY: 0, scrollTo(x, y) { this.scrolls += 1; this.x = x; this.y = y; this.scrollX = x; this.scrollY = y; } };
     const els = {
       pipelineUpdatesPaused: { hidden: true, textContent: "" },
       pipelineList: { innerHTML: "rows" },
@@ -523,10 +530,15 @@ function pipelineBehaviourPrelude() {
     ${uiClientFunction('pipelineCanPoll')}
     ${uiClientFunction('renderPipelinePauseHint')}
     ${uiClientFunction('reloadPipelineFromStart')}
+    ${uiClientFunction('mergePipelineRefresh')}
+    ${uiClientFunction('pipelineTaskAnchor')}
     ${uiClientFunction('loadPipeline')}
     ${uiClientFunction('applyReadPolicyToViews')}
     ${uiClientFunction('pipelineFacetValues')}
-    function renderPipeline() {}
+    let pipelineOnRender = null;
+    function renderPipeline() {
+      if (typeof pipelineOnRender === "function") pipelineOnRender();
+    }
     function renderDigests() {}
     function loadDigests() {}
     function loadDigestCards() {}
@@ -547,7 +559,7 @@ function pipelineBehaviourPrelude() {
   `;
 }
 
-test('a list longer than one refresh pauses the poll, and a shorter list is replaced whole', async () => {
+test('a list longer than one refresh pauses the poll, and a shorter refresh keeps loaded rows', async () => {
   assert.doesNotMatch(uiClientFunction('loadPipeline'), /incoming\[incoming\.length - 1\]/);
   const result = await vmJson(`
     ${pipelineBehaviourPrelude()}
@@ -592,7 +604,7 @@ test('a list longer than one refresh pauses the poll, and a shorter list is repl
       await settle();
       const refreshUrl = calls[beforeRefresh].url;
       calls[beforeRefresh].resolve({
-        items: [{ task_id: "replaced" }],
+        items: [{ task_id: "replaced" }].concat(state.pipeline.items),
         days: [{ day: "2026-10-18", count: 1 }],
         stages: { queued: 3 },
         next_cursor: null,
@@ -625,7 +637,7 @@ test('a list longer than one refresh pauses the poll, and a shorter list is repl
   assert.equal(result.shortHintHidden, true);
   assert.equal(result.refreshUrl.includes('limit=60'), true);
   assert.equal(result.refreshUrl.includes('cursor='), false);
-  assert.deepEqual(result.afterRefresh, ['replaced']);
+  assert.deepEqual(result.afterRefresh, ['replaced'].concat(Array.from({ length: 40 }, (_item, index) => 'page-' + index)));
   assert.equal(result.stages.queued, 3);
 });
 
@@ -839,5 +851,634 @@ test('pipeline pickers merge overview lists with facets, and overview spelling w
   `)));
   assert.deepEqual(result.projects, ['/work/harbor-sync', '/work/lumen-notes', '/work/quay-notes']);
   assert.deepEqual(result.agents, ['lumen-agent', 'quay-agent']);
+});
+
+test('a refresh that misses the loaded tail pauses without dropping rows, and a hit merges in place', async () => {
+  assert.doesNotMatch(uiClientFunction('loadPipeline'), /incoming\[incoming\.length - 1\]/);
+  assert.match(uiClientFunction('loadPipeline'), /mergePipelineRefresh\(pipe\.items, incoming, anchorId\)/);
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    (async () => {
+      state.pipeline.items = [
+        { task_id: "a", title: "old-a" },
+        { task_id: "b", title: "keep-b" },
+        { task_id: "c", title: "old-c" },
+      ];
+      state.pipeline.days = [{ day: "2026-10-17", count: 3 }];
+      state.pipeline.nextCursor = "older-page";
+      state.pipeline.window = { from: null, to: null };
+      state.pipeline.loaded = true;
+      state.pipeline.range = "7d";
+      state.pipeline.key = pipelineKey();
+      window.scrollX = 4;
+      window.scrollY = 480;
+      const scrollsBefore = window.scrolls;
+      const refresh = loadPipeline("refresh");
+      await settle();
+      const refreshUrl = calls[0].url;
+      calls[0].resolve({
+        items: [
+          { task_id: "n", title: "new" },
+          { task_id: "a", title: "fresh-a" },
+          { task_id: "c", title: "fresh-c" },
+        ],
+        days: [{ day: "2026-10-18", count: 2 }],
+        stages: { queued: 4 },
+        next_cursor: "next-1",
+      });
+      await refresh;
+      await settle();
+      const merged = {
+        ids: rowIds(),
+        titles: state.pipeline.items.map((item) => item.title),
+        days: state.pipeline.days,
+        nextCursor: state.pipeline.nextCursor,
+        scrollY: window.scrollY,
+        scrolls: window.scrolls - scrollsBefore,
+        paused: state.pipeline.updatesPaused,
+        hintHidden: els.pipelineUpdatesPaused.hidden,
+      };
+
+      state.pipeline.items = [{ task_id: "a" }, { task_id: "b" }, { task_id: "tail" }];
+      state.pipeline.loaded = true;
+      state.pipeline.updatesPaused = false;
+      state.pipeline.key = pipelineKey();
+      state.pipeline.nextCursor = "stay-cursor";
+      state.pipeline.days = [{ day: "2026-10-17", count: 3 }];
+      const windowBefore = state.pipeline.window;
+      window.scrollY = 900;
+      const scrollsAtPause = window.scrolls;
+      const beforePause = calls.length;
+      const pausedRefresh = loadPipeline("refresh");
+      await settle();
+      calls[beforePause].resolve({
+        items: [{ task_id: "only-new" }],
+        days: [{ day: "2026-10-18", count: 1 }],
+        stages: { queued: 9 },
+        facets: { projects: ["/work/harbor-sync"], agents: ["brindle-agent"] },
+        next_cursor: "dropped-cursor",
+      });
+      await pausedRefresh;
+      await settle();
+      const paused = {
+        ids: rowIds(),
+        nextCursor: state.pipeline.nextCursor,
+        days: state.pipeline.days,
+        sameWindow: state.pipeline.window === windowBefore,
+        scrolls: window.scrolls - scrollsAtPause,
+        updatesPaused: state.pipeline.updatesPaused,
+        hintHidden: els.pipelineUpdatesPaused.hidden,
+        hint: els.pipelineUpdatesPaused.textContent,
+        queued: state.pipeline.stages && state.pipeline.stages.queued,
+        fetches: calls.length,
+      };
+      const canPoll = pipelineCanPoll();
+      const beforePoll = calls.length;
+      if (pipelineCanPoll()) await loadPipeline("refresh");
+      await loadPipeline("refresh");
+      await settle();
+      const fetchesAfterPause = calls.length - beforePoll;
+
+      const scrollsAtReset = window.scrolls;
+      reloadPipelineFromStart();
+      await settle();
+      const resetUrl = calls[calls.length - 1].url;
+      calls[calls.length - 1].resolve({
+        items: [{ task_id: "fresh-1" }],
+        days: [],
+        stages: { queued: 1 },
+        next_cursor: null,
+      });
+      await settle();
+      return {
+        refreshUrl, merged, paused, canPoll, fetchesAfterPause, resetUrl,
+        afterReset: {
+          scrolls: window.scrolls - scrollsAtReset,
+          y: window.y,
+          ids: rowIds(),
+          hintHidden: els.pipelineUpdatesPaused.hidden,
+          updatesPaused: state.pipeline.updatesPaused,
+        },
+      };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.equal(result.refreshUrl.includes('cursor='), false);
+  assert.deepEqual(result.merged.ids, ['n', 'a', 'b', 'c']);
+  assert.deepEqual(result.merged.titles, ['new', 'fresh-a', 'keep-b', 'fresh-c']);
+  assert.deepEqual(result.merged.days, [
+    { day: '2026-10-18', count: 2 },
+    { day: '2026-10-17', count: 3 },
+  ]);
+  assert.equal(result.merged.nextCursor, 'next-1');
+  assert.equal(result.merged.scrollY, 480);
+  assert.equal(result.merged.scrolls, 0);
+  assert.equal(result.merged.paused, false);
+  assert.equal(result.merged.hintHidden, true);
+  assert.deepEqual(result.paused.ids, ['a', 'b', 'tail']);
+  assert.equal(result.paused.nextCursor, 'stay-cursor');
+  assert.deepEqual(result.paused.days, [{ day: '2026-10-17', count: 3 }]);
+  assert.equal(result.paused.sameWindow, true);
+  assert.equal(result.paused.scrolls, 0);
+  assert.equal(result.paused.updatesPaused, true);
+  assert.equal(result.paused.hintHidden, false);
+  assert.equal(result.paused.hint, 'Updates paused – Refresh');
+  assert.equal(result.paused.queued, 9);
+  assert.equal(result.canPoll, false);
+  assert.equal(result.fetchesAfterPause, 0);
+  assert.equal(result.resetUrl.includes('limit=50'), true);
+  assert.equal(result.resetUrl.includes('cursor='), false);
+  assert.equal(result.afterReset.scrolls, 1);
+  assert.equal(result.afterReset.y, 0);
+  assert.deepEqual(result.afterReset.ids, ['fresh-1']);
+  assert.equal(result.afterReset.hintHidden, true);
+  assert.equal(result.afterReset.updatesPaused, false);
+});
+
+test('a refresh scrolls by the distance prepended rows push the visible task down', async () => {
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    (async () => {
+      const tops = { above: -48, read: 180 };
+      let pendingShift = 0;
+      pipelineOnRender = () => {
+        if (!pendingShift) return;
+        const delta = pendingShift;
+        pendingShift = 0;
+        tops.above += delta;
+        tops.read += delta;
+      };
+      els.pipelineList.querySelectorAll = () => ["above", "read"].map((id) => ({
+        getAttribute(name) { return name === "data-task-id" ? id : null; },
+        getBoundingClientRect() { return { top: tops[id] }; },
+      }));
+      window.scrollBy = function (x, y) {
+        this.scrollByCalls = (this.scrollByCalls || 0) + 1;
+        this.scrollByX = x;
+        this.scrollByY = y;
+        this.scrollY += y;
+      };
+      state.pipeline.items = [{ task_id: "above" }, { task_id: "read" }];
+      state.pipeline.loaded = true;
+      state.pipeline.range = "7d";
+      state.pipeline.key = pipelineKey();
+      window.scrollY = 220;
+      const refresh = loadPipeline("refresh");
+      await settle();
+      pendingShift = 64;
+      calls[0].resolve({
+        items: [{ task_id: "new" }, { task_id: "above" }, { task_id: "read" }],
+        days: [],
+        stages: { queued: 1 },
+        next_cursor: null,
+      });
+      await refresh;
+      await settle();
+      const shifted = {
+        scrollByCalls: window.scrollByCalls,
+        scrollByY: window.scrollByY,
+        scrollY: window.scrollY,
+        scrolls: window.scrolls,
+        readTop: tops.read,
+      };
+
+      state.pipeline.items = [{ task_id: "above" }, { task_id: "read" }];
+      state.pipeline.loaded = true;
+      state.pipeline.updatesPaused = false;
+      state.pipeline.key = pipelineKey();
+      window.scrollY = 0;
+      const callsBeforeTop = window.scrollByCalls;
+      const atTopRefresh = loadPipeline("refresh");
+      await settle();
+      pendingShift = 40;
+      calls[1].resolve({
+        items: [{ task_id: "newer" }, { task_id: "above" }, { task_id: "read" }],
+        days: [],
+        stages: { queued: 1 },
+        next_cursor: null,
+      });
+      await atTopRefresh;
+      await settle();
+      return {
+        shifted,
+        atTop: {
+          scrollByCalls: window.scrollByCalls - callsBeforeTop,
+          scrollY: window.scrollY,
+          readTop: tops.read,
+        },
+      };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.equal(result.shifted.scrollByCalls, 1);
+  assert.equal(result.shifted.scrollByY, 64);
+  assert.equal(result.shifted.scrollY, 284);
+  assert.equal(result.shifted.scrolls, 0);
+  assert.equal(result.shifted.readTop, 244);
+  assert.equal(result.atTop.scrollByCalls, 0);
+  assert.equal(result.atTop.scrollY, 0);
+  assert.equal(result.atTop.readTop, 284);
+});
+
+test('Home queue duplicates and fallbacks today open Pipeline without the wrong state filter', () => {
+  const result = JSON.parse(JSON.stringify(vm.runInNewContext(`
+    const state = {
+      overviewError: false,
+      isSavingPolicy: true,
+      overview: null,
+      homeSummary: null,
+      homeFallbackTaskCount: null,
+      homeFallbackFrom: "",
+      healthStatus: {},
+      digestSchedulerPayload: null,
+    };
+    const nodes = {};
+    const document = {
+      getElementById(id) {
+        if (!nodes[id]) nodes[id] = { textContent: "" };
+        return nodes[id];
+      },
+    };
+    function makeCard(id) {
+      const attrs = {};
+      return {
+        id,
+        className: "",
+        hasAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name); },
+        getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
+        setAttribute(name, value) { attrs[name] = String(value); },
+        removeAttribute(name) { delete attrs[name]; },
+      };
+    }
+    const els = {
+      homeWorkerCard: makeCard("homeWorkerCard"),
+      homeQueueCard: makeCard("homeQueueCard"),
+      homeLlmCard: makeCard("homeLlmCard"),
+      homeDigestCard: makeCard("homeDigestCard"),
+      homeVaultCard: makeCard("homeVaultCard"),
+    };
+    function t(key, vars) {
+      const template = en[key] || key;
+      return String(template).replace(/\\{(\\w+)\\}/g, (_match, name) => (
+        vars && Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : "{" + name + "}"
+      ));
+    }
+    function read(card) {
+      return {
+        state: card.getAttribute("data-pipeline-state"),
+        range: card.getAttribute("data-pipeline-range"),
+        flagged: card.getAttribute("data-pipeline-flagged"),
+        fallbackFrom: card.getAttribute("data-pipeline-fallback-from"),
+      };
+    }
+    ${uiClientFunction('setText')}
+    ${uiClientFunction('setClass')}
+    ${uiClientFunction('setAttr')}
+    ${uiClientFunction('renderHealthCard')}
+    ${uiClientFunction('parseTimestamp')}
+    ${uiClientFunction('shiftDays')}
+    ${uiClientFunction('localMidnightIso')}
+    ${uiClientFunction('homeFallbackCount')}
+    ${uiClientFunction('homeFallbackPipelineLink')}
+    ${uiClientFunction('renderHomeHealth')}
+    ${uiClientFunction('collectAttentionItems')}
+    state.overview = { queue: { pending: 4, stuck_tasks: 0, duplicate_flags: 3 } };
+    renderHomeHealth();
+    const duplicates = read(els.homeQueueCard);
+    state.overview = { queue: { pending: 2, stuck_tasks: 1, duplicate_flags: 3 } };
+    renderHomeHealth();
+    const stuck = read(els.homeQueueCard);
+    state.overview = { queue: { pending: 1, stuck_tasks: 0, duplicate_flags: 0 } };
+    renderHomeHealth();
+    const quiet = read(els.homeQueueCard);
+    const midnight = localMidnightIso();
+    state.homeSummary = { tasks_today: { total: 5, fallback: 2, llm_calls: 3 } };
+    state.homeFallbackFrom = midnight;
+    state.homeFallbackTaskCount = 1;
+    renderHomeHealth();
+    const linked = read(els.homeLlmCard);
+    const meta = nodes.homeLlmCardMeta.textContent;
+    state.homeFallbackTaskCount = null;
+    state.homeFallbackFrom = "";
+    renderHomeHealth();
+    const pendingCount = nodes.homeLlmCardMeta.textContent;
+    state.overview = { queue: { pending: 2, stuck_tasks: 0, duplicate_flags: 2 } };
+    state.homeSummary = null;
+    const duplicateItems = collectAttentionItems();
+    state.overview = null;
+    state.homeSummary = { tasks_today: { fallback: 4 } };
+    state.homeFallbackFrom = midnight;
+    state.homeFallbackTaskCount = 1;
+    const fallbackItems = collectAttentionItems();
+    ({ duplicates, stuck, quiet, midnight, linked, meta, pendingCount, duplicateItems, fallbackItems });
+  `, { en: ADMIN_UI_TRANSLATIONS.en })));
+  assert.deepEqual(result.duplicates, { state: null, range: 'all', flagged: '1', fallbackFrom: null });
+  assert.deepEqual(result.stuck, { state: 'stuck', range: 'all', flagged: null, fallbackFrom: null });
+  assert.deepEqual(result.quiet, { state: 'queued', range: '7d', flagged: null, fallbackFrom: null });
+  assert.equal(result.linked.fallbackFrom, result.midnight);
+  assert.equal(result.linked.range, 'all');
+  assert.equal(result.linked.state, null);
+  assert.equal(result.linked.flagged, null);
+  assert.match(result.meta, /1 fallback/);
+  assert.match(result.pendingCount, /2 fallback/);
+  assert.equal(result.duplicateItems.length, 1);
+  assert.equal(result.duplicateItems[0].pipelineFlagged, '1');
+  assert.equal(result.duplicateItems[0].pipelineRange, 'all');
+  assert.equal(result.duplicateItems[0].pipelineState, undefined);
+  assert.equal(result.fallbackItems.length, 1);
+  assert.equal(result.fallbackItems[0].pipelineFallbackFrom, result.midnight);
+  assert.equal(result.fallbackItems[0].pipelineRange, 'all');
+  assert.equal(result.fallbackItems[0].pipelineState, undefined);
+  assert.match(result.fallbackItems[0].text, /^1 /);
+});
+
+test('fallback_from is sent without a from/to window and resets the pipeline cursor', async () => {
+  const iso = '2026-10-24T16:00:00.000Z';
+  assert.match(uiClientFunction('pipelineKey'), /pipe\.fallbackFrom \|\| ""/);
+  assert.match(uiClientFunction('pipelineUrl'), /fallback_from/);
+  assert.match(uiClientFunction('clearPipelineFilters'), /fallbackFrom: ""/);
+  assert.match(uiClientFunction('isPipelineFiltered'), /pipe\.fallbackFrom/);
+  assert.match(uiClientFunction('renderPipelineToolbar'), /pipeline\.fallbackChip/);
+  assert.match(uiClientFunction('renderPipelineNotice'), /pipe\.fallbackFrom/);
+  const result = await vmJson(`
+    ${pipelineBehaviourPrelude()}
+    ${uiClientFunction('setPipelineFilters')}
+    ${uiClientFunction('clearPipelineFilters')}
+    (async () => {
+      const iso = ${JSON.stringify(iso)};
+      state.pipeline.loaded = true;
+      state.pipeline.range = "7d";
+      state.pipeline.fallbackFrom = iso;
+      const filtered = isPipelineFiltered();
+      const canPoll = pipelineCanPoll();
+      state.pipeline.fallbackFrom = "";
+      state.pipeline.range = "all";
+      state.pipeline.items = [{ task_id: "keep" }, { task_id: "tail" }];
+      state.pipeline.nextCursor = "old-cursor";
+      state.pipeline.key = pipelineKey();
+      state.pipeline.fallbackFrom = iso;
+      const pending = loadPipeline("refresh");
+      await settle();
+      const params = new URLSearchParams(calls[0].url.slice(calls[0].url.indexOf("?") + 1));
+      calls[0].resolve({ items: [{ task_id: "page-1" }], days: [], stages: { queued: 1 }, next_cursor: "ignored" });
+      await pending;
+      await settle();
+      clearPipelineFilters();
+      await settle();
+      const clearParams = new URLSearchParams(calls[1].url.slice(calls[1].url.indexOf("?") + 1));
+      return {
+        filtered, canPoll,
+        fallbackFrom: params.get("fallback_from"),
+        stateParam: params.has("state"),
+        from: params.has("from"),
+        to: params.has("to"),
+        cursor: params.has("cursor"),
+        limit: params.get("limit"),
+        ids: rowIds(),
+        clearedFallback: state.pipeline.fallbackFrom,
+        clearedRange: state.pipeline.range,
+        clearHasFallback: clearParams.has("fallback_from"),
+      };
+    })();
+  `, { URLSearchParams, en: ADMIN_UI_TRANSLATIONS.en });
+  assert.equal(result.filtered, true);
+  assert.equal(result.canPoll, false);
+  assert.equal(result.fallbackFrom, iso);
+  assert.equal(result.stateParam, false);
+  assert.equal(result.from, false);
+  assert.equal(result.to, false);
+  assert.equal(result.cursor, false);
+  assert.equal(result.limit, '50');
+  assert.deepEqual(result.ids, ['page-1']);
+  assert.equal(result.clearedFallback, '');
+  assert.equal(result.clearedRange, '7d');
+  assert.equal(result.clearHasFallback, false);
+});
+
+test('fallbacks today count distinct task ids, not fallback result rows', async () => {
+  const result = await vmJson(`
+    (async () => {
+    const state = { homeFallbackSeq: 0, homeFallbackTaskCount: null, homeFallbackFrom: "" };
+    const calls = [];
+    let mode = "pages";
+    let rendered = 0;
+    function fetchJson(url) {
+      calls.push(url);
+      if (mode === "disabled") return Promise.resolve({ disabled: true, items: [] });
+      if (calls.length === 1) {
+        return Promise.resolve({
+          items: [{ task_id: "t1" }, { task_id: "t1" }, { task_id: "t2" }],
+          next_cursor: "c1",
+        });
+      }
+      return Promise.resolve({ items: [{ task_id: "t2" }, { task_id: "t3" }], next_cursor: null });
+    }
+    function renderHome() { rendered += 1; }
+    ${uiClientFunction('shiftDays')}
+    ${uiClientFunction('localMidnightIso')}
+    ${uiClientFunction('homeFallbackCount')}
+    ${uiClientFunction('countDistinctFallbackTasks')}
+    ${uiClientFunction('loadHomeFallbackTaskCount')}
+    const onePage = countDistinctFallbackTasks([[{ task_id: "t1" }, { task_id: "t1" }]]);
+    const overlap = countDistinctFallbackTasks([
+      [{ task_id: "t1" }, { task_id: "t1" }, { task_id: "t2" }],
+      [{ task_id: "t2" }, { task_id: "t3" }],
+    ]);
+    state.homeFallbackFrom = localMidnightIso();
+    state.homeFallbackTaskCount = 1;
+    const distinct = homeFallbackCount({ tasks_today: { fallback: 4 } });
+    state.homeFallbackFrom = "2000-01-01T00:00:00.000Z";
+    const rows = homeFallbackCount({ tasks_today: { fallback: 4 } });
+    state.homeFallbackFrom = "";
+    state.homeFallbackTaskCount = null;
+    mode = "disabled";
+    await loadHomeFallbackTaskCount();
+    const afterDisabled = { count: state.homeFallbackTaskCount, from: state.homeFallbackFrom, rendered };
+    mode = "pages";
+    calls.length = 0;
+    await loadHomeFallbackTaskCount();
+    const params = calls.map((url) => new URLSearchParams(url.slice(url.indexOf("?") + 1)));
+    return ({
+      onePage, overlap, distinct, rows, afterDisabled, rendered,
+      count: state.homeFallbackTaskCount,
+      from: state.homeFallbackFrom,
+      midnight: localMidnightIso(),
+      first: {
+        fallbackFrom: params[0].get("fallback_from"),
+        stats: params[0].get("stats"),
+        limit: params[0].get("limit"),
+        from: params[0].has("from"),
+        to: params[0].has("to"),
+        state: params[0].has("state"),
+        cursor: params[0].has("cursor"),
+      },
+      secondCursor: params[1].get("cursor"),
+    });
+    })();
+  `, { URLSearchParams });
+  assert.equal(result.onePage, 1);
+  assert.equal(result.overlap, 3);
+  assert.equal(result.distinct, 1);
+  assert.equal(result.rows, 4);
+  assert.equal(result.afterDisabled.count, null);
+  assert.equal(result.afterDisabled.from, '');
+  assert.equal(result.afterDisabled.rendered, 0);
+  assert.equal(result.count, 3);
+  assert.equal(result.from, result.midnight);
+  assert.equal(result.rendered, 1);
+  assert.equal(result.first.fallbackFrom, result.midnight);
+  assert.equal(result.first.stats, '0');
+  assert.equal(result.first.limit, '100');
+  assert.equal(result.first.from, false);
+  assert.equal(result.first.to, false);
+  assert.equal(result.first.state, false);
+  assert.equal(result.first.cursor, false);
+  assert.equal(result.secondCursor, 'c1');
+});
+
+test('a fallback count that still has a cursor after 20 pages keeps the summary row count', async () => {
+  const result = await vmJson(`
+    (async () => {
+      const state = { homeFallbackSeq: 0, homeFallbackTaskCount: null, homeFallbackFrom: "" };
+      const calls = [];
+      function fetchJson() {
+        const page = calls.length + 1;
+        calls.push(page);
+        return Promise.resolve({ items: [{ task_id: "t" + page }], next_cursor: "c" + page });
+      }
+      let rendered = 0;
+      function renderHome() { rendered += 1; }
+      ${uiClientFunction('shiftDays')}
+      ${uiClientFunction('localMidnightIso')}
+      ${uiClientFunction('homeFallbackCount')}
+      ${uiClientFunction('countDistinctFallbackTasks')}
+      ${uiClientFunction('loadHomeFallbackTaskCount')}
+      await loadHomeFallbackTaskCount();
+      return {
+        calls: calls.length,
+        count: state.homeFallbackTaskCount,
+        from: state.homeFallbackFrom,
+        rendered,
+        shown: homeFallbackCount({ tasks_today: { fallback: 9 } }),
+      };
+    })();
+  `, { URLSearchParams });
+  assert.equal(result.calls, 20);
+  assert.equal(result.count, null);
+  assert.equal(result.from, '');
+  assert.equal(result.rendered, 0);
+  assert.equal(result.shown, 9);
+});
+
+test('overlapping fallback counts for the same midnight share one pagination', async () => {
+  const result = await vmJson(`
+    (async () => {
+      const state = { homeFallbackSeq: 0, homeFallbackTaskCount: null, homeFallbackFrom: "", homeFallbackInFlight: null };
+      const calls = [];
+      const pending = [];
+      function fetchJson(url) {
+        calls.push(url);
+        return new Promise((resolve) => { pending.push(resolve); });
+      }
+      let rendered = 0;
+      function renderHome() { rendered += 1; }
+      ${uiClientFunction('shiftDays')}
+      ${uiClientFunction('localMidnightIso')}
+      ${uiClientFunction('countDistinctFallbackTasks')}
+      ${uiClientFunction('loadHomeFallbackTaskCount')}
+      const first = loadHomeFallbackTaskCount();
+      const second = loadHomeFallbackTaskCount();
+      let secondDone = false;
+      second.then(() => { secondDone = true; });
+      await Promise.resolve();
+      const whilePending = { fetches: calls.length, seq: state.homeFallbackSeq, secondDone };
+      pending[0]({ items: [{ task_id: "t1" }, { task_id: "t2" }], next_cursor: null });
+      await first;
+      await second;
+      return {
+        whilePending,
+        fetches: calls.length,
+        count: state.homeFallbackTaskCount,
+        rendered,
+        seq: state.homeFallbackSeq,
+        inflight: state.homeFallbackInFlight,
+      };
+    })();
+  `, { URLSearchParams });
+  assert.equal(result.whilePending.fetches, 1);
+  assert.equal(result.whilePending.seq, 1);
+  assert.equal(result.whilePending.secondDone, false);
+  assert.equal(result.fetches, 1);
+  assert.equal(result.count, 2);
+  assert.equal(result.rendered, 1);
+  assert.equal(result.seq, 1);
+  assert.equal(result.inflight, null);
+});
+
+test('a zero fallback summary clears the distinct count before rendering Home', async () => {
+  const result = await vmJson(`
+    (async () => {
+      const state = {
+        homeFallbackSeq: 2,
+        homeFallbackTaskCount: 4,
+        homeFallbackFrom: "",
+        homeFallbackInFlight: { from: "stale", promise: null },
+        homeSummary: null,
+        homeSummaryAt: 0,
+        homeSummaryInFlight: null,
+      };
+      const HOME_CHART_DAYS = 30;
+      const renders = [];
+      function fetchJson() {
+        return Promise.resolve({ tasks_today: { fallback: 0, total: 3, llm_calls: 1 } });
+      }
+      ${uiClientFunction('shiftDays')}
+      ${uiClientFunction('localMidnightIso')}
+      ${uiClientFunction('homeFallbackCount')}
+      ${uiClientFunction('loadHomeSummary')}
+      state.homeFallbackFrom = localMidnightIso();
+      function renderHome() {
+        renders.push({
+          count: state.homeFallbackTaskCount,
+          from: state.homeFallbackFrom,
+          seq: state.homeFallbackSeq,
+          shown: homeFallbackCount(state.homeSummary),
+          inflight: state.homeFallbackInFlight,
+        });
+      }
+      await loadHomeSummary();
+      return { renders, seq: state.homeFallbackSeq };
+    })();
+  `, { URLSearchParams });
+  assert.equal(result.renders.length, 1);
+  assert.equal(result.renders[0].count, null);
+  assert.equal(result.renders[0].from, '');
+  assert.equal(result.renders[0].seq, 3);
+  assert.equal(result.renders[0].shown, 0);
+  assert.equal(result.renders[0].inflight, null);
+  assert.equal(result.seq, 3);
+});
+
+test('fallback chip copy exists in en and zh-CN, and the pause hint is a spaced pill', () => {
+  for (const key of ['pipeline.fallbackChip', 'pipeline.fallbackRemove']) {
+    const en = ADMIN_UI_TRANSLATIONS.en[key];
+    const zh = ADMIN_UI_TRANSLATIONS['zh-CN'][key];
+    assert.equal(typeof en, 'string');
+    assert.equal(typeof zh, 'string');
+    assert.ok(en.trim());
+    assert.ok(zh.trim());
+  }
+  assert.match(ADMIN_UI_TRANSLATIONS.en['pipeline.fallbackChip'], /\{time\}/);
+  assert.match(ADMIN_UI_TRANSLATIONS['zh-CN']['pipeline.fallbackChip'], /\{time\}/);
+  const css = uiHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const block = css.slice(css.indexOf('.pipePause {'), css.indexOf('.pipePause:hover'));
+  assert.match(block, /border-radius:\s*999px/);
+  assert.match(block, /margin:[^;]*16px/);
+  assert.match(block, /var\(--p-warn-fill\)/);
+  assert.match(block, /var\(--p-warn-ink\)/);
+  assert.match(css, /html\[data-glass="dark"\] \.pipelineView \{[^}]*--p-warn-fill:/);
+  assert.match(css, /html\[data-glass="dark"\] \.pipelineView \{[^}]*--p-warn-ink:/);
+  assert.match(uiClientFunction('bindPipelineEvents'), /#pipelineUpdatesPaused/);
+  assert.match(uiClientFunction('reloadPipelineFromStart'), /scrollTo\(0,\s*0\)/);
+  assert.match(pipelineSection(), /id="pipelineFallbackChip"/);
+  assert.match(pipelineSection(), /id="pipelineUpdatesPaused"/);
 });
 
