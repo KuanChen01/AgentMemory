@@ -272,9 +272,48 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       groupNodes: new Map(),
       signatures: {},
     },
+    // Digests & Reviews: the list pages through digest-list by covered day (window holds the from/to days the cursor
+    // was issued under). scheduler and vault feed the two status cards and load on their own slower cadence.
+    digests: {
+      project: "",
+      agent: "",
+      // Comma list of succeeded|skipped|failed, or "" for all (Home's failed-digest link sets "failed").
+      status: "",
+      range: "7d",
+      customFrom: "",
+      customTo: "",
+      items: [],
+      days: [],
+      stats: null,
+      facets: null,
+      nextCursor: null,
+      window: null,
+      key: "",
+      loaded: false,
+      loadedAt: 0,
+      error: "",
+      readsDisabled: false,
+      stale: false,
+      seq: 0,
+      busySeq: 0,
+      moreSeq: 0,
+      openPopover: "",
+      rowNodes: new Map(),
+      groupNodes: new Map(),
+      signatures: {},
+      scheduler: null,
+      schedulerAt: 0,
+      vault: null,
+      vaultAt: 0,
+      vaultSeq: 0,
+      // Unfiltered digest-list stats for the Nightly card's Last run (filters must not move it).
+      lastRun: null,
+    },
     // The one detail drawer. host is the view that opened it; the drawer node moves into that view. id is the memory
     // on show; task is the Pipeline task it was opened from (task alone shows the task body, taskItem its last copy).
-    drawer: { id: "", task: "", taskItem: null, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
+    // digest is the Digests row it was opened from (digestPayload its detail); a source memory opened from it keeps
+    // digest set, so Back returns to the digest.
+    drawer: { id: "", task: "", taskItem: null, digest: "", digestPayload: null, digestError: "", digestFactsOpen: false, digestSourcesOpen: false, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
   };
 
   const els = {
@@ -570,6 +609,42 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipelineNoticeLead: document.getElementById("pipelineNoticeLead"),
     pipelineNoticeAction: document.getElementById("pipelineNoticeAction"),
     pipelineLoadMore: document.getElementById("pipelineLoadMore"),
+    digestsView: document.getElementById("digestsView"),
+    digUpdated: document.getElementById("digUpdated"),
+    digToolbar: document.getElementById("digToolbar"),
+    digRangeButtons: Array.from(document.querySelectorAll("[data-digest-range]")),
+    digRangeCustom: document.getElementById("digRangeCustom"),
+    digProjectButton: document.getElementById("digProjectButton"),
+    digProjectValue: document.getElementById("digProjectValue"),
+    digAgentButton: document.getElementById("digAgentButton"),
+    digAgentValue: document.getElementById("digAgentValue"),
+    digStatusChip: document.getElementById("digStatusChip"),
+    digProjectPopover: document.getElementById("digProjectPopover"),
+    digAgentPopover: document.getElementById("digAgentPopover"),
+    digCustomPopover: document.getElementById("digCustomPopover"),
+    digCustomFrom: document.getElementById("digCustomFrom"),
+    digCustomTo: document.getElementById("digCustomTo"),
+    digCustomError: document.getElementById("digCustomError"),
+    digCustomApply: document.getElementById("digCustomApply"),
+    digCustomCancel: document.getElementById("digCustomCancel"),
+    digCards: document.getElementById("digCards"),
+    digNightlyCard: document.getElementById("digNightlyCard"),
+    digNightlyChip: document.getElementById("digNightlyChip"),
+    digNightlyChipText: document.getElementById("digNightlyChipText"),
+    digNextRunValue: document.getElementById("digNextRunValue"),
+    digLastRunValue: document.getElementById("digLastRunValue"),
+    digLastProjectsValue: document.getElementById("digLastProjectsValue"),
+    digLastProjectsSub: document.getElementById("digLastProjectsSub"),
+    digVaultChip: document.getElementById("digVaultChip"),
+    digVaultChipText: document.getElementById("digVaultChipText"),
+    digVaultLastValue: document.getElementById("digVaultLastValue"),
+    digVaultDots: document.getElementById("digVaultDots"),
+    digList: document.getElementById("digList"),
+    digNotice: document.getElementById("digNotice"),
+    digNoticeTitle: document.getElementById("digNoticeTitle"),
+    digNoticeLead: document.getElementById("digNoticeLead"),
+    digNoticeAction: document.getElementById("digNoticeAction"),
+    digLoadMore: document.getElementById("digLoadMore"),
   };
 
   // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
@@ -804,6 +879,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderActivity();
     renderMemory();
     renderPipeline();
+    renderDigests();
     renderMemoryDrawer();
     renderProceduralWorkspace();
     renderLlmConfig();
@@ -2253,8 +2329,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       renderHealthCard(els.homeDigestCard, "idle", "—", t("home.loading"));
     } else {
       const latest = summary.digests && summary.digests.latest;
+      const covered = latest ? parseLocalDay(latest.local_date) : null;
       const generatedAt = latest ? parseTimestamp(latest.generated_at) : null;
-      if (!latest || !generatedAt) {
+      if (!latest || !covered) {
         renderHealthCard(els.homeDigestCard, "idle", "—", t("home.digestNone"));
       } else {
         const status = String(latest.status || "");
@@ -2267,9 +2344,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         renderHealthCard(
           els.homeDigestCard,
           status === "failed" ? "error" : status === "skipped_missing_llm" ? "warn" : "ok",
-          calendarDaysAgo(generatedAt) === 0 ? formatClock(generatedAt) : formatShortDate(generatedAt),
+          formatShortDate(covered),
           meta,
-          [projectBasename(latest.project_path), latest.local_date, status.replace(/_/g, " "), generatedAt.toLocaleString(state.locale)].filter(Boolean).join(" · ")
+          [projectBasename(latest.project_path), formatShortDate(covered), status.replace(/_/g, " "), generatedAt ? generatedAt.toLocaleString(state.locale) : ""].filter(Boolean).join(" · ")
         );
       }
     }
@@ -2443,6 +2520,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           text: t("home.attnDigestFailed", { project: projectBasename(digest.project_path), date: digest.local_date }),
           title: String(digest.last_error || ""),
           target: "digestsView",
+          digestStatus: "failed",
+          digestProject: digest.project_path || "",
+          digestDate: digest.local_date || "",
         });
       });
       const checkpoint = parseTimestamp(summary.vault_review && summary.vault_review.last_successful_review_at);
@@ -2532,6 +2612,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         (item.pipelineState ? ' data-pipeline-state="' + item.pipelineState + '"' : '') +
         (item.pipelineRange ? ' data-pipeline-range="' + item.pipelineRange + '"' : '') +
         (item.pipelineFlagged ? ' data-pipeline-flagged="' + item.pipelineFlagged + '"' : '') +
+        (item.digestStatus ? ' data-digest-status="' + escapeHtml(item.digestStatus) + '"' : '') +
+        (item.digestProject ? ' data-digest-project="' + escapeHtml(item.digestProject) + '"' : '') +
+        (item.digestDate ? ' data-digest-date="' + escapeHtml(item.digestDate) + '"' : '') +
         (item.title ? ' title="' + escapeHtml(item.title) + '"' : '') + '>' +
         '<span class="attentionDot" aria-hidden="true"></span><span>' + escapeHtml(item.text) + '</span>' +
       '</button></li>'
@@ -3396,9 +3479,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   // ---------- Memory detail drawer (shared by Activity and Memory) ----------
 
-  // Open with a memory (id) or with a Pipeline task body (task alone).
+  // Open with a memory (id), a Pipeline task body (task alone) or a digest body (digest alone).
   function isMemoryDrawerOpen() {
-    return !!(state.drawer.id || state.drawer.task);
+    return !!(state.drawer.id || state.drawer.task || state.drawer.digest);
   }
 
   // The drawer markup lives in Activity. It moves into the view that opens it, so its blur only runs inside the
@@ -3406,7 +3489,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // list only at 1440px and wider; below that they use the same modal sheet, scrim and focus handling as Activity.
   function memoryDrawerIsDocked(host) {
     const query = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
-    return (host === "memoryView" || host === "pipelineView") && !!(query && query.matches);
+    return (host === "memoryView" || host === "pipelineView" || host === "digestsView") && !!(query && query.matches);
   }
 
   function mountMemoryDrawer(host) {
@@ -3436,6 +3519,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       entry.node.classList.toggle("is-open", key === task);
       setAttr(entry.node, "aria-expanded", key === task ? "true" : "false");
     });
+    const digest = state.drawer.digest;
+    state.digests.rowNodes.forEach((entry, key) => {
+      entry.node.classList.toggle("is-open", key === digest);
+      setAttr(entry.node, "aria-expanded", key === digest ? "true" : "false");
+    });
   }
 
   // Pipeline has no detail call: the task body renders from the list item. "Open memory" swaps in the memory
@@ -3445,6 +3533,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const wasOpen = isMemoryDrawerOpen();
     drawer.task = taskId;
     drawer.taskItem = findPipelineTask(taskId);
+    drawer.digest = "";
+    drawer.digestPayload = null;
     drawer.id = "";
     drawer.host = "pipelineView";
     drawer.payload = null;
@@ -3490,6 +3580,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (nextHost !== "pipelineView") {
       drawer.task = "";
       drawer.taskItem = null;
+    }
+    // Likewise a source memory opened from a digest.
+    if (nextHost !== "digestsView") {
+      drawer.digest = "";
+      drawer.digestPayload = null;
+      drawer.digestError = "";
     }
     drawer.id = id;
     drawer.host = nextHost;
@@ -3539,6 +3635,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.id = "";
     drawer.task = "";
     drawer.taskItem = null;
+    drawer.digest = "";
+    drawer.digestPayload = null;
+    drawer.digestError = "";
     drawer.payload = null;
     drawer.error = "";
     drawer.missing = false;
@@ -3560,14 +3659,18 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const drawerEl = els.activityDrawer;
     if (!drawerEl) return;
     const pipeline = state.drawer.host === "pipelineView";
-    if (!memoryDrawerIsDocked(state.drawer.host) || !isMemoryDrawerOpen() || !(pipeline ? els.pipelineFlowRow : els.memorySummary)) {
+    const digests = state.drawer.host === "digestsView";
+    if (!memoryDrawerIsDocked(state.drawer.host) || !isMemoryDrawerOpen() || !(digests ? els.digCards : pipeline ? els.pipelineFlowRow : els.memorySummary)) {
       if (drawerEl.style.top) drawerEl.style.top = "";
       return;
     }
-    const anchor = pipeline
-      ? (els.pipelineFlowRow.hidden ? els.pipelineToolbar : els.pipelineFlowRow)
-      : (els.memorySummary.hidden ? els.memoryToolbar : els.memorySummary);
-    const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + 10)) + "px";
+    // On Digests the docked sheet lines up with the first day card, under the two status cards.
+    const anchor = digests
+      ? (els.digCards.hidden ? els.digToolbar : els.digCards)
+      : pipeline
+        ? (els.pipelineFlowRow.hidden ? els.pipelineToolbar : els.pipelineFlowRow)
+        : (els.memorySummary.hidden ? els.memoryToolbar : els.memorySummary);
+    const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + (digests ? 16 : 10))) + "px";
     if (drawerEl.style.top !== next) drawerEl.style.top = next;
   }
 
@@ -3580,13 +3683,13 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
   }
 
-  // Copies the memory id, or the task id while the drawer shows a Pipeline task.
+  // Copies the memory id, or the task or digest id while the drawer shows a Pipeline task or a digest.
   function copyMemoryId() {
     const drawer = state.drawer;
-    const id = drawer.id || drawer.task;
+    const id = drawer.id || drawer.task || drawer.digest;
     if (!id || !navigator.clipboard) return;
     navigator.clipboard.writeText(id).then(() => {
-      if ((drawer.id || drawer.task) !== id) return;
+      if ((drawer.id || drawer.task || drawer.digest) !== id) return;
       drawer.copied = true;
       renderMemoryDrawerCopy();
       window.setTimeout(() => {
@@ -3599,7 +3702,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function renderMemoryDrawerCopy() {
     const button = els.memoryDrawerCopy;
     if (!button) return;
-    const label = t(state.drawer.copied ? "memory.drawerCopied" : state.drawer.id || !state.drawer.task ? "memory.drawerCopyId" : "pipeline.drawerCopyId");
+    const label = t(state.drawer.copied ? "memory.drawerCopied" : !state.drawer.id && state.drawer.digest ? "digests.drawerCopyId" : state.drawer.id || !state.drawer.task ? "memory.drawerCopyId" : "pipeline.drawerCopyId");
     setAttr(button, "title", label);
     setAttr(button, "aria-label", label);
     button.classList.toggle("is-done", !!state.drawer.copied);
@@ -3823,8 +3926,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!drawerEl) return;
     const drawer = state.drawer;
     const open = isMemoryDrawerOpen();
-    // A Pipeline task without a memory on show renders the task body from its list item.
-    const taskMode = open && !drawer.id;
+    // A digest without a source memory on show renders the digest body; a Pipeline task the task body.
+    const digestMode = open && !drawer.id && !!drawer.digest;
+    const taskMode = open && !drawer.id && !drawer.digest;
     setHidden(drawerEl, !open);
     setHidden(els.memoryDrawerCopy, !!drawer.readsDisabled);
     // Activity's sheet is always modal over the scrim. Memory and Pipeline hide the scrim only while docked (1440px
@@ -3834,10 +3938,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (els.activityView) els.activityView.classList.toggle("has-drawer", open && drawer.host === "activityView");
     if (els.memoryView) els.memoryView.classList.toggle("is-drawer-open", open && drawer.host === "memoryView");
     if (els.pipelineView) els.pipelineView.classList.toggle("is-drawer-open", open && drawer.host === "pipelineView");
+    if (els.digestsView) els.digestsView.classList.toggle("is-drawer-open", open && drawer.host === "digestsView");
     drawerEl.classList.toggle("is-task", taskMode);
+    drawerEl.classList.toggle("is-digest", digestMode);
     if (drawer.task && !drawer.readsDisabled) drawer.taskItem = findPipelineTask(drawer.task) || drawer.taskItem;
-    const card = !open || drawer.readsDisabled || taskMode ? null : findDrawerCard(drawer.id);
-    const signature = [state.locale, drawer.id, drawer.task, drawer.host, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload), drawer.payload ? "" : JSON.stringify(card), drawer.task ? JSON.stringify(drawer.taskItem) : ""].join("|");
+    const card = !open || drawer.readsDisabled || taskMode || digestMode ? null : findDrawerCard(drawer.id);
+    const digestItem = drawer.digest ? findDigestItem(drawer.digest) : null;
+    const signature = [state.locale, drawer.id, drawer.task, drawer.host, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload), drawer.payload ? "" : JSON.stringify(card), drawer.task ? JSON.stringify(drawer.taskItem) : "",
+      drawer.digest, drawer.digestError, drawer.digestFactsOpen, drawer.digestSourcesOpen, digestMode ? JSON.stringify(drawer.digestPayload) + JSON.stringify(digestItem) : ""].join("|");
     if (drawer.signature === signature) return;
     drawer.signature = signature;
     renderMemoryDrawerCopy();
@@ -3848,14 +3956,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       setText(els.activityDrawerTitle, "");
       return;
     }
+    if (digestMode) {
+      renderDigestDrawer(digestItem);
+      return;
+    }
     if (taskMode) {
       renderPipelineTaskDrawer(drawer.readsDisabled ? null : drawer.taskItem);
       return;
     }
-    // A memory opened from a Pipeline task leads with the way back to it.
+    // A memory opened from a Pipeline task or a digest leads with the way back to it.
     const back = drawer.task && drawer.host === "pipelineView"
       ? '<button class="pipeBack" type="button" data-pipeline-back="true">' + svgIcon("chevronLeft", "pipeBackIcon") + '<span>' + escapeHtml(t("pipeline.drawerBack")) + '</span></button>'
-      : "";
+      : drawer.digest && drawer.host === "digestsView"
+        ? '<button class="pipeBack" type="button" data-digest-back="true">' + svgIcon("chevronLeft", "pipeBackIcon") + '<span>' + escapeHtml(t("digests.drawerBack")) + '</span></button>'
+        : "";
     drawerEl.classList.toggle("is-from-task", !!back);
     // Until the detail arrives, the row or card already on screen supplies the header.
     const memory = drawer.payload && drawer.payload.memory ? drawer.payload.memory : card;
@@ -3932,6 +4046,22 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         backToPipelineTask();
         return;
       }
+      if (event.target.closest("[data-digest-back]")) {
+        backToDigest();
+        return;
+      }
+      const digestRetry = event.target.closest("[data-digest-open]");
+      if (digestRetry) {
+        void openDigestDrawer(digestRetry.getAttribute("data-digest-open"), null);
+        return;
+      }
+      const digestToggle = event.target.closest("[data-digest-toggle]");
+      if (digestToggle) {
+        const which = digestToggle.getAttribute("data-digest-toggle") === "sources" ? "digestSourcesOpen" : "digestFactsOpen";
+        drawer[which] = !drawer[which];
+        renderMemoryDrawer();
+        return;
+      }
       const narrativeToggle = event.target.closest("[data-narrative-toggle]");
       if (narrativeToggle) {
         drawer.summaryOpen = !drawer.summaryOpen;
@@ -3970,7 +4100,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const memoryDrawerDockQuery = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
     if (memoryDrawerDockQuery && memoryDrawerDockQuery.addEventListener) {
       memoryDrawerDockQuery.addEventListener("change", () => {
-        if (!isMemoryDrawerOpen() || (state.drawer.host !== "memoryView" && state.drawer.host !== "pipelineView")) return;
+        if (!isMemoryDrawerOpen() || (state.drawer.host !== "memoryView" && state.drawer.host !== "pipelineView" && state.drawer.host !== "digestsView")) return;
         mountMemoryDrawer(state.drawer.host);
         renderMemoryDrawer();
         placeMemoryDrawer();
@@ -5922,6 +6052,1019 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }, { passive: true });
   }
 
+  // ---------- Digests & Reviews ----------
+
+  const DIGEST_PAGE = 50;
+  const DIGEST_RANGE_DAYS = { "7d": 7, "30d": 30, "90d": 90 };
+  // Digests are written once a night, so the list does not poll: it reloads when the view opens after a quiet spell.
+  // The two status cards refresh at most once a minute while the view is showing.
+  const DIGEST_LIST_REFRESH_MS = 5 * 60 * 1000;
+  const DIGEST_CARDS_REFRESH_MS = 60 * 1000;
+  const DIGEST_FACTS_PREVIEW = 3;
+  const DIGEST_SOURCES_PREVIEW = 5;
+  const VAULT_DAYS = 14;
+  // A checkpoint within a day and a half counts as on schedule (the review runs daily).
+  const VAULT_ON_SCHEDULE_MS = 36 * 60 * 60 * 1000;
+
+  function findDigestItem(id) {
+    return state.digests.items.find((item) => item.id === id) || null;
+  }
+
+  // Whole local days, half-open: from is the first covered day, to the day after the last.
+  function getDigestRange() {
+    const dig = state.digests;
+    const today = shiftDays(new Date(), 0);
+    if (dig.range === "custom") {
+      const start = parseLocalDay(dig.customFrom);
+      const end = parseLocalDay(dig.customTo);
+      if (start && end && start <= end) return { from: localDayKey(start), to: localDayKey(shiftDays(end, 1)) };
+    }
+    const days = DIGEST_RANGE_DAYS[dig.range] || 7;
+    return { from: localDayKey(shiftDays(today, 1 - days)), to: localDayKey(shiftDays(today, 1)) };
+  }
+
+  // The window's days are part of the key, so a preset starts over after midnight.
+  function digestsKey() {
+    const dig = state.digests;
+    const win = getDigestRange();
+    return JSON.stringify([dig.project.toLowerCase(), dig.agent.toLowerCase(), dig.status, dig.range, win.from, win.to]);
+  }
+
+  function digestsUrl(win, cursor) {
+    const dig = state.digests;
+    const params = new URLSearchParams({
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+      limit: String(DIGEST_PAGE),
+      stats: cursor ? "0" : "1",
+      from: win.from,
+      to: win.to,
+    });
+    if (dig.project) params.set("project", dig.project);
+    if (dig.agent) params.set("agent", dig.agent);
+    if (dig.status) params.set("status", dig.status);
+    if (cursor) params.set("cursor", cursor);
+    return "/admin/api/digest-list?" + params.toString();
+  }
+
+  // days[] only covers the days a page touches, and the boundary day repeats on the next page: merge by day.
+  function mergeDigestDays(current, incoming) {
+    const byDay = new Map(current.map((day) => [day.day, day]));
+    incoming.forEach((day) => {
+      if (day && day.day) byDay.set(day.day, day);
+    });
+    return Array.from(byDay.values()).sort((left, right) => (left.day < right.day ? 1 : left.day > right.day ? -1 : 0));
+  }
+
+  function isDigestFiltered() {
+    const dig = state.digests;
+    return !!(dig.project || dig.agent || dig.status);
+  }
+
+  // mode: "reset" loads page 1 of the current filters, "more" appends the page after next_cursor. Only the newest
+  // request may write state.
+  async function loadDigests(mode) {
+    const dig = state.digests;
+    const key = digestsKey();
+    if (dig.readsDisabled || key !== dig.key) mode = "reset";
+    if (mode === "more" && (!dig.nextCursor || !dig.window || dig.moreSeq)) return;
+    const seq = dig.seq + 1;
+    dig.seq = seq;
+    const cursor = mode === "more" ? dig.nextCursor : null;
+    // A cursor only resumes under the days it was issued with.
+    const win = mode === "more" ? dig.window : getDigestRange();
+    if (mode === "reset") {
+      dig.key = key;
+      dig.error = "";
+      dig.stale = true;
+      dig.busySeq = seq;
+      dig.moreSeq = 0;
+      dig.nextCursor = null;
+      dig.window = null;
+    } else {
+      dig.moreSeq = seq;
+    }
+    renderDigests();
+    try {
+      const payload = await fetchJson(digestsUrl(win, cursor));
+      if (seq !== dig.seq) return;
+      if (payload.disabled) {
+        applyReadPolicyToViews({ readEnabled: false });
+        return;
+      }
+      dig.readsDisabled = false;
+      const incoming = Array.isArray(payload.items) ? payload.items : [];
+      const days = Array.isArray(payload.days) ? payload.days : [];
+      if (mode === "more") {
+        const seen = new Set(dig.items.map((item) => item.id));
+        dig.items = dig.items.concat(incoming.filter((item) => !seen.has(item.id)));
+        dig.days = mergeDigestDays(dig.days, days);
+      } else {
+        dig.items = incoming;
+        dig.days = mergeDigestDays([], days);
+        dig.window = win;
+        dig.stats = payload.stats || null;
+        if (payload.facets && typeof payload.facets === "object") {
+          dig.facets = {
+            projects: Array.isArray(payload.facets.projects) ? payload.facets.projects.filter((value) => typeof value === "string" && value) : [],
+            agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => typeof value === "string" && value) : [],
+          };
+        }
+      }
+      dig.nextCursor = payload.next_cursor || null;
+      dig.loaded = true;
+      dig.loadedAt = Date.now();
+      dig.error = "";
+    } catch (error) {
+      if (seq !== dig.seq) return;
+      if (mode === "more" && error && error.status === 400) {
+        // A stale cursor: start over from page 1 under the same filters.
+        dig.moreSeq = 0;
+        void loadDigests("reset");
+        return;
+      }
+      if (mode === "reset") {
+        dig.items = [];
+        dig.days = [];
+        dig.stats = null;
+        dig.loaded = false;
+        dig.error = (error && error.message) || t("digests.errorTitle");
+      }
+    } finally {
+      if (dig.busySeq === seq) dig.busySeq = 0;
+      if (dig.moreSeq === seq) dig.moreSeq = 0;
+      if (seq === dig.seq) {
+        dig.stale = false;
+        renderDigests();
+      }
+    }
+  }
+
+  // The scheduler card and the Vault card. Both requests are cheap; neither blocks the list.
+  async function loadDigestCards(force) {
+    const dig = state.digests;
+    if (!force && Date.now() - dig.vaultAt < DIGEST_CARDS_REFRESH_MS) return;
+    dig.vaultAt = Date.now();
+    const seq = dig.vaultSeq + 1;
+    dig.vaultSeq = seq;
+    const tz = String(-new Date().getTimezoneOffset());
+    const params = new URLSearchParams({ tz_offset_minutes: tz });
+    const lastRunParams = new URLSearchParams({ limit: "1", stats: "1", tz_offset_minutes: tz });
+    const results = await Promise.allSettled([
+      fetchJson("/admin/api/digest-scheduler"),
+      fetchJson("/admin/api/vault-reviews?" + params.toString()),
+      fetchJson("/admin/api/digest-list?" + lastRunParams.toString()),
+    ]);
+    if (seq !== dig.vaultSeq) return;
+    if (results[0].status === "fulfilled") dig.scheduler = results[0].value;
+    if (results[1].status === "fulfilled") {
+      const vault = results[1].value;
+      if (vault && vault.disabled) {
+        dig.vault = null;
+        applyReadPolicyToViews({ readEnabled: false });
+      } else {
+        dig.vault = vault;
+      }
+    }
+    if (results[2].status === "fulfilled") {
+      const last = results[2].value;
+      if (last && last.disabled) {
+        dig.lastRun = null;
+        applyReadPolicyToViews({ readEnabled: false });
+      } else {
+        dig.lastRun = last && last.stats ? last.stats : {};
+      }
+    }
+    renderDigestCards();
+  }
+
+  // Home's failed-digest attention item lands here with that project, Failed, and a range that includes the covered day.
+  function presetDigestFilters(project, status, date) {
+    const day = parseLocalDay(date);
+    const dayKey = day ? localDayKey(day) : "";
+    Object.assign(state.digests, {
+      project: project || "",
+      agent: "",
+      status: status === "failed" ? "failed" : "",
+      range: dayKey ? "custom" : "7d",
+      customFrom: dayKey,
+      customTo: dayKey,
+    });
+  }
+
+  function setDigestFilters(patch) {
+    Object.assign(state.digests, patch);
+    void loadDigests("reset");
+  }
+
+  function clearDigestFilters() {
+    setDigestFilters({ project: "", agent: "", status: "", range: "7d", customFrom: "", customTo: "" });
+  }
+
+  // Today and yesterday reuse Memory's header ("Today" + "Fri, Oct 16"). Older days stay "Oct 15" + "Fri".
+  function digestDayLabel(dayKey) {
+    const date = parseLocalDay(dayKey);
+    if (!date) return { name: dayKey || "—", date: "", short: dayKey || "—", full: dayKey || "—", relative: false };
+    const ago = calendarDaysAgo(date);
+    const withYear = date.getFullYear() !== new Date().getFullYear();
+    const short = date.toLocaleDateString(state.locale, { month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
+    const full = date.toLocaleDateString(state.locale, { weekday: "short", month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
+    if (ago === 0 || ago === 1) {
+      const shared = memoryDayLabel(dayKey);
+      return { name: shared.name, date: shared.date, short, full: shared.date, relative: true };
+    }
+    return { name: short, date: date.toLocaleDateString(state.locale, { weekday: "short" }), short, full, relative: false };
+  }
+
+  function digestSkipLabel(detail) {
+    if (detail === "skipped_no_observations") return t("digests.skippedNoActivity");
+    if (detail === "skipped_missing_llm") return t("digests.skippedNoLlm");
+    return t("digests.skipped");
+  }
+
+  function digestPlural(key, count) {
+    return t(Number(count) === 1 ? key + "One" : key, { n: formatCount(count) });
+  }
+
+  // "14 facts · 2 decisions · 3 next · 1 open question". Facts always show; the rest only when there are any, and
+  // open questions are the one count drawn in amber.
+  function renderDigestCounts(counts) {
+    const c = counts || {};
+    const parts = ['<span class="digCount">' + escapeHtml(digestPlural("digests.facts", Number(c.facts || 0))) + '</span>'];
+    if (Number(c.decisions) > 0) parts.push('<span class="digCount">' + escapeHtml(digestPlural("digests.decisions", Number(c.decisions))) + '</span>');
+    if (Number(c.next_actions) > 0) parts.push('<span class="digCount">' + escapeHtml(t("digests.next", { n: formatCount(c.next_actions) })) + '</span>');
+    if (Number(c.open_questions) > 0) parts.push('<span class="digCount is-open">' + escapeHtml(digestPlural("digests.openQuestions", Number(c.open_questions))) + '</span>');
+    return parts.join('<span class="digSep" aria-hidden="true">·</span>');
+  }
+
+  function renderDigestIcon(item, className) {
+    const status = item && item.status === "skipped" ? "skipped" : item && item.status === "failed" ? "failed" : "succeeded";
+    return '<span class="' + className + ' is-' + status + '" data-hue="' + escapeHtml(String(projectHue(item && item.project_path))) + '" aria-hidden="true">' +
+      svgIcon(status === "skipped" ? "minus" : status === "failed" ? "warning" : "digestDoc", "digIconGlyph") + '</span>';
+  }
+
+  // A digest is often written after midnight, so "01:54" in the Oct 16 group would read as that day.
+  // Another local day uses Pipeline's stamp ("Oct 17 · 01:54"); the same day stays the clock time.
+  function digestWrittenLabel(date, coveredDay) {
+    if (!date) return "—";
+    if (coveredDay && localDayKey(date) !== coveredDay) return formatPipelineStamp(date);
+    return formatClock(date);
+  }
+
+  function renderDigestRowBody(item) {
+    const generated = parseTimestamp(item.generated_at);
+    const summary = String(item.summary || "").trim();
+    let main;
+    if (item.status === "skipped") {
+      main = '<span class="digSummary is-quiet">' + escapeHtml(digestSkipLabel(item.status_detail)) + '</span>';
+    } else if (item.status === "failed") {
+      main = '<span class="digSummary"><span class="digFailDot" aria-hidden="true"></span>' + escapeHtml(summary || t("digests.failed")) + '</span>' +
+        '<span class="digMeta is-error" title="' + escapeHtml(item.last_error || "") + '">' + escapeHtml(item.last_error || t("digests.failedNoError")) + '</span>';
+    } else {
+      main = '<span class="digSummary' + (summary ? '' : ' is-quiet') + '"' + (summary ? ' title="' + escapeHtml(summary) + '"' : '') + '>' + escapeHtml(summary || t("digests.noSummary")) + '</span>' +
+        '<span class="digMeta">' + renderDigestCounts(item.counts) + '</span>';
+    }
+    return renderDigestIcon(item, "digIcon") +
+      '<span class="digProject" title="' + escapeHtml(item.project_path || "") + '">' + escapeHtml(projectBasename(item.project_path) || "—") + '</span>' +
+      '<span class="digMain">' + main + '</span>' +
+      '<time class="digTime" datetime="' + escapeHtml(generated ? generated.toISOString() : "") + '" title="' + escapeHtml(generated ? t("digests.generatedAt", { time: formatPipelineStamp(generated) }) : "") + '">' +
+        escapeHtml(digestWrittenLabel(generated, item.covered_day)) + '</time>';
+  }
+
+  // Keyed reconcile, as on Pipeline: one node per digest id, rewritten only when its fields or the locale change.
+  function syncDigestRows(container, items) {
+    const nodes = state.digests.rowNodes;
+    const open = state.drawer.digest;
+    let cursor = container.firstElementChild;
+    items.forEach((item) => {
+      let entry = nodes.get(item.id);
+      if (!entry) {
+        const node = document.createElement("article");
+        node.setAttribute("data-digest-id", item.id);
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-haspopup", "dialog");
+        entry = { node, signature: "" };
+        nodes.set(item.id, entry);
+      }
+      setClass(entry.node, "memRow digRow is-" + (item.status === "skipped" || item.status === "failed" ? item.status : "succeeded") + (open === item.id ? " is-open" : ""));
+      setAttr(entry.node, "aria-expanded", open === item.id ? "true" : "false");
+      const signature = state.locale + "|" + JSON.stringify(item);
+      if (entry.signature !== signature) {
+        entry.signature = signature;
+        entry.node.innerHTML = renderDigestRowBody(item);
+      }
+      if (entry.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        container.insertBefore(entry.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+  }
+
+  function renderDigestNotice() {
+    const dig = state.digests;
+    let notice = null;
+    if (dig.readsDisabled) {
+      notice = { tone: "", title: t("digests.readsDisabledTitle"), lead: t("digests.readsDisabledLead"), action: null };
+    } else if (!dig.loaded && dig.error) {
+      notice = { tone: " is-error", title: t("digests.errorTitle"), lead: dig.error, action: ["retry", t("digests.retry")] };
+    } else if (dig.loaded && !dig.stale && !dig.items.length) {
+      if (isDigestFiltered()) {
+        notice = { tone: "", title: t("digests.noResultsTitle"), lead: t("digests.noResultsLead"), action: ["clear", t("digests.clearFilters")] };
+      } else if (dig.range === "7d") {
+        notice = { tone: "", title: t("digests.emptyWeekTitle"), lead: t("digests.emptyLead"), action: ["widen", t("digests.show30d")] };
+      } else {
+        notice = { tone: "", title: t("digests.emptyRangeTitle"), lead: t("digests.emptyRangeLead"), action: ["clear", t("digests.show7d")] };
+      }
+    }
+    setHidden(els.digNotice, !notice);
+    if (notice) {
+      setClass(els.digNotice, "actNotice memNotice digGlass glassCard glassBlur" + notice.tone);
+      setText(els.digNoticeTitle, notice.title);
+      setText(els.digNoticeLead, notice.lead);
+      setHidden(els.digNoticeAction, !notice.action);
+      setAttr(els.digNoticeAction, "data-digest-action", notice.action ? notice.action[0] : null);
+      setText(els.digNoticeAction, notice.action ? notice.action[1] : "");
+    }
+    return !!notice;
+  }
+
+  function renderDigestList() {
+    const dig = state.digests;
+    const list = els.digList;
+    if (dig.readsDisabled && list.firstChild) {
+      list.innerHTML = "";
+      dig.groupNodes.clear();
+      dig.rowNodes.clear();
+    }
+    const noticed = renderDigestNotice();
+    setHidden(list, noticed);
+    setAttr(list, "aria-busy", dig.stale || !dig.loaded ? "true" : "false");
+    list.classList.toggle("is-stale", dig.stale && dig.items.length > 0);
+    setHidden(els.digLoadMore, noticed || !dig.nextCursor);
+    setText(els.digLoadMore, t(dig.moreSeq ? "digests.loadingMore" : "digests.loadMore"));
+    setAttr(els.digLoadMore, "aria-busy", dig.moreSeq ? "true" : null);
+    if (noticed) return;
+    if (!dig.items.length) {
+      if (!list.querySelector(".is-skeleton")) {
+        list.innerHTML = MEMORY_SKELETON;
+        dig.groupNodes.clear();
+        dig.rowNodes.clear();
+      }
+      return;
+    }
+    const skeleton = list.querySelector(".memGroup.is-skeleton");
+    if (skeleton) skeleton.remove();
+    const order = [];
+    const byDay = new Map();
+    dig.items.forEach((item) => {
+      const day = item.covered_day || "";
+      if (!byDay.has(day)) {
+        byDay.set(day, []);
+        order.push(day);
+      }
+      byDay.get(day).push(item);
+    });
+    const totals = new Map(dig.days.map((day) => [day.day, Number(day.total)]));
+    let cursor = list.firstElementChild;
+    order.forEach((day) => {
+      let group = dig.groupNodes.get(day);
+      if (!group) {
+        const node = document.createElement("section");
+        node.className = "memGroup digGroup digGlass";
+        node.innerHTML = '<h3 class="memDayHead digDayHead"></h3><div class="memRows digRows"></div>';
+        group = { node, head: node.firstElementChild, rows: node.lastElementChild, signature: "" };
+        dig.groupNodes.set(day, group);
+      }
+      const label = digestDayLabel(day);
+      const count = totals.has(day) && Number.isFinite(totals.get(day)) ? totals.get(day) : byDay.get(day).length;
+      const signature = [state.locale, label.name, label.date, count].join("|");
+      if (group.signature !== signature) {
+        group.signature = signature;
+        group.head.innerHTML = '<span class="memDayName">' + escapeHtml(label.name) + '</span>' +
+          '<span class="memDayDate">' + escapeHtml(label.date) + '<span class="digDayCount">' + escapeHtml(t("digests.dayCount", { n: formatCount(count) })) + '</span></span>';
+      }
+      syncDigestRows(group.rows, byDay.get(day));
+      if (group.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        list.insertBefore(group.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+    const visible = new Set(dig.items.map((item) => item.id));
+    dig.groupNodes.forEach((_group, day) => {
+      if (!byDay.has(day)) dig.groupNodes.delete(day);
+    });
+    dig.rowNodes.forEach((_entry, id) => {
+      if (!visible.has(id)) dig.rowNodes.delete(id);
+    });
+  }
+
+  function setDigestChip(chip, textEl, tone, text) {
+    setClass(chip, "digChip is-" + tone);
+    setText(textEl, text);
+  }
+
+  // "Tonight 23:50", "Tomorrow 23:50", otherwise "Oct 21 · 23:50". The clock is the browser's local time.
+  function formatDigestNextRun(value) {
+    const date = parseTimestamp(value);
+    if (!date) return "—";
+    const clock = formatClock(date);
+    const ago = calendarDaysAgo(date);
+    if (ago === 0) return t(date.getHours() >= 17 ? "digests.tonight" : "digests.todayAt", { time: clock });
+    if (ago === -1) return t("digests.tomorrow", { time: clock });
+    return formatPipelineStamp(date);
+  }
+
+  function formatDigestAgo(ms) {
+    const hours = Math.max(1, Math.round(ms / 3600000));
+    return hours < 48 ? t("digests.agoHours", { n: formatCount(hours) }) : t("digests.agoDays", { n: formatCount(Math.floor(hours / 24)) });
+  }
+
+  // Nightly digest: the scheduler's switch and next run, and the newest covered day across every project (the
+  // scheduler's own last run is not stored; list filters must not move this).
+  function renderDigestNightly() {
+    const dig = state.digests;
+    const payload = dig.scheduler;
+    const config = payload && payload.config ? payload.config : null;
+    const runtime = payload && payload.runtime ? payload.runtime : {};
+    let tone = "muted";
+    let text = "—";
+    if (config) {
+      if (!config.enabled) {
+        tone = "off";
+        text = t("digests.nightlyOff");
+      } else if (runtime.active) {
+        tone = "ok";
+        text = t("digests.nightlyActive");
+      } else {
+        tone = "warn";
+        text = t("digests.nightlyPaused");
+      }
+    }
+    setDigestChip(els.digNightlyChip, els.digNightlyChipText, tone, text);
+    setAttr(els.digNightlyCard, "title", config ? t("digests.nightlyHint", { time: config.schedule_time || "23:50", zone: config.time_zone || "" }) : "");
+    setText(els.digNextRunValue, config && config.enabled ? formatDigestNextRun(runtime.next_run_at) : "—");
+    const stats = dig.readsDisabled ? null : dig.lastRun;
+    const lastDay = stats && stats.latest_covered_day ? parseLocalDay(stats.latest_covered_day) : null;
+    setText(els.digLastRunValue, lastDay ? formatShortDate(lastDay) : stats ? t("digests.lastRunNone") : "—");
+    const projects = stats && Array.isArray(stats.latest_covered_day_projects) ? stats.latest_covered_day_projects : [];
+    setText(els.digLastProjectsValue, lastDay ? digestPlural("digests.projectsCount", projects.length) : "—");
+    const names = projects.map(projectBasename).filter(Boolean);
+    setText(els.digLastProjectsSub, names.join(", "));
+    setAttr(els.digLastProjectsSub, "title", projects.join(String.fromCharCode(10)));
+  }
+
+  // Vault review: the newest checkpoint, a derived schedule chip and one dot per local day (oldest first).
+  function renderDigestVault() {
+    const dig = state.digests;
+    const vault = dig.readsDisabled ? null : dig.vault;
+    const last = vault ? parseTimestamp(vault.last_checkpoint_at) : null;
+    setText(els.digVaultLastValue, last ? formatShortDate(last) + " " + formatClock(last) : "—");
+    let tone = "muted";
+    let text = "—";
+    if (vault) {
+      if (!last) {
+        text = t("digests.vaultNone");
+      } else {
+        const rawAge = Number(vault.last_checkpoint_age_ms);
+        const age = Number.isFinite(rawAge) && vault.last_checkpoint_age_ms !== null ? rawAge : Date.now() - last.getTime();
+        tone = age <= VAULT_ON_SCHEDULE_MS ? "ok" : "warn";
+        text = age <= VAULT_ON_SCHEDULE_MS ? t("digests.vaultOnSchedule") : t("digests.vaultBehind", { ago: formatDigestAgo(age) });
+      }
+    }
+    setDigestChip(els.digVaultChip, els.digVaultChipText, tone, text);
+    setAttr(els.digVaultChip, "title", vault && Number(vault.reads_total) > 0 ? t("digests.vaultReads", { n: formatCount(vault.reads_total) }) : "");
+    const todayKey = localDayKey(new Date());
+    let days = vault && Array.isArray(vault.days) ? vault.days.slice(-VAULT_DAYS) : [];
+    // Until the first answer, the same fourteen days show as empty dots so the card keeps its shape.
+    if (!days.length) {
+      days = [];
+      for (let index = VAULT_DAYS - 1; index >= 0; index -= 1) days.push({ day: localDayKey(shiftDays(new Date(), -index)), ran: false, runs: 0, reads: 0, pending: true });
+    }
+    const signature = [state.locale, todayKey, JSON.stringify(days)].join("|");
+    if (dig.signatures.vaultDots === signature) return;
+    dig.signatures.vaultDots = signature;
+    els.digVaultDots.innerHTML = days.map((day) => {
+      const date = parseLocalDay(day.day);
+      const runs = Number(day.runs || 0);
+      const reads = Number(day.reads || 0);
+      const ran = !!day.ran || runs > 0;
+      const isToday = day.day === todayKey;
+      const kind = day.pending ? "none" : ran ? "ran" : isToday ? "today" : reads > 0 ? "reads" : "none";
+      const name = date ? formatShortDate(date) : day.day;
+      const label = date ? String(date.getDate()) : String(day.day || "");
+      const tip = day.pending ? name
+        : ran ? t(runs === 1 ? "digests.vaultDayRanOne" : "digests.vaultDayRan", { day: name, n: formatCount(runs || 1) }) + (reads > 0 ? " · " + t("digests.vaultReads", { n: formatCount(reads) }) : "")
+          : isToday ? t("digests.vaultDayToday", { day: name })
+            : reads > 0 ? t("digests.vaultDayReads", { day: name, n: formatCount(reads) }) : t("digests.vaultDayNone", { day: name });
+      return '<span class="digDot is-' + kind + (isToday ? ' is-today' : '') + '" title="' + escapeHtml(tip) + '"><span class="digDotMark" aria-hidden="true"></span>' +
+        '<span class="digDotLabel" aria-hidden="true">' + escapeHtml(label) + '</span></span>';
+    }).join("");
+  }
+
+  function renderDigestCards() {
+    if (!els.digCards) return;
+    setHidden(els.digCards, !!state.digests.readsDisabled);
+    renderDigestNightly();
+    renderDigestVault();
+  }
+
+  function renderDigestToolbar() {
+    const dig = state.digests;
+    els.digRangeButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", button.getAttribute("data-digest-range") === dig.range ? "true" : "false");
+    });
+    let customText = t("digests.rangeCustom");
+    const start = parseLocalDay(dig.customFrom);
+    const end = parseLocalDay(dig.customTo);
+    if (dig.range === "custom" && start && end) {
+      customText = dig.customFrom === dig.customTo ? formatShortDate(end) : formatShortDate(start) + (state.locale === "zh-CN" ? "–" : " – ") + formatShortDate(end);
+    }
+    setText(els.digRangeCustom, customText);
+    const popup = (button, valueEl, value, text) => {
+      setText(valueEl, text);
+      setAttr(button, "title", value || "");
+      setClass(button, "actPopup" + (value ? " is-filtered" : ""));
+    };
+    popup(els.digProjectButton, els.digProjectValue, dig.project, dig.project ? projectBasename(dig.project) : t("digests.all"));
+    popup(els.digAgentButton, els.digAgentValue, dig.agent, dig.agent || t("digests.all"));
+    setHidden(els.digStatusChip, dig.status !== "failed");
+    setText(els.digUpdated, dig.loaded && dig.loadedAt ? t("digests.updated", { time: formatClock(new Date(dig.loadedAt)) }) : "");
+  }
+
+  function renderDigests() {
+    if (!els.digestsView) return;
+    renderDigestToolbar();
+    renderDigestMenus();
+    renderDigestCards();
+    renderDigestList();
+    if (state.drawer.host === "digestsView") renderMemoryDrawer();
+    placeMemoryDrawer();
+  }
+
+  // Project and agent lists come from the first page of digest-list (facets), with the current choice kept if missing.
+  function digestFacetValues(name) {
+    const key = name === "project" ? "projects" : "agents";
+    const facetRaw = state.digests.facets && Array.isArray(state.digests.facets[key]) ? state.digests.facets[key] : [];
+    const seen = new Set();
+    const values = [];
+    const push = (value) => {
+      const text = typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || "");
+      if (!text) return;
+      const fold = text.toLowerCase();
+      if (seen.has(fold)) return;
+      seen.add(fold);
+      values.push(text);
+    };
+    facetRaw.forEach(push);
+    const selected = state.digests[name];
+    if (selected && !values.some((value) => isActivitySelected(value, selected))) values.push(selected);
+    const label = (value) => (name === "project" ? projectBasename(value) : value);
+    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: name === "project" ? value : "" }));
+  }
+
+  function digestMenuOptions(name) {
+    if (name === "project") return [{ value: "", label: t("digests.allProjects") }].concat(digestFacetValues("project"));
+    if (name === "agent") return [{ value: "", label: t("digests.allAgents") }].concat(digestFacetValues("agent"));
+    return [];
+  }
+
+  function renderDigestMenu(name, popover) {
+    const dig = state.digests;
+    const options = digestMenuOptions(name);
+    const selected = dig[name];
+    const signature = [state.locale, selected, JSON.stringify(options)].join("|");
+    if (dig.signatures["menu-" + name] === signature) return;
+    dig.signatures["menu-" + name] = signature;
+    const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute("data-digest-value") : null;
+    popover.innerHTML = options.map((option, index) => {
+      const isSelected = option.value ? isActivitySelected(option.value, selected) : !selected;
+      return (index === 1 ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
+        '<button class="actOption" type="button" role="option" tabindex="-1" data-digest-option="' + name + '" data-digest-value="' + escapeHtml(option.value) + '" aria-selected="' + isSelected + '"' +
+        (option.title ? ' title="' + escapeHtml(option.title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
+        '<span class="actOptionName">' + escapeHtml(option.label) + '</span></button>';
+    }).join("");
+    if (focused !== null) {
+      const target = Array.from(popover.querySelectorAll("[data-digest-value]")).find((node) => node.getAttribute("data-digest-value") === focused);
+      if (target) target.focus();
+    }
+  }
+
+  function renderDigestMenus() {
+    if (!els.digestsView) return;
+    renderDigestMenu("project", els.digProjectPopover);
+    renderDigestMenu("agent", els.digAgentPopover);
+    const parts = getDigestPopoverParts(state.digests.openPopover);
+    if (parts) placeViewPopover(els.digestsView, parts[0], parts[1]);
+  }
+
+  // Project and agent pickers and the custom range share Pipeline's popover machinery; only open/close lives here.
+  function getDigestPopoverParts(name) {
+    if (name === "project") return [els.digProjectPopover, els.digProjectButton];
+    if (name === "agent") return [els.digAgentPopover, els.digAgentButton];
+    if (name === "custom") return [els.digCustomPopover, els.digRangeCustom];
+    return null;
+  }
+
+  function setDigestPopover(name) {
+    if (!els.digestsView) return;
+    const dig = state.digests;
+    dig.openPopover = getDigestPopoverParts(name) ? name : "";
+    ["project", "agent", "custom"].forEach((key) => {
+      const parts = getDigestPopoverParts(key);
+      const open = key === dig.openPopover;
+      setHidden(parts[0], !open);
+      setAttr(parts[1], "aria-expanded", open ? "true" : "false");
+      if (open) placeViewPopover(els.digestsView, parts[0], parts[1]);
+    });
+  }
+
+  function closeDigestPopover(restoreFocus) {
+    const parts = getDigestPopoverParts(state.digests.openPopover);
+    setDigestPopover("");
+    if (parts && restoreFocus) parts[1].focus();
+  }
+
+  function openDigestMenu(name) {
+    if (state.digests.openPopover === name) {
+      closeDigestPopover(false);
+      return;
+    }
+    setDigestPopover(name);
+    const popover = getDigestPopoverParts(name)[0];
+    const target = popover.querySelector('[aria-selected="true"]') || popover.querySelector(".actOption");
+    if (target) target.focus();
+  }
+
+  function openDigestCustom() {
+    if (state.digests.openPopover === "custom") {
+      closeDigestPopover(false);
+      return;
+    }
+    const dig = state.digests;
+    const today = localDayKey(new Date());
+    els.digCustomFrom.value = dig.customFrom || localDayKey(shiftDays(new Date(), -6));
+    els.digCustomTo.value = dig.customTo || today;
+    els.digCustomFrom.max = today;
+    els.digCustomTo.max = today;
+    setHidden(els.digCustomError, true);
+    setDigestPopover("custom");
+    els.digCustomFrom.focus();
+  }
+
+  function applyDigestCustomRange() {
+    const from = els.digCustomFrom.value;
+    const to = els.digCustomTo.value;
+    const start = parseLocalDay(from);
+    const end = parseLocalDay(to);
+    const error = !start || !end ? t("digests.customMissing") : start > end ? t("digests.customOrder") : "";
+    if (error) {
+      setText(els.digCustomError, error);
+      setHidden(els.digCustomError, false);
+      return;
+    }
+    closeDigestPopover(true);
+    setDigestFilters({ range: "custom", customFrom: from, customTo: to });
+  }
+
+  async function openDigestDrawer(id, trigger) {
+    const drawer = state.drawer;
+    const wasOpen = isMemoryDrawerOpen();
+    if (drawer.digest !== id) {
+      drawer.digestFactsOpen = false;
+      drawer.digestSourcesOpen = false;
+    }
+    drawer.digest = id;
+    drawer.digestPayload = null;
+    drawer.digestError = "";
+    drawer.id = "";
+    drawer.task = "";
+    drawer.taskItem = null;
+    drawer.host = "digestsView";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.readsDisabled = !!state.digests.readsDisabled;
+    drawer.copied = false;
+    if (!wasOpen || trigger) drawer.returnFocus = trigger || document.activeElement;
+    const seq = drawer.seq + 1;
+    drawer.seq = seq;
+    setDigestPopover("");
+    mountMemoryDrawer("digestsView");
+    renderMemoryDrawer();
+    markOpenMemory();
+    placeMemoryDrawer();
+    if (!memoryDrawerIsDocked("digestsView") && els.activityDrawerClose) els.activityDrawerClose.focus();
+    if (drawer.readsDisabled) return;
+    try {
+      const payload = await fetchJson("/admin/api/digest-detail?id=" + encodeURIComponent(id));
+      if (seq !== drawer.seq) return;
+      if (payload.disabled) {
+        applyReadPolicyToViews({ readEnabled: false });
+        return;
+      }
+      drawer.digestPayload = payload;
+    } catch (error) {
+      if (seq !== drawer.seq) return;
+      drawer.digestError = error && error.status === 404 ? "missing" : (error && error.message) || t("digests.drawerError");
+    } finally {
+      if (seq === drawer.seq) renderMemoryDrawer();
+    }
+  }
+
+  // From a source memory back to the digest it came from; the digest detail is still in hand.
+  function backToDigest() {
+    const drawer = state.drawer;
+    if (!drawer.digest) return;
+    if (!drawer.digestPayload) {
+      void openDigestDrawer(drawer.digest, null);
+      return;
+    }
+    drawer.id = "";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.copied = false;
+    drawer.seq += 1;
+    renderMemoryDrawer();
+    if (els.activityDrawerClose) els.activityDrawerClose.focus();
+  }
+
+  function digestStrings(list) {
+    return Array.isArray(list) ? list.map((item) => (typeof item === "string" ? item : JSON.stringify(item))).map((text) => String(text || "").trim()).filter(Boolean) : [];
+  }
+
+  function digestSection(title, count, inner, extra) {
+    return '<section class="actSection digSection' + (extra || "") + '"><h3 class="digSectionTitle">' + escapeHtml(title) +
+      (count !== null && count !== undefined ? '<span class="digSectionCount">' + escapeHtml(t("digests.dayCount", { n: formatCount(count) })) + '</span>' : '') +
+      '</h3>' + inner + '</section>';
+  }
+
+  function digestBullets(items, tone) {
+    return '<ul class="digBullets tone-' + tone + '">' + items.map((item) => '<li>' + renderFactText(item) + '</li>').join("") + '</ul>';
+  }
+
+  function renderDigestDrawerBody(payload) {
+    const drawer = state.drawer;
+    const digest = payload.digest || {};
+    const body = !payload.body_error && digest.body && typeof digest.body === "object" ? digest.body : null;
+    const parts = [];
+    if (digest.status === "skipped") {
+      const key = digest.status_detail === "skipped_no_observations" ? "digests.drawerSkippedNoActivity" : digest.status_detail === "skipped_missing_llm" ? "digests.drawerSkippedNoLlm" : "digests.drawerSkippedOther";
+      parts.push('<section class="actSection is-lead"><p class="digNarrative is-quiet">' + escapeHtml(t(key)) + '</p></section>');
+    }
+    if (digest.status === "failed") {
+      parts.push('<section class="actPane digError"><h3 class="digErrorTitle">' + svgIcon("warning", "digErrorIcon") + '<span>' + escapeHtml(t("digests.drawerLastError")) + '</span></h3>' +
+        '<p class="digErrorText">' + escapeHtml(digest.last_error || t("digests.failedNoError")) + '</p></section>');
+    }
+    if (!body && digest.status === "succeeded") parts.push('<p class="actSectionEmpty">' + escapeHtml(t("digests.drawerBodyInvalid")) + '</p>');
+    if (body) {
+      const summary = String(body.summary || "").trim();
+      if (summary) parts.push(digestSection(t("digests.drawerSummary"), null, '<p class="digNarrative">' + escapeHtml(summary) + '</p>', " is-summary"));
+      const facts = digestStrings(body.facts);
+      if (facts.length) {
+        const open = drawer.digestFactsOpen;
+        let inner = digestBullets(open ? facts : facts.slice(0, DIGEST_FACTS_PREVIEW), "facts");
+        if (facts.length > DIGEST_FACTS_PREVIEW) {
+          inner += '<button class="digShowAll" type="button" data-digest-toggle="facts" aria-expanded="' + (open ? "true" : "false") + '"><span>' +
+            escapeHtml(open ? t("digests.drawerShowFewer") : t("digests.drawerShowAllFacts", { n: formatCount(facts.length) })) + '</span>' + (open ? '' : svgIcon("arrowRight", "digShowAllIcon")) + '</button>';
+        }
+        parts.push(digestSection(t("digests.drawerFacts"), facts.length, inner));
+      }
+      [["decisions", "digests.drawerDecisions", "decisions"], ["next_actions", "digests.drawerNext", "next"], ["open_questions", "digests.drawerOpen", "open"]].forEach((entry) => {
+        const items = digestStrings(body[entry[0]]);
+        if (items.length) parts.push(digestSection(t(entry[1]), items.length, digestBullets(items, entry[2])));
+      });
+      const skills = Array.isArray(body.skill_candidates) ? body.skill_candidates.filter((skill) => skill && typeof skill === "object" && String(skill.title || "").trim()) : [];
+      if (skills.length) {
+        parts.push('<section class="actPane digSkills"><span class="digSkillsIcon" aria-hidden="true">' + svgIcon("llm", "digSkillsGlyph") + '</span><div class="digSkillsBody">' +
+          '<h3 class="digSkillsTitle">' + escapeHtml(t("digests.drawerSkills")) + '<span class="digSectionCount">' + escapeHtml(t("digests.dayCount", { n: formatCount(skills.length) })) + '</span></h3>' +
+          '<div class="digSkillChips">' + skills.map((skill) => '<span class="digSkillChip" title="' + escapeHtml(String(skill.summary || skill.trigger || "")) + '">' + escapeHtml(String(skill.title).trim()) + '</span>').join("") + '</div></div></section>');
+      }
+      const commands = digestStrings(body.verified_commands);
+      if (commands.length) {
+        parts.push(digestSection(t("digests.drawerCommands"), commands.length, '<ul class="digCommands">' + commands.map((command) => '<li><code class="actMono">' + escapeHtml(command) + '</code></li>').join("") + '</ul>', " is-quiet"));
+      }
+      const stateFacts = Array.isArray(body.state_fact_candidates) ? body.state_fact_candidates.filter((fact) => fact && typeof fact === "object") : [];
+      if (stateFacts.length) {
+        parts.push(digestSection(t("digests.drawerStateFacts"), stateFacts.length, '<ul class="digStateFacts">' + stateFacts.map((fact) => {
+          const target = [fact.entity_type, fact.entity_key].filter(Boolean).join("/");
+          // Object values read as "branch: main · head: 1a2b3c" rather than raw JSON.
+          const value = typeof fact.value === "string" ? fact.value
+            : fact.value && typeof fact.value === "object" && !Array.isArray(fact.value)
+              ? Object.keys(fact.value).map((name) => name + ": " + (typeof fact.value[name] === "string" ? fact.value[name] : JSON.stringify(fact.value[name]))).join(" · ")
+              : JSON.stringify(fact.value);
+          return '<li><span class="digStateKey">' + escapeHtml([target, fact.fact_key].filter(Boolean).join(" · ")) + '</span><span class="digStateValue">' + escapeHtml(value || "—") + '</span></li>';
+        }).join("") + '</ul>', " is-quiet"));
+      }
+      const lowSignal = digestStrings(body.low_signal_patterns);
+      if (lowSignal.length) {
+        parts.push('<details class="actSection digSection is-quiet digDetails"><summary class="digSectionTitle">' + svgIcon("chevronRight", "digDetailsIcon") + '<span>' + escapeHtml(t("digests.drawerLowSignal")) + '</span>' +
+          '<span class="digSectionCount">' + escapeHtml(t("digests.dayCount", { n: formatCount(lowSignal.length) })) + '</span></summary>' + digestBullets(lowSignal, "quiet") + '</details>');
+      }
+      if (!summary && !facts.length && !skills.length && !commands.length && !stateFacts.length && !lowSignal.length &&
+        !digestStrings(body.decisions).length && !digestStrings(body.next_actions).length && !digestStrings(body.open_questions).length) {
+        parts.push('<p class="actSectionEmpty">' + escapeHtml(t("digests.drawerEmpty")) + '</p>');
+      }
+    }
+    const sources = Array.isArray(payload.sources) ? payload.sources : [];
+    if (sources.length) {
+      const open = drawer.digestSourcesOpen;
+      const shown = open ? sources : sources.slice(0, DIGEST_SOURCES_PREVIEW);
+      let inner = '<ul class="digSources">' + shown.map((source) => {
+        const created = parseTimestamp(source.created_at);
+        const when = created ? '<time class="digSourceTime" datetime="' + escapeHtml(created.toISOString()) + '">' + escapeHtml(formatShortDate(created)) + '</time>' : '';
+        if (source.missing || !source.id) return '<li class="digSource is-missing">' + svgIcon("memory", "digSourceIcon") + '<span class="digSourceTitle">' + escapeHtml(t("digests.drawerSourceMissing")) + '</span>' + when + '</li>';
+        const title = String(source.title || "").trim() || t("activity.untitled");
+        return '<li><button class="digSource" type="button" data-drawer-open="' + escapeHtml(source.id) + '" title="' + escapeHtml(title) + '">' + svgIcon("memory", "digSourceIcon") +
+          '<span class="digSourceTitle">' + escapeHtml(title) + '</span>' + when + '</button></li>';
+      }).join("") + '</ul>';
+      if (sources.length > DIGEST_SOURCES_PREVIEW) {
+        inner += '<button class="digShowAll" type="button" data-digest-toggle="sources" aria-expanded="' + (open ? "true" : "false") + '"><span>' +
+          escapeHtml(open ? t("digests.drawerShowFewer") : t("digests.drawerShowAllSources", { n: formatCount(sources.length) })) + '</span>' + (open ? '' : svgIcon("arrowRight", "digShowAllIcon")) + '</button>';
+      }
+      if (payload.sources_truncated) inner += '<p class="actSectionNote">' + escapeHtml(t("digests.drawerSourcesTruncated")) + '</p>';
+      parts.push(digestSection(t("digests.drawerSources"), Number(digest.source_count) || sources.length, inner, " is-quiet"));
+    }
+    const generated = parseTimestamp(digest.generated_at);
+    const confidence = Number(digest.confidence);
+    const rows = [
+      [t("digests.drawerModel"), digest.model ? escapeHtml(digest.model) : ""],
+      [t("digests.drawerConfidence"), digest.confidence !== null && digest.confidence !== undefined && Number.isFinite(confidence) ? escapeHtml(Math.round(confidence <= 1 ? confidence * 100 : confidence) + "%") : ""],
+      [t("digests.drawerSourceCount"), escapeHtml(formatCount(digest.source_count))],
+      [t("digests.drawerGenerated"), generated ? escapeHtml(digestWrittenLabel(generated, digest.covered_day)) : ""],
+      [t("digests.drawerId"), digest.id ? '<code class="actMono">' + escapeHtml(digest.id) + '</code>' : ""],
+    ];
+    parts.push('<section class="actSection is-ids digFooter"><dl class="actIds">' + rows.filter((row) => row[1]).map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' + row[1] + '</dd>').join("") + '</dl></section>');
+    return parts.join("");
+  }
+
+  // Digest body of the shared drawer. Until the detail arrives, the list row supplies the header.
+  function renderDigestDrawer(item) {
+    const drawer = state.drawer;
+    const payload = drawer.digestPayload;
+    const digest = payload && payload.digest ? payload.digest : item;
+    els.activityDrawerSub.innerHTML = "";
+    if (digest) {
+      const name = projectBasename(digest.project_path) || "—";
+      const label = digestDayLabel(digest.covered_day);
+      const when = label.relative ? label.name + " · " + label.short : label.full || label.name;
+      const status = digest.status === "skipped" ? '<span class="digChip is-muted">' + escapeHtml(digestSkipLabel(digest.status_detail)) + '</span>'
+        : digest.status === "failed" ? '<span class="digChip is-err"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t("digests.failed")) + '</span>' : '';
+      els.activityDrawerMeta.innerHTML = renderDigestIcon(digest, "digDrawerIcon") +
+        '<span class="digDrawerHeading" aria-hidden="true"><span class="digDrawerProject" title="' + escapeHtml(digest.project_path || "") + '">' + escapeHtml(name) + '</span>' +
+        '<span class="digDrawerWhen">' + escapeHtml(when) + status + '</span></span>';
+      setText(els.activityDrawerTitle, name + " · " + when);
+      setAttr(els.activityDrawerTitle, "title", digest.project_path || "");
+    } else {
+      els.activityDrawerMeta.innerHTML = "";
+      setText(els.activityDrawerTitle, drawer.readsDisabled ? t("digests.readsDisabledTitle") : drawer.digestError ? t("digests.drawerError") : t("digests.drawerLoading"));
+      setAttr(els.activityDrawerTitle, "title", "");
+    }
+    if (drawer.readsDisabled) {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState"><p>' + escapeHtml(t("digests.drawerReadsDisabled")) + '</p></div>';
+    } else if (payload) {
+      els.activityDrawerBody.innerHTML = renderDigestDrawerBody(payload);
+    } else if (drawer.digestError) {
+      const missing = drawer.digestError === "missing";
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState is-error"><p>' + escapeHtml(missing ? t("digests.drawerMissing") : drawer.digestError) + '</p>' +
+        (missing ? '' : '<button class="bgButton" type="button" data-digest-open="' + escapeHtml(drawer.digest) + '">' + escapeHtml(t("digests.retry")) + '</button>') + '</div>';
+    } else {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerSkeleton" aria-hidden="true"><span class="is-long"></span><span class="is-long"></span><span class="is-mid"></span><span class="is-short"></span></div>' +
+        '<p class="visuallyHidden">' + escapeHtml(t("digests.drawerLoading")) + '</p>';
+    }
+  }
+
+  // Opening the view reloads the list after a quiet spell (or when midnight moved the window) and the cards once a minute.
+  function showDigestsView() {
+    const dig = state.digests;
+    if (!dig.loaded || dig.key !== digestsKey() || Date.now() - dig.loadedAt > DIGEST_LIST_REFRESH_MS) void loadDigests("reset");
+    else renderDigests();
+    void loadDigestCards(false);
+  }
+
+  function bindDigestEvents() {
+    if (!els.digestsView) return;
+    els.digestsView.addEventListener("click", (event) => {
+      const dig = state.digests;
+      // The shared drawer and its scrim handle their own clicks (see bindMemoryDrawerEvents).
+      if (els.activityDrawer.contains(event.target) || event.target === els.activityDrawerScrim) return;
+      const row = event.target.closest(".digRow[data-digest-id]");
+      if (row) {
+        const id = row.getAttribute("data-digest-id");
+        // The open row closes the drawer again; any other row swaps its content.
+        if (state.drawer.digest === id && !state.drawer.id) closeMemoryDrawer(false);
+        else void openDigestDrawer(id, row);
+        return;
+      }
+      const range = event.target.closest("[data-digest-range]");
+      if (range) {
+        const value = range.getAttribute("data-digest-range");
+        if (value === "custom") {
+          openDigestCustom();
+        } else {
+          setDigestPopover("");
+          if (value !== dig.range) setDigestFilters({ range: value });
+        }
+        return;
+      }
+      const popup = event.target.closest("#digProjectButton, #digAgentButton");
+      if (popup) {
+        openDigestMenu(popup.id.replace("dig", "").replace("Button", "").toLowerCase());
+        return;
+      }
+      const option = event.target.closest("[data-digest-option]");
+      if (option) {
+        closeDigestPopover(true);
+        setDigestFilters({ [option.getAttribute("data-digest-option")]: option.getAttribute("data-digest-value") || "" });
+        return;
+      }
+      if (event.target.closest("#digStatusChip")) {
+        setDigestFilters({ status: "" });
+        return;
+      }
+      if (event.target.closest("#digLoadMore")) {
+        void loadDigests("more");
+        return;
+      }
+      const action = event.target.closest("[data-digest-action]");
+      if (action) {
+        const kind = action.getAttribute("data-digest-action");
+        if (kind === "clear") clearDigestFilters();
+        else if (kind === "widen") setDigestFilters({ range: "30d" });
+        else void loadDigests("reset");
+        return;
+      }
+      if (event.target.closest("#digCustomApply")) {
+        applyDigestCustomRange();
+        return;
+      }
+      if (event.target.closest("#digCustomCancel")) closeDigestPopover(true);
+    });
+
+    els.digestsView.addEventListener("keydown", (event) => {
+      if (els.activityDrawer.contains(event.target)) return;
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches(".digRow[data-digest-id]")) {
+        event.preventDefault();
+        event.target.click();
+        return;
+      }
+      const open = state.digests.openPopover;
+      if (!open) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeDigestPopover(true);
+        return;
+      }
+      if (open === "custom") {
+        if (event.key === "Enter" && event.target.matches(".actDateInput")) {
+          event.preventDefault();
+          applyDigestCustomRange();
+        }
+        return;
+      }
+      const options = Array.from(getDigestPopoverParts(open)[0].querySelectorAll(".actOption"));
+      const index = options.indexOf(document.activeElement);
+      let next = -1;
+      if (event.key === "ArrowDown") next = Math.min(options.length - 1, index + 1);
+      else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = options.length - 1;
+      else if (event.key === "Tab") {
+        event.preventDefault();
+        closeDigestPopover(true);
+        return;
+      }
+      if (next >= 0 && options[next]) {
+        event.preventDefault();
+        options[next].focus();
+      }
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      const parts = getDigestPopoverParts(state.digests.openPopover);
+      if (!parts || parts[0].contains(event.target) || parts[1].contains(event.target)) return;
+      setDigestPopover("");
+    });
+    window.addEventListener("resize", () => {
+      if (state.digests.openPopover) setDigestPopover("");
+    });
+    window.addEventListener("scroll", () => {
+      if (state.activeView === "digestsView") scheduleMemoryDrawerPlace();
+    }, { passive: true });
+  }
+
   async function loadReleaseCheck() {
     if (!state.overview || !state.overview.release) return;
     state.isCheckingRelease = true;
@@ -6510,12 +7653,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!policy) return;
     const mem = state.memory;
     const pipe = state.pipeline;
+    const dig = state.digests;
     const early = state.activity.earlier;
     const drawer = state.drawer;
     if (policy.readEnabled) {
-      if (!mem.readsDisabled && !pipe.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
+      if (!mem.readsDisabled && !pipe.readsDisabled && !dig.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
       mem.readsDisabled = false;
       pipe.readsDisabled = false;
+      dig.readsDisabled = false;
       early.readsDisabled = false;
       early.message = "";
       early.payload = null;
@@ -6524,16 +7669,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       early.loading = false;
       early.seq += 1;
       const refreshDrawer = !!drawer.id && drawer.readsDisabled;
+      const refreshDigest = !drawer.id && !!drawer.digest && drawer.readsDisabled;
       drawer.readsDisabled = false;
       if (state.activeView === "memoryView") void loadMemories("reset");
       if (state.activeView === "pipelineView") void loadPipeline("reset");
+      if (state.activeView === "digestsView") {
+        void loadDigests("reset");
+        void loadDigestCards(true);
+      }
       if (state.activeView === "activityView") void loadActivityEarlier(true);
-      if (refreshDrawer) void openMemoryDrawer(drawer.id, null, drawer.host);
+      if (refreshDigest) void openDigestDrawer(drawer.digest, null);
+      else if (refreshDrawer) void openMemoryDrawer(drawer.id, null, drawer.host);
       // A task body comes back with the reloaded list.
       else if (drawer.task) renderMemoryDrawer();
       return;
     }
     if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && pipe.readsDisabled && pipe.items.length === 0 && !pipe.nextCursor && !drawer.taskItem &&
+      dig.readsDisabled && dig.items.length === 0 && !dig.nextCursor && !dig.vault && !dig.lastRun && !drawer.digestPayload &&
       !drawer.payload && (!isMemoryDrawerOpen() || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
     mem.items = [];
     mem.days = [];
@@ -6567,8 +7719,30 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipe.moreSeq = 0;
     pipe.seq += 1;
     if (els.pipelineList) els.pipelineList.innerHTML = "";
+    dig.items = [];
+    dig.days = [];
+    dig.stats = null;
+    dig.facets = null;
+    dig.vault = null;
+    dig.lastRun = null;
+    dig.nextCursor = null;
+    dig.window = null;
+    dig.loaded = false;
+    dig.error = "";
+    dig.stale = false;
+    dig.readsDisabled = true;
+    dig.groupNodes.clear();
+    dig.rowNodes.clear();
+    dig.busySeq = 0;
+    dig.moreSeq = 0;
+    dig.seq += 1;
+    dig.vaultSeq += 1;
+    dig.vaultAt = 0;
+    if (els.digList) els.digList.innerHTML = "";
     drawer.payload = null;
     drawer.taskItem = null;
+    drawer.digestPayload = null;
+    drawer.digestError = "";
     drawer.error = "";
     drawer.missing = false;
     drawer.copied = false;
@@ -6584,6 +7758,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     early.seq += 1;
     renderMemory();
     renderPipeline();
+    renderDigests();
     renderActivityEarlier();
     if (isMemoryDrawerOpen()) renderMemoryDrawer();
   }
@@ -6675,11 +7850,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (persist) persistBackground();
   }
 
-  // Activity, Memory and Pipeline have their own default backdrop (artwork, light or dark with the system). It shows
-  // while the user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
+  // Activity, Memory, Pipeline and Digests have their own default backdrop (artwork, light or dark with the system).
+  // It shows while the user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
   function usesActivityBackdrop() {
     const settings = bg.settings;
-    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView") && !!settings && !settings.pinned &&
+    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView") && !!settings && !settings.pinned &&
       settings.preset === bg.api.defaults.preset && settings.tone === "auto";
   }
 
@@ -7042,6 +8217,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     } else if (state.pipeline.openPopover) {
       setPipelinePopover("");
     }
+    if (nextView === "digestsView") {
+      showDigestsView();
+    } else if (state.digests.openPopover) {
+      setDigestPopover("");
+    }
     if (isMemoryDrawerOpen() && state.drawer.host !== nextView) closeMemoryDrawer(false);
     if (nextView === "devToolsView") {
       void ensureDevToolsLoaded();
@@ -7156,6 +8336,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       if (pipelineCanPoll()) await loadPipeline("refresh");
       return;
     }
+    if (state.activeView === "digestsView") {
+      // Only the status cards follow the poll (at most once a minute); the list changes once a night.
+      if (!state.digests.readsDisabled) await loadDigestCards(false);
+      return;
+    }
     if (!overviewOk) return;
     if (state.activeView === "homeView") {
       await refreshHomeData(false);
@@ -7214,6 +8399,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       // Home's queue card and attention items open Pipeline filtered to the state they count.
       if (trigger.hasAttribute("data-pipeline-state") || trigger.hasAttribute("data-pipeline-flagged")) {
         presetPipelineFilters(trigger.getAttribute("data-pipeline-state"), trigger.getAttribute("data-pipeline-range"), trigger.getAttribute("data-pipeline-flagged"));
+      }
+      if (trigger.hasAttribute("data-digest-status") || trigger.hasAttribute("data-digest-project")) {
+        presetDigestFilters(trigger.getAttribute("data-digest-project"), trigger.getAttribute("data-digest-status"), trigger.getAttribute("data-digest-date"));
       }
       activateView(trigger.getAttribute("data-nav-target"));
       // Legacy panels sit below the hero and the tab dock, and "View all" is clicked from the bottom of Home,
@@ -7525,6 +8713,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindActivityEvents();
     bindMemoryEvents();
     bindPipelineEvents();
+    bindDigestEvents();
     bindMemoryDrawerEvents();
     activateView("homeView");
     try {

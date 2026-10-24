@@ -2640,7 +2640,8 @@ ${WALLPAPER_CSS}
      working; these only shape Activity's surfaces. Memory and Pipeline share them. */
   .activityView,
   .memoryView,
-  .pipelineView {
+  .pipelineView,
+  .digestsView {
     position: relative;
     --a-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.62 * var(--glass-scale))), rgba(255, 255, 255, calc(0.40 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.05), 0 18px 40px -22px rgba(70, 80, 180, 0.38);
@@ -2700,7 +2701,8 @@ ${WALLPAPER_CSS}
 
   html[data-glass="dark"] .activityView,
   html[data-glass="dark"] .memoryView,
-  html[data-glass="dark"] .pipelineView {
+  html[data-glass="dark"] .pipelineView,
+  html[data-glass="dark"] .digestsView {
     --a-well-blur: blur(22px) saturate(160%);
     --a-glass: linear-gradient(180deg, rgba(30, 42, 88, calc(0.50 * var(--glass-scale))), rgba(12, 18, 46, calc(0.46 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 22px 48px -20px rgba(0, 0, 0, 0.70);
@@ -3694,7 +3696,8 @@ ${WALLPAPER_CSS}
      scrim, so Activity's entry animation does not fill forwards (its end state is transform: none anyway). */
   .activityView.is-active,
   .memoryView.is-active,
-  .pipelineView.is-active {
+  .pipelineView.is-active,
+  .digestsView.is-active {
     animation-fill-mode: none;
   }
 
@@ -4433,7 +4436,8 @@ ${WALLPAPER_CSS}
 
   .activityView,
   .memoryView,
-  .pipelineView {
+  .pipelineView,
+  .digestsView {
     --a-pane-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.46));
     --a-pane-shadow: var(--glass-edge), 0 10px 24px -16px rgba(60, 70, 160, 0.34);
     --a-concept-fill: rgba(10, 132, 255, 0.09);
@@ -4443,7 +4447,8 @@ ${WALLPAPER_CSS}
 
   html[data-glass="dark"] .activityView,
   html[data-glass="dark"] .memoryView,
-  html[data-glass="dark"] .pipelineView {
+  html[data-glass="dark"] .pipelineView,
+  html[data-glass="dark"] .digestsView {
     --a-pane-fill: linear-gradient(180deg, rgba(40, 54, 110, 0.46), rgba(16, 24, 60, 0.42));
     --a-pane-shadow: var(--glass-edge), 0 14px 30px -18px rgba(0, 0, 0, 0.80);
     --a-concept-fill: rgba(40, 110, 255, 0.20);
@@ -4729,7 +4734,8 @@ ${WALLPAPER_CSS}
   /* ---------- Memory ---------- */
 
   .memoryView,
-  .pipelineView {
+  .pipelineView,
+  .digestsView {
     --m-legacy-fill: rgba(255, 170, 40, 0.15);
     --m-legacy-ink: #9a5800;
     --m-legacy-dot: #f5a524;
@@ -4757,7 +4763,8 @@ ${WALLPAPER_CSS}
   }
 
   html[data-glass="dark"] .memoryView,
-  html[data-glass="dark"] .pipelineView {
+  html[data-glass="dark"] .pipelineView,
+  html[data-glass="dark"] .digestsView {
     --m-legacy-fill: rgba(255, 176, 50, 0.20);
     --m-legacy-ink: #ffc76a;
     --m-legacy-dot: #ffb340;
@@ -6841,5 +6848,1059 @@ ${WALLPAPER_CSS}
     .bgPopover {
       animation: none !important;
     }
+  }
+
+  /* ---------- Digests & Reviews ---------- */
+
+  /* Digests material: Liquid Glass with a real edge. Light falls from the top left, so the rim (--d-rim) is
+     brightest along the top and the upper-left corner and fades as it runs down the sides, with a faint
+     catch-light where it reaches the bottom. --d-edge gives the slab its thickness: a crisp top bevel, a softer
+     left one, a soft inner refraction glow and a thin reflection along the bottom edge. --d-sheen is the specular
+     wash on the face. Fills multiply --glass-scale like the other views. */
+  .digestsView {
+    --d-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.58 * var(--glass-scale))), rgba(248, 250, 255, calc(0.38 * var(--glass-scale))));
+    --d-rim: linear-gradient(168deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.86) 12%, rgba(255, 255, 255, 0.40) 34%, rgba(190, 198, 238, 0.28) 62%, rgba(210, 216, 248, 0.34) 86%, rgba(255, 255, 255, 0.88) 100%);
+    --d-edge:
+      inset 0 1.5px 0 rgba(255, 255, 255, 0.95),
+      inset 1.5px 0 0 -0.5px rgba(255, 255, 255, 0.55),
+      inset 0 16px 24px -20px rgba(255, 255, 255, 0.95),
+      inset 0 0 22px rgba(176, 192, 255, 0.10),
+      inset 0 -14px 20px -18px rgba(120, 132, 220, 0.18),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.72),
+      0 0.5px 1px rgba(64, 54, 150, 0.12);
+    --d-sheen:
+      radial-gradient(120% 80% at 0% 0%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 46%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0) 30%),
+      linear-gradient(0deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0) 10%);
+    --d-shadow: var(--d-edge), 0 1px 2px rgba(60, 70, 150, 0.05), 0 24px 46px -28px rgba(70, 80, 180, 0.42);
+    --d-drawer-shadow: var(--d-edge), 0 40px 90px -30px rgba(40, 50, 140, 0.45), 0 6px 18px rgba(40, 50, 140, 0.10);
+    --d-well: linear-gradient(180deg, rgba(255, 255, 255, calc(0.42 * var(--glass-scale))), rgba(255, 255, 255, calc(0.26 * var(--glass-scale))));
+    --d-well-edge: inset 0 1px 0 rgba(255, 255, 255, 0.90), inset 0 -1px 0 rgba(255, 255, 255, 0.50), 0 0 0 0.5px rgba(120, 130, 200, 0.10), 0 1px 2px rgba(60, 70, 150, 0.04);
+    --d-row-line: rgba(40, 50, 110, 0.08);
+    --d-tile: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(242, 245, 255, 0.70));
+    --d-tile-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 rgba(255, 255, 255, 0.6), 0 0 0 0.5px rgba(80, 90, 170, 0.14), 0 4px 10px -5px rgba(60, 70, 160, 0.30);
+    --d-ok-fill: rgba(52, 199, 89, 0.14);
+    --d-ok-ink: #16793a;
+    --d-ok-dot: #34c759;
+    --d-warn-fill: rgba(255, 159, 10, 0.15);
+    --d-warn-ink: #9a5200;
+    --d-warn-dot: #f59e0b;
+    --d-err-fill: rgba(255, 69, 58, 0.11);
+    --d-err-ink: #b42318;
+    --d-err-dot: #ff453a;
+    --d-muted-fill: rgba(130, 138, 166, 0.14);
+    --d-muted-ink: #5d6478;
+    --d-muted-dot: #a3aabb;
+    --d-open-ink: #c46a00;
+    --d-dot-none: rgba(150, 158, 190, 0.32);
+    --d-ran: radial-gradient(circle at 35% 30%, #93f0b4, #24b85c 72%);
+    --d-ran-glow: 0 0 0 3px rgba(52, 199, 89, 0.14), 0 2px 6px -1px rgba(30, 160, 80, 0.55);
+    --d-reads: radial-gradient(circle at 35% 30%, #ffd78f, #f59e0b 72%);
+    --d-reads-glow: 0 0 0 3px rgba(245, 158, 11, 0.14), 0 2px 6px -1px rgba(220, 130, 20, 0.50);
+    --d-decision: #8e6cf6;
+    --d-next: #34c759;
+    --d-accent: #2f7cf6;
+  }
+
+  html[data-glass="dark"] .digestsView {
+    --d-glass: linear-gradient(180deg, rgba(32, 44, 92, calc(0.52 * var(--glass-scale))), rgba(12, 18, 46, calc(0.48 * var(--glass-scale))));
+    --d-rim: linear-gradient(168deg, rgba(222, 232, 255, 0.62) 0%, rgba(196, 212, 255, 0.38) 12%, rgba(150, 175, 255, 0.14) 36%, rgba(100, 128, 230, 0.08) 64%, rgba(120, 150, 240, 0.14) 86%, rgba(170, 196, 255, 0.42) 100%);
+    --d-edge:
+      inset 0 1.5px 0 rgba(226, 234, 255, 0.20),
+      inset 1.5px 0 0 -0.5px rgba(200, 214, 255, 0.10),
+      inset 0 16px 24px -20px rgba(170, 195, 255, 0.20),
+      inset 0 0 22px rgba(90, 130, 255, 0.08),
+      inset 0 -14px 20px -18px rgba(110, 150, 255, 0.26),
+      inset 0 -1px 0 rgba(160, 190, 255, 0.22),
+      0 0.5px 1px rgba(0, 2, 14, 0.45);
+    --d-sheen:
+      radial-gradient(120% 80% at 0% 0%, rgba(150, 180, 255, 0.15), rgba(150, 180, 255, 0) 46%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 30%),
+      linear-gradient(0deg, rgba(140, 170, 255, 0.08), rgba(140, 170, 255, 0) 10%);
+    --d-shadow: var(--d-edge), 0 24px 48px -22px rgba(0, 0, 0, 0.72);
+    --d-drawer-shadow: var(--d-edge), 0 40px 90px -30px rgba(0, 0, 0, 0.85);
+    --d-well: linear-gradient(180deg, rgba(255, 255, 255, calc(0.06 * var(--glass-scale))), rgba(255, 255, 255, calc(0.02 * var(--glass-scale))));
+    --d-well-edge: inset 0 1px 0 rgba(200, 215, 255, 0.12), inset 0 -1px 0 rgba(150, 180, 255, 0.08), 0 0 0 0.5px rgba(150, 175, 255, 0.10);
+    --d-row-line: rgba(255, 255, 255, 0.07);
+    --d-tile: linear-gradient(180deg, rgba(72, 90, 152, 0.62), rgba(30, 40, 86, 0.56));
+    --d-tile-shadow: inset 0 1px 0 rgba(220, 230, 255, 0.22), 0 0 0 0.5px rgba(150, 175, 255, 0.18), 0 6px 14px -6px rgba(0, 0, 0, 0.60);
+    --d-ok-fill: rgba(52, 199, 89, 0.20);
+    --d-ok-ink: #7ee8a6;
+    --d-ok-dot: #3ad46e;
+    --d-warn-fill: rgba(255, 170, 50, 0.20);
+    --d-warn-ink: #ffc766;
+    --d-warn-dot: #ffad33;
+    --d-err-fill: rgba(255, 82, 72, 0.20);
+    --d-err-ink: #ff9d95;
+    --d-err-dot: #ff5a4f;
+    --d-muted-fill: rgba(255, 255, 255, 0.08);
+    --d-muted-ink: #b4bbd0;
+    --d-muted-dot: #6b738e;
+    --d-open-ink: #ffb84d;
+    --d-dot-none: rgba(160, 175, 220, 0.22);
+    --d-ran-glow: 0 0 0 3px rgba(52, 199, 89, 0.18), 0 0 10px -1px rgba(60, 220, 120, 0.65);
+    --d-reads-glow: 0 0 0 3px rgba(255, 170, 50, 0.18), 0 0 10px -1px rgba(255, 170, 50, 0.60);
+    --d-decision: #a98bff;
+    --d-next: #3ad46e;
+    --d-accent: #6fb0ff;
+  }
+
+  .policyBanner:not([hidden]) ~ .digestsView .pipeLeadRow {
+    margin-top: 0;
+  }
+
+  .digestsView .digGlass {
+    position: relative;
+    isolation: isolate;
+    border: 1px solid transparent;
+    background: var(--d-glass);
+    box-shadow: var(--d-shadow);
+  }
+
+  .digestsView .digGlass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--d-sheen);
+  }
+
+  .digestsView .digGlass::after,
+  .digestsView .actDrawer::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    padding: 1.5px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--d-rim);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  /* Toolbar: the two pickers (and the Failed chip from Home) on the left, the range on the right. */
+  .digFilters {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .digToolbar .actPopup {
+    flex: 0 1 250px;
+    min-width: 150px;
+    max-width: 260px;
+  }
+
+  .digToolbar .actPopupIcon {
+    margin-left: auto;
+  }
+
+  .digStatusChip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 0 9px 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--d-err-fill);
+    box-shadow: inset 0 0 0 0.5px rgba(255, 69, 58, 0.22);
+    color: var(--d-err-ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .digStatusChip[hidden],
+  .digCards[hidden] {
+    display: none;
+  }
+
+  .digStatusChipDot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--d-err-dot);
+  }
+
+  .digStatusChipIcon {
+    width: 13px;
+    height: 13px;
+    opacity: 0.75;
+  }
+
+  /* Status cards. */
+  .digCards {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .digCard {
+    min-width: 0;
+    padding: 16px 20px 18px;
+    border-radius: 24px;
+  }
+
+  .digCardHead {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .digCardIcon {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    border-radius: 12px;
+    background: var(--d-tile);
+    box-shadow: var(--d-tile-shadow);
+    color: var(--d-accent);
+  }
+
+  .digCardIcon.is-vault {
+    color: var(--d-decision);
+  }
+
+  .digCardGlyph {
+    width: 21px;
+    height: 21px;
+  }
+
+  .digCardTitle {
+    margin: 0;
+    color: var(--text);
+    font-size: 19px;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    white-space: nowrap;
+  }
+
+  .digChip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    padding: 0 10px 0 9px;
+    border-radius: 999px;
+    background: var(--d-muted-fill);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    color: var(--d-muted-ink);
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .digChipDot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: var(--d-muted-dot);
+  }
+
+  .digChip.is-ok { background: var(--d-ok-fill); color: var(--d-ok-ink); }
+  .digChip.is-ok .digChipDot { background: var(--d-ok-dot); box-shadow: 0 0 6px rgba(52, 199, 89, 0.55); }
+  .digChip.is-warn { background: var(--d-warn-fill); color: var(--d-warn-ink); }
+  .digChip.is-warn .digChipDot { background: var(--d-warn-dot); }
+  .digChip.is-err { background: var(--d-err-fill); color: var(--d-err-ink); }
+  .digChip.is-err .digChipDot { background: var(--d-err-dot); }
+
+  #digVaultChip {
+    margin-left: auto;
+  }
+
+  .digStats {
+    display: flex;
+    align-items: center;
+    margin-top: 14px;
+  }
+
+  .digStat {
+    display: flex;
+    flex: 1 1 0;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 2px 16px;
+  }
+
+  .digStat:first-child {
+    padding-left: 4px;
+  }
+
+  .digStat + .digStat,
+  .digDots {
+    box-shadow: -1px 0 0 var(--a-line);
+  }
+
+  .digStatIcon {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    color: var(--d-accent);
+  }
+
+  .digStatText {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .digStatLabel {
+    color: var(--text-2);
+    font-size: 13.5px;
+    white-space: nowrap;
+  }
+
+  /* The projects stat reads "3 projects" over their names; its label is for screen readers only. */
+  #digLastProjectsLabel {
+    display: none;
+  }
+
+  #digNextRun,
+  #digLastRun {
+    flex: 0 0 auto;
+    padding-right: 22px;
+  }
+
+  #digLastRun {
+    padding-left: 18px;
+  }
+
+  .digStatValue {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .digStatSub {
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .digVaultStats .digStat {
+    flex: 0 0 auto;
+    padding-right: 20px;
+  }
+
+  /* Fourteen days, oldest first: green ran, amber read but no checkpoint, grey nothing, today hollow until it runs. */
+  .digDots {
+    display: grid;
+    flex: 1 1 auto;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    min-width: 0;
+    padding-left: 12px;
+  }
+
+  .digDot {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .digDotMark {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--d-dot-none);
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.45);
+  }
+
+  .digDot.is-ran .digDotMark {
+    background: var(--d-ran);
+    box-shadow: var(--d-ran-glow);
+  }
+
+  .digDot.is-reads .digDotMark {
+    background: var(--d-reads);
+    box-shadow: var(--d-reads-glow);
+  }
+
+  .digDot.is-today:not(.is-ran) .digDotMark {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--d-ok-dot);
+  }
+
+  .digDotLabel {
+    color: var(--text-3);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* "Oct 6" ends under its dot and runs left into the gutter, so it never meets the next label. */
+  .digDot:first-child .digDotLabel {
+    justify-self: end;
+    margin-right: calc(50% - 0.6em);
+  }
+
+  @media (max-width: 1439px) {
+    .digCards {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .digCard {
+      padding: 14px 16px 16px;
+    }
+
+    .digStat {
+      gap: 9px;
+      padding: 2px 12px;
+    }
+
+    #digNextRun,
+    #digLastRun {
+      padding-right: 14px;
+    }
+
+    #digLastRun {
+      padding-left: 12px;
+    }
+
+    .digStatIcon {
+      width: 21px;
+      height: 21px;
+      flex-basis: 21px;
+    }
+
+    .digVaultStats .digStat {
+      padding-right: 14px;
+    }
+
+    .digDots {
+      padding-left: 8px;
+    }
+  }
+
+  /* Day cards: a glass card with the day on top and the rows on an inset well. */
+  .digBoard {
+    margin-top: 16px;
+  }
+
+  .digestsView .digGroup {
+    padding: 4px 6px 6px;
+    border-radius: 24px;
+  }
+
+  .digDayHead {
+    padding: 10px 12px 8px;
+    font-size: 18px;
+  }
+
+  .digDayCount {
+    margin-left: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .digRows {
+    --m-row-line: transparent;
+    border-radius: 18px;
+    background: var(--d-well);
+    box-shadow: var(--d-well-edge);
+  }
+
+  .digestsView .digRow {
+    grid-template-columns: 38px minmax(96px, 150px) minmax(0, 1fr) minmax(48px, max-content);
+    column-gap: 14px;
+    min-height: 62px;
+    padding: 8px 14px;
+    border-radius: 16px;
+  }
+
+  /* Hairlines start after the icon, as in a grouped list. */
+  .digRow + .digRow::before {
+    content: "";
+    position: absolute;
+    top: -0.5px;
+    right: 14px;
+    left: 66px;
+    height: 1px;
+    background: var(--d-row-line);
+    pointer-events: none;
+  }
+
+  .digRow.is-open::before,
+  .digRow.is-open + .digRow::before,
+  .digRow:hover::before,
+  .digRow:hover + .digRow::before {
+    opacity: 0;
+  }
+
+  .digIcon,
+  .digDrawerIcon {
+    --d-hue: var(--d-accent);
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--d-hue) 7%, rgba(255, 255, 255, 0.96)), color-mix(in srgb, var(--d-hue) 15%, rgba(242, 245, 255, 0.74)));
+    box-shadow: var(--d-tile-shadow);
+    color: var(--d-hue);
+  }
+
+  html[data-glass="dark"] .digIcon,
+  html[data-glass="dark"] .digDrawerIcon {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--d-hue) 22%, rgba(64, 80, 140, 0.62)), color-mix(in srgb, var(--d-hue) 12%, rgba(26, 36, 80, 0.58)));
+  }
+
+  .digIcon[data-hue="0"], .digDrawerIcon[data-hue="0"] { --d-hue: var(--proj-0); }
+  .digIcon[data-hue="1"], .digDrawerIcon[data-hue="1"] { --d-hue: var(--proj-1); }
+  .digIcon[data-hue="2"], .digDrawerIcon[data-hue="2"] { --d-hue: var(--proj-2); }
+  .digIcon[data-hue="3"], .digDrawerIcon[data-hue="3"] { --d-hue: var(--proj-3); }
+  .digIcon[data-hue="4"], .digDrawerIcon[data-hue="4"] { --d-hue: var(--proj-4); }
+  .digIcon[data-hue="5"], .digDrawerIcon[data-hue="5"] { --d-hue: var(--proj-5); }
+  .digIcon[data-hue="6"], .digDrawerIcon[data-hue="6"] { --d-hue: var(--proj-6); }
+  .digIcon[data-hue="7"], .digDrawerIcon[data-hue="7"] { --d-hue: var(--proj-7); }
+  .digIcon[data-hue="8"], .digDrawerIcon[data-hue="8"] { --d-hue: var(--proj-8); }
+  .digIcon[data-hue="9"], .digDrawerIcon[data-hue="9"] { --d-hue: var(--proj-9); }
+
+  .digIcon.is-skipped,
+  .digDrawerIcon.is-skipped {
+    --d-hue: var(--d-muted-dot);
+  }
+
+  .digIcon.is-failed,
+  .digDrawerIcon.is-failed {
+    --d-hue: var(--d-err-dot);
+  }
+
+  .digIconGlyph {
+    width: 20px;
+    height: 20px;
+  }
+
+  .digProject {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .digMain {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .digSummary {
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .digSummary.is-quiet {
+    color: var(--text-3);
+  }
+
+  .digMeta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .digSep {
+    opacity: 0.8;
+  }
+
+  .digCount.is-open {
+    color: var(--d-open-ink);
+    font-weight: 500;
+  }
+
+  .digMeta.is-error {
+    display: block;
+    color: var(--d-err-ink);
+    text-overflow: ellipsis;
+  }
+
+  .digFailDot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 8px;
+    border-radius: 50%;
+    background: var(--d-err-dot);
+    box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.14);
+    vertical-align: 1px;
+  }
+
+  .digTime {
+    justify-self: end;
+    color: var(--text-3);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .digRow.is-skipped {
+    min-height: 54px;
+  }
+
+  .digRow.is-skipped .digProject {
+    color: var(--text-2);
+    font-weight: 500;
+  }
+
+  /* Docked beside the list (1440px and wider): the toolbar and cards stay full width, the list steps aside. */
+  @media (min-width: 1440px) {
+    .digestsView.is-drawer-open .digList,
+    .digestsView.is-drawer-open .memMoreRow,
+    .digestsView.is-drawer-open .memNotice {
+      margin-right: calc(min(456px, calc(100vw - 32px)) + 16px);
+    }
+
+    .digestsView.is-drawer-open .digRow {
+      grid-template-columns: 38px minmax(120px, 176px) minmax(0, 1fr) minmax(44px, max-content);
+      column-gap: 12px;
+    }
+  }
+
+  @media (max-width: 1180px) {
+    .digCards {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* Digest body of the shared drawer. */
+  .digestsView .actDrawer {
+    box-shadow: var(--d-drawer-shadow);
+  }
+
+  .digestsView .actDrawer::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--d-sheen);
+  }
+
+  .actDrawer.is-digest .actDrawerTitle {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .actDrawer.is-digest .actDrawerMeta {
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 14px;
+    padding-top: 0;
+  }
+
+  .digDrawerIcon {
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 14px;
+  }
+
+  .digDrawerIcon .digIconGlyph {
+    width: 24px;
+    height: 24px;
+  }
+
+  .digDrawerHeading {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .digDrawerProject {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .digDrawerWhen {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-2);
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .actDrawer.is-digest .actDrawerBody {
+    margin-top: 18px;
+  }
+
+  .digestsView .actSection.digSection {
+    margin-top: 20px;
+  }
+
+  .digestsView .actSection.digSection:first-child {
+    margin-top: 0;
+  }
+
+  .digSectionTitle {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0 0 8px;
+    color: var(--text);
+    font-size: 16.5px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .digSectionCount {
+    color: var(--text-2);
+    font-size: 14.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .digNarrative {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 15px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .digBullets,
+  .digCommands,
+  .digStateFacts,
+  .digSources {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .digBullets {
+    --d-bullet: var(--a-outcome-dot);
+    gap: 5px;
+  }
+
+  .digBullets.tone-decisions { --d-bullet: var(--d-decision); }
+  .digBullets.tone-next { --d-bullet: var(--d-next); }
+  .digBullets.tone-open { --d-bullet: var(--d-warn-dot); }
+  .digBullets.tone-quiet { --d-bullet: var(--d-muted-dot); }
+
+  .digBullets li {
+    position: relative;
+    min-width: 0;
+    padding-left: 22px;
+    color: var(--text);
+    font-size: 14.5px;
+    line-height: 1.5;
+    overflow-wrap: break-word;
+  }
+
+  .digBullets li::before {
+    content: "";
+    position: absolute;
+    top: 0.45em;
+    left: 3px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--d-bullet);
+    box-shadow: inset 0 1px 1.5px rgba(255, 255, 255, 0.55), 0 1px 3px -1px var(--d-bullet);
+  }
+
+  .digShowAll {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--a-link);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .digShowAll:hover span {
+    text-decoration: underline;
+  }
+
+  .digShowAllIcon {
+    width: 15px;
+    height: 15px;
+  }
+
+  .digSkills.actPane {
+    display: flex;
+    gap: 14px;
+    margin-top: 22px;
+    padding: 14px 16px 16px;
+    border-radius: 18px;
+  }
+
+  .digSkillsIcon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    border-radius: 11px;
+    background: var(--d-tile);
+    box-shadow: var(--d-tile-shadow);
+    color: var(--d-accent);
+  }
+
+  .digSkillsGlyph {
+    width: 19px;
+    height: 19px;
+  }
+
+  .digSkillsBody {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .digSkillsTitle {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 6px 0 10px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 650;
+  }
+
+  .digSkillChips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .digSkillChip {
+    max-width: 100%;
+    padding: 5px 12px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--d-tile);
+    box-shadow: var(--d-tile-shadow);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The quieter sections: smaller headings, secondary ink. */
+  .digSection.is-quiet .digSectionTitle {
+    color: var(--text-2);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .digSection.is-quiet .digSectionCount {
+    font-size: 13.5px;
+  }
+
+  .digCommands {
+    gap: 6px;
+  }
+
+  .digCommands code {
+    display: block;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: var(--a-tag-fill);
+    color: var(--text);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .digStateFacts {
+    gap: 8px;
+  }
+
+  .digStateFacts li {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    font-size: 13.5px;
+  }
+
+  .digStateKey {
+    color: var(--text-2);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .digStateValue {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .digDetails > summary {
+    align-items: center;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .digDetails > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .digDetailsIcon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+    align-self: center;
+    transition: transform 160ms var(--ease-out);
+  }
+
+  .digDetails[open] .digDetailsIcon {
+    transform: rotate(90deg);
+  }
+
+  .digSources {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+
+  .digSources li {
+    min-width: 0;
+  }
+
+  .digSource {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: calc(100% + 16px);
+    min-height: 34px;
+    margin: 0 -8px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  button.digSource:hover {
+    background: var(--shell-hover);
+  }
+
+  .digSource.is-missing {
+    color: var(--text-3);
+    cursor: default;
+  }
+
+  .digSourceIcon {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    color: var(--text-3);
+  }
+
+  .digSourceTitle {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .digSourceTime {
+    flex: 0 0 auto;
+    color: var(--text-3);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .digError.actPane {
+    margin-top: 0;
+    padding: 14px 16px 16px;
+    border-radius: 18px;
+  }
+
+  .digError + .actSection {
+    margin-top: 20px;
+  }
+
+  .digErrorTitle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .digErrorIcon {
+    width: 19px;
+    height: 19px;
+    flex: 0 0 19px;
+    color: var(--d-err-dot);
+  }
+
+  .digErrorText {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--d-err-fill);
+    color: var(--d-err-ink);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .digestsView .actSection.digFooter {
+    margin-top: 24px;
+    padding-top: 14px;
+    border-top: 1px solid var(--a-line);
+    border-radius: 0;
   }
 `;
