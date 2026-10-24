@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db';
+import { agentMatchSql, presentedAgents } from './agent-id';
 import { sanitizeLastError, sanitizeText } from './pipeline-query';
 
 const DIGEST_STATUSES = ['succeeded', 'skipped', 'failed'] as const;
@@ -364,9 +365,10 @@ function digestScopeSql(scope: DigestScope): { sql: string; params: any[] } {
     params.push(scope.project);
   }
   if (scope.agent !== undefined) {
+    const match = agentMatchSql('o.agent_id', scope.agent);
     parts.push(`EXISTS (SELECT 1 FROM json_each(${SOURCE_IDS_JSON}) j JOIN observations o ON o.id = j.value
-      WHERE LOWER(o.agent_id) = LOWER(?))`);
-    params.push(scope.agent);
+      WHERE ${match.sql})`);
+    params.push(...match.params);
   }
   if (scope.fromDay) {
     parts.push('local_date >= ?');
@@ -545,7 +547,7 @@ export function getAdminDigestList(db: DatabaseManager, options: AdminDigestList
     total: number; succeeded: number; skipped: number; failed: number;
     latest_covered_day: string | null; latest_covered_day_projects: string[]; latest_generated_at: string | null;
   } | null = null;
-  let facets: { projects: string[]; agents: string[] } | null = null;
+  let facets: { projects: string[]; agents: string[]; agent_labels: Record<string, string> } | null = null;
   if (wantStats) {
     const statsWhere = digestScopeSql(baseScope);
     const totals = db.sqlGet(
@@ -581,9 +583,11 @@ export function getAdminDigestList(db: DatabaseManager, options: AdminDigestList
       const key = agent.toLowerCase(); const prev = agentKeys.get(key);
       if (prev === undefined || agent < prev) agentKeys.set(key, agent);
     }
+    const presented = presentedAgents([...agentKeys.values()]);
     facets = {
       projects: facetProjects(db.sqlAll(`SELECT project_path FROM daily_memory_digests`)),
-      agents: [...agentKeys.values()].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })),
+      agents: presented.agents,
+      agent_labels: presented.agent_labels,
     };
   }
 

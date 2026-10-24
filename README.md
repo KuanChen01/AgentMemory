@@ -452,7 +452,7 @@ Preferred Antigravity workflow:
 This gives Antigravity the same automatic read/write lifecycle as the other hook-backed agents.
 
 #### 5. Grok (`~/.grok/config.toml`)
-`agentmem install` registers the stdio MCP server with `AGENTMEM_AGENT_ID=grok`, creates a default `~/.grok/agents/agentmem.md` profile, and writes global lifecycle hooks to `~/.grok/hooks/agentmem.json`. It does not create or require a global `~/.grok/AGENTS.md` file.
+`agentmem install` registers the stdio MCP server with `AGENTMEM_AGENT_ID=grok-build`, creates a default `~/.grok/agents/agentmem.md` profile, and writes global lifecycle hooks to `~/.grok/hooks/agentmem.json`. It does not create or require a global `~/.grok/AGENTS.md` file.
 
 ```toml
 [agent]
@@ -464,7 +464,7 @@ hooks = false
 [mcp_servers.agentmem]
 command = "node"
 args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
-env = { AGENTMEM_AGENT_ID = "grok" }
+env = { AGENTMEM_AGENT_ID = "grok-build" }
 ```
 
 The default profile disables global `AGENTS.md` loading and makes `get_project_context` its first memory read. Grok's passive hooks cannot inject stdout into the model, so the profile owns startup recovery while `SessionStart`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd` hooks register sessions, record tool work, and close sessions. The installer disables Grok's Claude-hook compatibility only: this prevents the existing Claude post-tool hook from mislabeling Grok activity as `claudecode`; Claude skills and MCP compatibility remain enabled.

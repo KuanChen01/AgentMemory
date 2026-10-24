@@ -119,6 +119,76 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     settingsView: "nav.settings",
     devToolsView: "devtools.title",
   };
+  function agentIdOf(value) {
+    if (value && typeof value === "object") return String(value.agent_id || value.name || "");
+    return String(value || "");
+  }
+
+  function agentLabel(id) {
+    const raw = agentIdOf(id);
+    const folded = raw.trim().toLowerCase().replace(/\s+/g, " ");
+    if (folded === "grok" || folded === "grok-build" || folded === "grok build") return "Grok Build";
+    if (folded === "grok-bot" || folded === "grok bot") return "Grok Bot";
+    return raw;
+  }
+
+  function agentOptionKey(id) {
+    const folded = agentIdOf(id).trim().toLowerCase().replace(/\s+/g, " ");
+    if (folded === "grok" || folded === "grok-build" || folded === "grok build") return "grok-build";
+    if (folded === "grok-bot" || folded === "grok bot") return "grok-bot";
+    return folded;
+  }
+
+  function sameAgent(left, right) {
+    const a = agentOptionKey(left);
+    const b = agentOptionKey(right);
+    return a !== "" && a === b;
+  }
+
+  function canonicalAgentOption(id) {
+    const key = agentOptionKey(id);
+    if (key === "grok-build" || key === "grok-bot") return key;
+    return agentIdOf(id);
+  }
+
+  function lookupAgentLabel(id, labels) {
+    const maps = Array.isArray(labels) ? labels : [labels];
+    for (let index = 0; index < maps.length; index += 1) {
+      const map = maps[index];
+      if (!map || typeof map !== "object") continue;
+      if (map[id]) return String(map[id]);
+      const canonical = canonicalAgentOption(id);
+      if (canonical && canonical !== id && map[canonical]) return String(map[canonical]);
+    }
+    return agentLabel(id);
+  }
+
+  function dedupeAgentOptions(values, labels) {
+    const seen = new Map();
+    (values || []).forEach((value) => {
+      const id = typeof value === "string" ? value : "";
+      if (!id) return;
+      const key = agentOptionKey(id);
+      if (seen.has(key)) return;
+      const canonical = canonicalAgentOption(id);
+      seen.set(key, { value: canonical, label: lookupAgentLabel(canonical, labels) });
+    });
+    return Array.from(seen.values());
+  }
+
+  function syncAgentSelect(select, values, emptyLabel, selectedValue, labels) {
+    const options = dedupeAgentOptions(values, labels);
+    const optionsKey = JSON.stringify([options, emptyLabel, selectedValue]);
+    if (select.dataset.optionsKey === optionsKey) return;
+    select.dataset.optionsKey = optionsKey;
+    const html = ['<option value="">' + escapeHtml(emptyLabel) + '</option>'];
+    options.forEach((option) => {
+      const selected = sameAgent(option.value, selectedValue) ? " selected" : "";
+      html.push('<option value="' + escapeHtml(option.value) + '"' + selected + '>' + escapeHtml(option.label) + '</option>');
+    });
+    select.innerHTML = html.join("");
+  }
+
   const state = {
     activePanel: "runtimePanel",
     activeView: "homeView",
@@ -1339,12 +1409,19 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
-  function renderRuntimeLists(items, target) {
+  function renderRuntimeLists(items, target, kind) {
     if (!items || items.length === 0) {
       target.innerHTML = '<span class="pill subtle">' + escapeHtml(t("runtime.noDataYet")) + '</span>';
       return;
     }
-    target.innerHTML = items.map((item) => '<span class="tag">' + escapeHtml(item) + '</span>').join("");
+    const labels = kind === "agent" && state.overview ? state.overview.agent_labels : null;
+    target.innerHTML = items.map((item) => {
+      if (kind === "agent") {
+        const id = typeof item === "string" ? item : "";
+        return '<span class="tag" title="' + escapeHtml(id) + '">' + escapeHtml(lookupAgentLabel(id, labels)) + '</span>';
+      }
+      return '<span class="tag">' + escapeHtml(item) + '</span>';
+    }).join("");
   }
 
   function renderOverview() {
@@ -1373,10 +1450,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const projects = state.overview.projects || [];
     const agents = state.overview.agents || [];
     renderRuntimeLists(projects, els.runtimeProjectList);
-    renderRuntimeLists(agents, els.runtimeAgentList);
+    renderRuntimeLists(agents, els.runtimeAgentList, "agent");
 
     syncSelect(els.projectSelect, projects, t("field.allProjects"), state.filters.project, true);
-    syncSelect(els.agentSelect, agents, t("field.allAgents"), state.filters.agent, true);
+    syncAgentSelect(els.agentSelect, agents, t("field.allAgents"), state.filters.agent, state.overview.agent_labels);
     syncSelect(els.contextProjectSelect, projects, t("field.chooseProject"), els.contextProjectSelect.value, true);
     syncSelect(els.dailyDigestProjectSelect, projects, t("field.chooseProject"), els.dailyDigestProjectSelect.value, true);
     syncSelect(els.proceduralProjectSelect, projects, t("field.chooseProject"), els.proceduralProjectSelect.value, true);
@@ -2378,7 +2455,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           '<div class="summaryCard">' +
             '<div class="policyTitleRow">' +
               '<div style="font-weight: 700;">' + escapeHtml(block.title) + '</div>' +
-              '<span class="tag">' + escapeHtml(block.agent_id) + '</span>' +
+              '<span class="tag" title="' + escapeHtml(block.agent_id || "") + '">' + escapeHtml(agentLabel(block.agent_id)) + '</span>' +
             '</div>' +
             '<div class="finePrint" style="margin-top: 4px;">' + escapeHtml(formatDate(block.created_at, "full")) + '</div>' +
             '<div style="margin-top: 10px;">' +
@@ -2393,7 +2470,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           '<div class="obsCard">' +
             '<div class="policyTitleRow">' +
               '<div style="font-weight: 700;">' + escapeHtml(entry.title) + '</div>' +
-              '<span class="tag">' + escapeHtml(entry.agent_id) + '</span>' +
+              '<span class="tag" title="' + escapeHtml(entry.agent_id || "") + '">' + escapeHtml(agentLabel(entry.agent_id)) + '</span>' +
             '</div>' +
             '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(formatDate(entry.created_at, "full")) + '</div>' +
             '<div class="mono subtle" style="margin-top: 8px;">' + escapeHtml(entry.id) + '</div>' +
@@ -2481,7 +2558,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           '<div class="scoreCard">' +
             '<div class="policyTitleRow">' +
               '<div style="font-weight: 700;">' + escapeHtml(result.title) + '</div>' +
-              '<span class="tag">' + escapeHtml(result.agent_id) + '</span>' +
+              '<span class="tag" title="' + escapeHtml(result.agent_id || "") + '">' + escapeHtml(agentLabel(result.agent_id)) + '</span>' +
               (result.low_signal_title ? statusChip(t("search.lowSignal"), "warning") : '') +
             '</div>' +
             '<div class="metaRow">' +
@@ -2514,7 +2591,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return '<button class="recordItem' + activeClass + '" type="button" data-record-id="' + escapeHtml(record.id) + '">' +
         '<div class="policyTitleRow">' +
           '<div style="font-weight: 700;">' + escapeHtml(record.title) + '</div>' +
-          '<span class="tag">' + escapeHtml(record.agent_id) + '</span>' +
+          '<span class="tag" title="' + escapeHtml(record.agent_id || "") + '">' + escapeHtml(agentLabel(record.agent_id)) + '</span>' +
         '</div>' +
         '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(summarize(record.narrative)) + '</p>' +
         '<div class="metaRow">' +
@@ -2576,7 +2653,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.detailContent.className = "";
     els.detailContent.innerHTML = [
       '<div class="metaRow">',
-        '<span class="tag">' + escapeHtml(record.agent_id) + '</span>',
+        '<span class="tag" title="' + escapeHtml(record.agent_id || "") + '">' + escapeHtml(agentLabel(record.agent_id)) + '</span>',
         '<span class="tag">' + escapeHtml(record.project_path) + '</span>',
         '<span class="tag">' + escapeHtml(record.id) + '</span>',
       '</div>',
@@ -2877,8 +2954,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         return '<span class="metaChip is-muted">' + escapeHtml(t("home.noActivityToday")) + '</span>';
       }
       return agents.map((agent) => (
-        '<span class="metaChip is-agent">' + svgIcon("tag", "chipIcon") +
-          '<span>' + escapeHtml(agent.agent_id) + '</span>' +
+        '<span class="metaChip is-agent" title="' + escapeHtml(agent.agent_id || "") + '">' + svgIcon("tag", "chipIcon") +
+          '<span>' + escapeHtml(agent.agent_label || agentLabel(agent.agent_id)) + '</span>' +
           '<span class="metaChipCount">' + escapeHtml(String(agent.n)) + '</span>' +
         '</span>'
       )).join("") + projects.map((project) => (
@@ -3053,7 +3130,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         return '<tr>' +
           '<td title="' + escapeHtml(createdAt ? formatUiDate(createdAt, "dateTime") : "") + '">' + escapeHtml(time) + '</td>' +
           '<td><span class="kindPill kind-' + kind + (explicit ? ' is-explicit" title="' + escapeHtml(t("home.kindExplicit")) : '') + '">' + escapeHtml(kindLabel) + '</span></td>' +
-          '<td class="cellMuted">' + escapeHtml(row.agent_id || "") + '</td>' +
+          '<td class="cellMuted" title="' + escapeHtml(row.agent_id || "") + '">' + escapeHtml(agentLabel(row.agent_id) || "") + '</td>' +
           '<td title="' + escapeHtml(row.project_path || "") + '">' + escapeHtml(projectBasename(row.project_path)) + '</td>' +
           '<td title="' + escapeHtml(row.title || "") + '">' + escapeHtml(row.title || "") + '</td>' +
         '</tr>';
@@ -3475,7 +3552,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setText(els.activityProjectValue, act.project ? projectBasename(act.project) : t("activity.all"));
     setAttr(els.activityProjectButton, "title", act.project);
     setClass(els.activityProjectButton, "actPopup" + (act.project ? " is-filtered" : ""));
-    setText(els.activityAgentValue, act.agent || t("activity.all"));
+    setText(els.activityAgentValue, act.agent ? agentLabel(act.agent) : t("activity.all"));
     setAttr(els.activityAgentButton, "title", act.agent);
     setClass(els.activityAgentButton, "actPopup" + (act.agent ? " is-filtered" : ""));
 
@@ -3498,19 +3575,27 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const rows = act.payload && Array.isArray(act.payload.breakdown) ? act.payload.breakdown : [];
     const field = name === "project" ? "project_path" : "agent_id";
     const otherField = name === "project" ? "agent_id" : "project_path";
-    const other = (name === "project" ? act.agent : act.project).toLowerCase();
+    const otherRaw = name === "project" ? act.agent : act.project;
+    const other = String(otherRaw || "").toLowerCase();
     const selected = name === "project" ? act.project : act.agent;
     const counts = new Map();
     rows.forEach((row) => {
-      if (other && String(row[otherField] || "").toLowerCase() !== other) return;
+      const otherValue = String(row[otherField] || "");
+      if (other) {
+        if (otherField === "agent_id") {
+          if (!sameAgent(otherValue, otherRaw)) return;
+        } else if (otherValue.toLowerCase() !== other) return;
+      }
       const value = String(row[field] || "");
-      counts.set(value, (counts.get(value) || 0) + activityMeasure(row));
+      const bucket = name === "agent" ? canonicalAgentOption(value) : value;
+      counts.set(bucket, (counts.get(bucket) || 0) + activityMeasure(row));
     });
     const items = Array.from(counts, (entry) => ({ value: entry[0], n: entry[1] })).filter((item) => item.n > 0);
-    if (selected && !items.some((item) => item.value.toLowerCase() === selected.toLowerCase())) {
-      items.push({ value: selected, n: 0 });
+    const matchesSelected = (itemValue) => name === "agent" ? sameAgent(itemValue, selected) : itemValue.toLowerCase() === String(selected || "").toLowerCase();
+    if (selected && !items.some((item) => matchesSelected(item.value))) {
+      items.push({ value: name === "agent" ? canonicalAgentOption(selected) : selected, n: 0 });
     }
-    const label = (value) => (name === "project" ? projectBasename(value) : value);
+    const label = (value) => (name === "project" ? projectBasename(value) : agentLabel(value));
     items.sort((left, right) => right.n - left.n || label(left.value).localeCompare(label(right.value)));
     return { items, total: items.reduce((sum, item) => sum + item.n, 0), selected, label };
   }
@@ -3554,7 +3639,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const attribute = "data-activity-" + name;
     const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute(attribute) : null;
     const option = (value, label, count, title) => {
-      const selected = value ? isActivitySelected(value, facet.selected) : !facet.selected;
+      const selected = value ? (name === "agent" ? sameAgent(value, facet.selected) : isActivitySelected(value, facet.selected)) : !facet.selected;
       return '<button class="actOption" type="button" role="option" tabindex="-1" ' + attribute + '="' + escapeHtml(value) + '" aria-selected="' + selected + '"' +
         (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
         (name === "project" && value ? '<span class="actDot" data-hue="' + projectHue(value) + '" aria-hidden="true"></span>' : '') +
@@ -3563,7 +3648,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     };
     popover.innerHTML = option("", t(name === "project" ? "activity.allProjects" : "activity.allAgents"), act.payload ? formatCount(facet.total) : "—") +
       (facet.items.length ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
-      facet.items.map((item) => option(item.value, facet.label(item.value), formatCount(item.n), name === "project" ? item.value : "")).join("");
+      facet.items.map((item) => option(item.value, facet.label(item.value), formatCount(item.n), item.value)).join("");
     if (focused !== null) {
       const target = Array.from(popover.querySelectorAll("[" + attribute + "]")).find((node) => node.getAttribute(attribute) === focused);
       if (target) target.focus();
@@ -3603,7 +3688,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '<div class="actCardFoot">' +
         '<span class="actProject" title="' + escapeHtml(card.project_path || "") + '"><span class="actDot" data-hue="' + projectHue(card.project_path) + '" aria-hidden="true"></span>' +
         '<span class="actProjectName">' + escapeHtml(projectBasename(card.project_path) || "—") + '</span></span>' +
-        (card.agent_id ? '<span class="actAgent">' + escapeHtml(card.agent_id) + '</span>' : '') +
+        (card.agent_id ? '<span class="actAgent" title="' + escapeHtml(card.agent_id) + '">' + escapeHtml(agentLabel(card.agent_id)) + '</span>' : '') +
       '</div>';
   }
 
@@ -4445,7 +4530,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const items = [];
     const source = memorySourceLabel(memory.source);
     if (source) items.push('<span class="actMetaChip">' + svgIcon(memory.source === "tool" ? "terminal" : "file", "actMetaChipIcon") + escapeHtml(source) + '</span>');
-    if (memory.agent_id) items.push('<span class="actMetaChip is-agent">' + escapeHtml(memory.agent_id) + '</span>');
+    if (memory.agent_id) items.push('<span class="actMetaChip is-agent" title="' + escapeHtml(memory.agent_id) + '">' + escapeHtml(agentLabel(memory.agent_id)) + '</span>');
     if (memory.project_path) items.push('<span class="actMetaChip" title="' + escapeHtml(memory.project_path) + '">' + escapeHtml(projectBasename(memory.project_path)) + '</span>');
     if (created) {
       const ago = calendarDaysAgo(created);
@@ -5168,11 +5253,18 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function memoryFacetValues(name) {
     const mem = state.memory;
     const raw = state.overview && Array.isArray(state.overview[name === "project" ? "projects" : "agents"]) ? state.overview[name === "project" ? "projects" : "agents"] : [];
+    if (name === "agent") {
+      const options = dedupeAgentOptions(raw, state.overview && state.overview.agent_labels);
+      if (mem.agent && !options.some((option) => sameAgent(option.value, mem.agent))) {
+        options.push({ value: mem.agent, label: agentLabel(mem.agent) });
+      }
+      return options.sort((left, right) => left.label.localeCompare(right.label)).map((option) => ({ value: option.value, label: option.label, title: option.value }));
+    }
     const values = raw.map((value) => (typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || ""))).filter(Boolean);
-    const selected = name === "project" ? mem.project : mem.agent;
+    const selected = mem.project;
     if (selected && !values.some((value) => isActivitySelected(value, selected))) values.push(selected);
-    const label = (value) => (name === "project" ? projectBasename(value) : value);
-    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: name === "project" ? value : "" }));
+    const label = (value) => projectBasename(value);
+    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: value }));
   }
 
   function memoryMenuOptions(name) {
@@ -5192,7 +5284,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     mem.signatures["menu-" + name] = signature;
     const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute("data-memory-value") : null;
     popover.innerHTML = options.map((option, index) => {
-      const isSelected = name === "project" || name === "agent" ? (option.value ? isActivitySelected(option.value, selected) : !selected) : option.value === selected;
+      const isSelected = name === "agent" ? (option.value ? sameAgent(option.value, selected) : !selected) : name === "project" ? (option.value ? isActivitySelected(option.value, selected) : !selected) : option.value === selected;
       return (index === 1 ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
         '<button class="actOption" type="button" role="option" tabindex="-1" data-memory-option="' + name + '" data-memory-value="' + escapeHtml(option.value) + '" aria-selected="' + isSelected + '"' +
         (option.title ? ' title="' + escapeHtml(option.title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
@@ -5235,7 +5327,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       setClass(button, "actPopup" + (value ? " is-filtered" : ""));
     };
     popup(els.memoryProjectButton, els.memoryProjectValue, mem.project, mem.project ? projectBasename(mem.project) : t("memory.all"), mem.project);
-    popup(els.memoryAgentButton, els.memoryAgentValue, mem.agent, mem.agent || t("memory.all"), mem.agent);
+    popup(els.memoryAgentButton, els.memoryAgentValue, mem.agent, mem.agent ? agentLabel(mem.agent) : t("memory.all"), mem.agent);
     popup(els.memoryKindButton, els.memoryKindValue, mem.kind !== "default",
       mem.kind === "default" ? t("memory.all") : mem.kind === "all" ? t("memory.kindEverythingShort") : memoryKindLabel(mem.kind), memoryKindLabel(mem.kind));
     popup(els.memorySourceButton, els.memorySourceValue, mem.source, mem.source ? memorySourceName(mem.source) : t("memory.all"), "");
@@ -5324,7 +5416,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '<span class="memCell memMain"><span class="memTitleLine"><span class="memTitle"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + escapeHtml(title || t("memory.untitled")) + '</span>' + badges.join("") + '</span>' +
         (preview ? '<span class="memPreview">' + escapeHtml(preview + (item.preview_truncated ? " …" : "")) + '</span>' : '') + '</span>' +
       '<span class="memCell memProject" title="' + escapeHtml(item.project_path || "") + '">' + escapeHtml(projectBasename(item.project_path) || "—") + '</span>' +
-      '<span class="memCell memAgent">' + escapeHtml(item.agent_id || "—") + '</span>' +
+      '<span class="memCell memAgent" title="' + escapeHtml(item.agent_id || "") + '">' + escapeHtml(item.agent_id ? agentLabel(item.agent_id) : "—") + '</span>' +
       '<span class="memCell memNum' + (facts ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(factsHint) + '" title="' + escapeHtml(factsHint) + '">' + svgIcon("facts", "memNumIcon") + escapeHtml(formatCount(facts)) + '</span>' +
       '<span class="memCell memNum' + (files ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(filesHint) + '" title="' + escapeHtml(filesHint) + '">' + svgIcon("file", "memNumIcon") + escapeHtml(formatCount(files)) + '</span>';
   }
@@ -6104,10 +6196,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         if (!cursor) {
           pipe.stages = payload.stages || null;
           if (payload.facets && typeof payload.facets === "object") {
-            pipe.facets = {
+            const nextFacets = {
               projects: Array.isArray(payload.facets.projects) ? payload.facets.projects.filter((value) => typeof value === "string" && value) : [],
               agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => typeof value === "string" && value) : [],
             };
+            if (payload.facets.agent_labels && typeof payload.facets.agent_labels === "object" && !Array.isArray(payload.facets.agent_labels)) {
+              nextFacets.agent_labels = payload.facets.agent_labels;
+            }
+            pipe.facets = nextFacets;
           }
         }
         pipe.loaded = true;
@@ -6188,17 +6284,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const push = (value) => {
       const text = typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || "");
       if (!text) return;
-      const fold = text.toLowerCase();
+      const fold = name === "agent" ? agentOptionKey(text) : text.toLowerCase();
       if (seen.has(fold)) return;
       seen.add(fold);
-      values.push(text);
+      values.push(name === "agent" ? canonicalAgentOption(text) : text);
     };
     overviewRaw.forEach(push);
     facetRaw.forEach(push);
     const selected = state.pipeline[name];
-    if (selected && !values.some((value) => isActivitySelected(value, selected))) values.push(selected);
-    const label = (value) => (name === "project" ? projectBasename(value) : value);
-    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: name === "project" ? value : "" }));
+    const listed = (value) => name === "agent" ? sameAgent(value, selected) : isActivitySelected(value, selected);
+    if (selected && !values.some((value) => listed(value))) values.push(name === "agent" ? canonicalAgentOption(selected) : selected);
+    const label = (value) => (name === "project" ? projectBasename(value) : lookupAgentLabel(value, [
+      state.overview && state.overview.agent_labels,
+      state.pipeline.facets && state.pipeline.facets.agent_labels,
+    ]));
+    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: value }));
   }
 
   function pipelineMenuOptions(name) {
@@ -6216,7 +6316,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     pipe.signatures["menu-" + name] = signature;
     const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute("data-pipeline-value") : null;
     popover.innerHTML = options.map((option, index) => {
-      const isSelected = name === "state" ? option.value === selected : option.value ? isActivitySelected(option.value, selected) : !selected;
+      const isSelected = name === "state" ? option.value === selected : name === "agent" ? (option.value ? sameAgent(option.value, selected) : !selected) : option.value ? isActivitySelected(option.value, selected) : !selected;
       return (index === 1 ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
         '<button class="actOption" type="button" role="option" tabindex="-1" data-pipeline-option="' + name + '" data-pipeline-value="' + escapeHtml(option.value) + '" aria-selected="' + isSelected + '"' +
         (option.title ? ' title="' + escapeHtml(option.title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
@@ -6267,7 +6367,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       setClass(button, "actPopup" + (value ? " is-filtered" : ""));
     };
     popup(els.pipelineProjectButton, els.pipelineProjectValue, pipe.project, pipe.project ? projectBasename(pipe.project) : t("pipeline.all"), pipe.project);
-    popup(els.pipelineAgentButton, els.pipelineAgentValue, pipe.agent, pipe.agent || t("pipeline.all"), pipe.agent);
+    popup(els.pipelineAgentButton, els.pipelineAgentValue, pipe.agent, pipe.agent ? agentLabel(pipe.agent) : t("pipeline.all"), pipe.agent);
     popup(els.pipelineStateButton, els.pipelineStateValue, pipe.state, pipe.state ? pipelineStateLabel(pipe.state) : t("pipeline.all"), "");
     const updated = pipe.refreshFailed
       ? t("pipeline.refreshFailed", { time: formatClock(new Date()) })
@@ -6317,7 +6417,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '<span class="memCell memMain"><span class="memTitleLine"><span class="memTitle' + (item.title ? '' : ' is-fallback') + '" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span></span>' +
         (note ? '<span class="memPreview' + (note.tone ? ' tone-' + note.tone : '') + '">' + escapeHtml(note.text) + '</span>' : '') + '</span>' +
       '<span class="memCell memProject" title="' + escapeHtml(item.project_path || "") + '">' + escapeHtml(projectBasename(item.project_path) || "—") + '</span>' +
-      '<span class="memCell memAgent">' + escapeHtml(item.agent_id || "—") + '</span>' +
+      '<span class="memCell memAgent" title="' + escapeHtml(item.agent_id || "") + '">' + escapeHtml(item.agent_id ? agentLabel(item.agent_id) : "—") + '</span>' +
       '<span class="memCell memNum' + (llm ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(llmHint) + '" title="' + escapeHtml(llmHint) + '">' + svgIcon("llm", "memNumIcon") + escapeHtml(formatCount(llm)) + '</span>' +
       '<span class="memCell memNum pipeAttempts' + (attempts ? '' : ' is-zero') + '" role="img" aria-label="' + escapeHtml(attemptsHint) + '" title="' + escapeHtml(attemptsHint) + '">' + escapeHtml(attemptsLabel) + '</span>';
   }
@@ -6497,7 +6597,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const created = parseTimestamp(task.created_at);
     const chips = [];
     if (task.project_path) chips.push('<span class="actMetaChip pipeChipProject" title="' + escapeHtml(task.project_path) + '"><span class="pipeChipDot" aria-hidden="true"></span><span class="pipeChipName">' + escapeHtml(projectBasename(task.project_path)) + '</span></span>');
-    if (task.agent_id) chips.push('<span class="actMetaChip is-agent">' + escapeHtml(task.agent_id) + '</span>');
+    if (task.agent_id) chips.push('<span class="actMetaChip is-agent" title="' + escapeHtml(task.agent_id) + '">' + escapeHtml(agentLabel(task.agent_id)) + '</span>');
     const trigger = pipelineTriggerLabel(task.trigger);
     if (trigger) chips.push('<span class="actMetaChip">' + svgIcon("activity", "actMetaChipIcon") + escapeHtml(trigger) + '</span>');
     if (created) {
@@ -6905,10 +7005,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         dig.window = win;
         dig.stats = payload.stats || null;
         if (payload.facets && typeof payload.facets === "object") {
-          dig.facets = {
+          const nextFacets = {
             projects: Array.isArray(payload.facets.projects) ? payload.facets.projects.filter((value) => typeof value === "string" && value) : [],
             agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => typeof value === "string" && value) : [],
           };
+          if (payload.facets.agent_labels && typeof payload.facets.agent_labels === "object" && !Array.isArray(payload.facets.agent_labels)) {
+            nextFacets.agent_labels = payload.facets.agent_labels;
+          }
+          dig.facets = nextFacets;
         }
       }
       dig.nextCursor = payload.next_cursor || null;
@@ -7345,7 +7449,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       setClass(button, "actPopup" + (value ? " is-filtered" : ""));
     };
     popup(els.digProjectButton, els.digProjectValue, dig.project, dig.project ? projectBasename(dig.project) : t("digests.all"));
-    popup(els.digAgentButton, els.digAgentValue, dig.agent, dig.agent || t("digests.all"));
+    popup(els.digAgentButton, els.digAgentValue, dig.agent, dig.agent ? agentLabel(dig.agent) : t("digests.all"));
     setHidden(els.digStatusChip, dig.status !== "failed");
     setText(els.digUpdated, dig.loaded && dig.loadedAt ? t("digests.updated", { time: formatClock(new Date(dig.loadedAt)) }) : "");
     const digestSearch = els.digSearchInput;
@@ -7375,16 +7479,17 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const push = (value) => {
       const text = typeof value === "string" ? value : String(value && (value.project_path || value.agent_id || value.name) || "");
       if (!text) return;
-      const fold = text.toLowerCase();
+      const fold = name === "agent" ? agentOptionKey(text) : text.toLowerCase();
       if (seen.has(fold)) return;
       seen.add(fold);
-      values.push(text);
+      values.push(name === "agent" ? canonicalAgentOption(text) : text);
     };
     facetRaw.forEach(push);
     const selected = state.digests[name];
-    if (selected && !values.some((value) => isActivitySelected(value, selected))) values.push(selected);
-    const label = (value) => (name === "project" ? projectBasename(value) : value);
-    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: name === "project" ? value : "" }));
+    const listed = (value) => name === "agent" ? sameAgent(value, selected) : isActivitySelected(value, selected);
+    if (selected && !values.some((value) => listed(value))) values.push(name === "agent" ? canonicalAgentOption(selected) : selected);
+    const label = (value) => (name === "project" ? projectBasename(value) : lookupAgentLabel(value, state.digests.facets && state.digests.facets.agent_labels));
+    return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: value }));
   }
 
   function digestMenuOptions(name) {
@@ -7402,7 +7507,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     dig.signatures["menu-" + name] = signature;
     const focused = popover.contains(document.activeElement) ? document.activeElement.getAttribute("data-digest-value") : null;
     popover.innerHTML = options.map((option, index) => {
-      const isSelected = option.value ? isActivitySelected(option.value, selected) : !selected;
+      const isSelected = name === "agent" ? (option.value ? sameAgent(option.value, selected) : !selected) : option.value ? isActivitySelected(option.value, selected) : !selected;
       return (index === 1 ? '<div class="actMenuSep" aria-hidden="true"></div>' : '') +
         '<button class="actOption" type="button" role="option" tabindex="-1" data-digest-option="' + name + '" data-digest-value="' + escapeHtml(option.value) + '" aria-selected="' + isSelected + '"' +
         (option.title ? ' title="' + escapeHtml(option.title) + '"' : '') + '>' + svgIcon("check", "actOptionCheck") +
@@ -8739,7 +8844,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         const agent = String(match.agent_id || "").trim();
         return '<li class="sklMatchRow"><time class="sklMatchAt"' + (at ? ' datetime="' + escapeHtml(at.toISOString()) + '" title="' + escapeHtml(formatUiDate(at, "dateTime")) + '"' : '') + '>' + escapeHtml(at ? projectAgo(match.at) : "—") + '</time>' +
           '<span class="sklMatchTask" title="' + escapeHtml(String(match.task || "")) + '">' + escapeHtml(String(match.task || "").trim() || "—") + '</span>' +
-          (agent ? '<span class="prjChip sklAgentChip" title="' + escapeHtml(agent) + '"><span class="prjChipName">' + escapeHtml(agent) + '</span></span>' : '') + '</li>';
+          (agent ? '<span class="prjChip sklAgentChip" title="' + escapeHtml(agent) + '"><span class="prjChipName">' + escapeHtml(agentLabel(agent)) + '</span></span>' : '') + '</li>';
       }).join("") + '</ul>'
       : skillQuiet(t("skills.drawerRecentNone"))));
 
@@ -9206,7 +9311,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const agents = Array.isArray(item.agents) ? item.agents.filter((agent) => agent && agent.agent_id) : [];
     const shown = agents.slice(0, PROJECT_AGENT_CHIPS);
     const rest = agents.slice(PROJECT_AGENT_CHIPS);
-    return shown.map((agent) => '<span class="prjChip" title="' + escapeHtml(agent.agent_id) + '"><span class="prjChipName">' + escapeHtml(agent.agent_id) + '</span>' +
+    return shown.map((agent) => '<span class="prjChip" title="' + escapeHtml(agent.agent_id) + '"><span class="prjChipName">' + escapeHtml(agent.agent_label || agentLabel(agent.agent_id)) + '</span>' +
       '<span class="prjChipCount">' + escapeHtml(formatCount(agent.count)) + '</span></span>').join("") +
       (rest.length ? '<span class="prjChip is-more" title="' + escapeHtml(rest.map((agent) => agent.agent_id + " " + formatCount(agent.count)).join(", ")) + '">' +
         escapeHtml(t("projects.moreAgents", { n: formatCount(rest.length) })) + '</span>' : '');

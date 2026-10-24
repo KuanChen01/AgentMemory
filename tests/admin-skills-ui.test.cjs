@@ -190,6 +190,8 @@ function skillsContext(writeEnabled = true) {
     function svgIcon(name) { return "<svg data-icon=\\"" + name + "\\"></svg>"; }
     function getDisplayedPolicy() { return { readEnabled: true, writeEnabled }; }
     ${uiScript.slice(uiScript.indexOf('function escapeHtml('), uiScript.indexOf('function summarize('))}
+    ${uiClientFunction('agentIdOf')}
+    ${uiClientFunction('agentLabel')}
     ${uiClientFunction('formatCount')}
     ${uiClientFunction('parseTimestamp')}
     ${uiClientFunction('parseLocalDay')}

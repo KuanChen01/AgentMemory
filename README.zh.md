@@ -452,7 +452,7 @@ agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
 这样 Antigravity 也具备与其他 hook-backed agent 一致的自动读写生命周期。
 
 #### 5. Grok（`~/.grok/config.toml`）
-`agentmem install` 会为 Grok 注册带 `AGENTMEM_AGENT_ID=grok` 的 stdio MCP server，生成默认 `~/.grok/agents/agentmem.md` profile，并在 `~/.grok/hooks/agentmem.json` 写入全局 lifecycle hooks；它不再创建或依赖全局 `~/.grok/AGENTS.md`。
+`agentmem install` 会为 Grok 注册带 `AGENTMEM_AGENT_ID=grok-build` 的 stdio MCP server，生成默认 `~/.grok/agents/agentmem.md` profile，并在 `~/.grok/hooks/agentmem.json` 写入全局 lifecycle hooks；它不再创建或依赖全局 `~/.grok/AGENTS.md`。
 
 ```toml
 [agent]
@@ -464,7 +464,7 @@ hooks = false
 [mcp_servers.agentmem]
 command = "node"
 args = [ "您的开发路径/AgentMemory/dist/servers/mcp-server.js" ]
-env = { AGENTMEM_AGENT_ID = "grok" }
+env = { AGENTMEM_AGENT_ID = "grok-build" }
 ```
 
 默认 profile 会关闭全局 `AGENTS.md` 加载，并把 `get_project_context` 作为首个记忆读取入口。Grok 的被动 hook stdout 不能注入模型，因此启动恢复由 profile 负责；`SessionStart`、`PostToolUse`、`PostToolUseFailure`、`Stop` 与 `SessionEnd` hooks 则负责注册 session、记录工具工作和关闭 session。安装器只关闭 Grok 的 Claude-hook compatibility，避免现有 Claude post-tool hook 把 Grok 记录误标为 `claudecode`；Claude skills 与 MCP compatibility 仍然启用。

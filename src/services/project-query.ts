@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { collapseListedAgents } from './agent-id';
 import { DatabaseManager } from './db';
 import { isSensitiveFactKey, sanitizeText } from './pipeline-query';
 import { orchestrateMemoryRead } from './memory-orchestrator';
@@ -71,7 +72,7 @@ interface ProjectStats {
   memories_total: number;
   memories_in_range: number;
   last_activity_at: string | null;
-  agents: Array<{ agent_id: string; count: number }>;
+  agents: Array<{ agent_id: string; agent_label: string; count: number }>;
   state_facts_count: number;
   latest_digest_covered_day: string | null;
   digest_days_in_range: number;
@@ -361,6 +362,13 @@ function statsMap(catalog: ProjectCatalog): Map<string, ProjectStats> {
   return out;
 }
 
+function finishProjectAgents(list: Array<{ agent_id: string; count: number }>) {
+  return collapseListedAgents(list, { sum: ['count'] }).sort((a, b) => {
+    if (a.count !== b.count) return b.count - a.count;
+    return a.agent_id < b.agent_id ? -1 : a.agent_id > b.agent_id ? 1 : 0;
+  });
+}
+
 function keyOf(catalog: ProjectCatalog, projectPath: unknown): string | null {
   if (typeof projectPath !== 'string' || projectPath === '') return null;
   return catalog.byLower.get(asciiLower(projectPath))?.project_key ?? null;
@@ -403,11 +411,7 @@ function loadObservationStats(
     agents.get(key)!.push({ agent_id: row.agent_id, count });
   }
   for (const [key, list] of agents) {
-    list.sort((a, b) => {
-      if (a.count !== b.count) return b.count - a.count;
-      return a.agent_id < b.agent_id ? -1 : a.agent_id > b.agent_id ? 1 : 0;
-    });
-    stats.get(key)!.agents = list;
+    stats.get(key)!.agents = finishProjectAgents(list);
   }
 }
 
@@ -602,11 +606,7 @@ function loadOneProjectStats(
     stats.memories_in_range += count;
     agents.push({ agent_id: row.agent_id, count });
   }
-  agents.sort((a, b) => {
-    if (a.count !== b.count) return b.count - a.count;
-    return a.agent_id < b.agent_id ? -1 : a.agent_id > b.agent_id ? 1 : 0;
-  });
-  stats.agents = agents;
+  stats.agents = finishProjectAgents(agents);
   const facts = db.sqlGet(
     `SELECT COUNT(*) AS n FROM state_facts
      WHERE project_path = ? COLLATE NOCASE AND superseded_at IS NULL`,

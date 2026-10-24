@@ -200,6 +200,8 @@ function loadRenderers(context) {
     function t(key, vars) { return String(UI[key] || key).replace(/\\{(\\w+)\\}/g, (_m, name) => (vars && name in vars ? String(vars[name]) : "")); }
     function svgIcon(name) { return "<svg data-icon=\\"" + name + "\\"></svg>"; }
     ${uiScript.slice(uiScript.indexOf('function escapeHtml('), uiScript.indexOf('function summarize('))}
+    ${uiClientFunction('agentIdOf')}
+    ${uiClientFunction('agentLabel')}
     ${uiClientFunction('formatCount')}
     ${uiClientFunction('parseTimestamp')}
     ${uiClientFunction('parseLocalDay')}

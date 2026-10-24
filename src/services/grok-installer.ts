@@ -146,7 +146,7 @@ export function ensureGrokConfigToml(toml: string, mcpServerPath: string): strin
     lines: [
       'command = "node"',
       `args = [ ${JSON.stringify(mcpServerPath)} ]`,
-      'env = { AGENTMEM_AGENT_ID = "grok" }',
+      'env = { AGENTMEM_AGENT_ID = "grok-build" }',
       'tool_timeout_sec = 30',
     ],
   });
@@ -189,7 +189,7 @@ agents_md: false
 
 # AgentMemory Grok Profile
 
-For each substantive new task, proactively read task-relevant AgentMemory context. If the task is difficult, tangled, repeatedly failing, or depends on earlier decisions, call \`query_memory\` or \`search_memory\` with the concrete problem without waiting for a user reminder. The configured MCP identity is canonical \`grok\`.
+For each substantive new task, proactively read task-relevant AgentMemory context. If the task is difficult, tangled, repeatedly failing, or depends on earlier decisions, call \`query_memory\` or \`search_memory\` with the concrete problem without waiting for a user reminder. The configured MCP identity is canonical \`grok-build\`.
 
 Prefer focused queries for a specific question. Use \`memory_timeline\` only when the order of past events matters; read one bounded page and follow its offset only if needed.
 

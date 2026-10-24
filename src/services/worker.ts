@@ -1,3 +1,4 @@
+import { agentDisplayName } from './agent-id';
 import { installTimestampedStderr } from './timestamped-stderr';
 import express, { Request, Response } from 'express';
 import fs from 'fs';
@@ -506,6 +507,7 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
       release: buildReleaseManifest(),
       projects,
       agents,
+      agent_labels: Object.fromEntries(agents.map((agent_id) => [agent_id, agentDisplayName(agent_id)])),
       startedAt: workerStartedAt || null,
       refreshedAt: new Date().toISOString(),
     });
