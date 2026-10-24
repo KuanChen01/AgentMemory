@@ -269,7 +269,7 @@ test('project and agent pickers list All first and use first-page facets', () =>
       digests: {
         project: "",
         agent: "codex",
-        facets: { projects: ["/work/lumen-notes", "/work/harbor-sync"], agents: ["codex", "grok"] },
+        facets: { projects: ["/work/lumen-notes", "/work/harbor-sync"], agents: ["codex", "grok"], agent_labels: { codex: "Codex Desk", "grok-build": "From Map" } },
       },
     };
     function t(key) { return key === "digests.allProjects" ? "All projects" : key === "digests.allAgents" ? "All agents" : key; }
@@ -279,6 +279,7 @@ test('project and agent pickers list All first and use first-page facets', () =>
     ${uiClientFunction('agentOptionKey')}
     ${uiClientFunction('sameAgent')}
     ${uiClientFunction('canonicalAgentOption')}
+    ${uiClientFunction('lookupAgentLabel')}
     ${uiClientFunction('isActivitySelected')}
     ${uiClientFunction('digestFacetValues')}
     ${uiClientFunction('digestMenuOptions')}
@@ -295,8 +296,8 @@ test('project and agent pickers list All first and use first-page facets', () =>
   assert.equal(result.agents[0].label, 'All agents');
   const agentOptions = result.agents.slice(1);
   assert.deepEqual(Array.from(agentOptions, (item) => item.value).sort(), ['codex', 'grok-build']);
-  assert.equal(agentOptions.find((item) => item.value === 'grok-build').label, 'Grok Build');
-  assert.equal(agentOptions.find((item) => item.value === 'codex').label, 'codex');
+  assert.equal(agentOptions.find((item) => item.value === 'grok-build').label, 'From Map');
+  assert.equal(agentOptions.find((item) => item.value === 'codex').label, 'Codex Desk');
   const agentLabels = Array.from(agentOptions, (item) => item.label);
   assert.deepEqual(agentLabels, [...agentLabels].sort((left, right) => left.localeCompare(right)));
 });

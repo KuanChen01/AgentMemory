@@ -72,6 +72,16 @@ export function presentAgentIds(ids: readonly string[]): AgentOption[] {
     .sort((a, b) => a.agent_id.localeCompare(b.agent_id, 'en', { sensitivity: 'base' }));
 }
 
+/** Collapsed ids (strings) plus a display-name map keyed by those ids. */
+export function presentedAgents(ids: readonly string[]): { agents: string[]; agent_labels: Record<string, string> } {
+  const agent_labels: Record<string, string> = {};
+  const agents = presentAgentIds(ids).map((option) => {
+    agent_labels[option.agent_id] = option.agent_label;
+    return option.agent_id;
+  });
+  return { agents, agent_labels };
+}
+
 /**
  * Merge Grok Build alias rows in a summary list. Counts named in `sum` are added.
  * Other ids stay on their own row. `groupBy` keeps rows apart (for example per project).

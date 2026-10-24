@@ -519,7 +519,9 @@ test('worker serves admin UI and admin APIs', { skip: skipDrive }, async () => {
     assert.equal(overview.policy.readEnabled, true);
     assert.equal(overview.policy.writeEnabled, true);
     assert.ok(overview.projects.includes('E:/Repo/A'));
-    assert.ok(overview.agents.some((agent) => agent.agent_id === 'codex' && agent.agent_label === 'codex'));
+    assert.ok(overview.agents.includes('codex'));
+    assert.equal(overview.agents.every((agent) => typeof agent === 'string'), true);
+    assert.equal(overview.agent_labels.codex, 'codex');
     assert.equal(overview.stats.currentStateFacts, 2);
     assert.equal(typeof overview.stats.dailyDigests, 'number');
     assert.equal(overview.release.version, currentPackageVersion);

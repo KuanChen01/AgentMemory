@@ -850,6 +850,7 @@ test('pipeline pickers merge overview lists with facets, and overview spelling w
     ${uiClientFunction('agentOptionKey')}
     ${uiClientFunction('sameAgent')}
     ${uiClientFunction('canonicalAgentOption')}
+    ${uiClientFunction('lookupAgentLabel')}
     ${uiClientFunction('projectBasename')}
     ${uiClientFunction('isActivitySelected')}
     ${uiClientFunction('pipelineFacetValues')}

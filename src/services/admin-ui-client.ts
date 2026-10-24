@@ -151,21 +151,33 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return agentIdOf(id);
   }
 
-  function dedupeAgentOptions(values) {
+  function lookupAgentLabel(id, labels) {
+    const maps = Array.isArray(labels) ? labels : [labels];
+    for (let index = 0; index < maps.length; index += 1) {
+      const map = maps[index];
+      if (!map || typeof map !== "object") continue;
+      if (map[id]) return String(map[id]);
+      const canonical = canonicalAgentOption(id);
+      if (canonical && canonical !== id && map[canonical]) return String(map[canonical]);
+    }
+    return agentLabel(id);
+  }
+
+  function dedupeAgentOptions(values, labels) {
     const seen = new Map();
     (values || []).forEach((value) => {
-      const id = agentIdOf(value);
+      const id = typeof value === "string" ? value : "";
       if (!id) return;
       const key = agentOptionKey(id);
       if (seen.has(key)) return;
-      const label = value && typeof value === "object" && value.agent_label ? String(value.agent_label) : agentLabel(id);
-      seen.set(key, { value: canonicalAgentOption(id), label: label });
+      const canonical = canonicalAgentOption(id);
+      seen.set(key, { value: canonical, label: lookupAgentLabel(canonical, labels) });
     });
     return Array.from(seen.values());
   }
 
-  function syncAgentSelect(select, values, emptyLabel, selectedValue) {
-    const options = dedupeAgentOptions(values);
+  function syncAgentSelect(select, values, emptyLabel, selectedValue, labels) {
+    const options = dedupeAgentOptions(values, labels);
     const optionsKey = JSON.stringify([options, emptyLabel, selectedValue]);
     if (select.dataset.optionsKey === optionsKey) return;
     select.dataset.optionsKey = optionsKey;
@@ -1402,10 +1414,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       target.innerHTML = '<span class="pill subtle">' + escapeHtml(t("runtime.noDataYet")) + '</span>';
       return;
     }
+    const labels = kind === "agent" && state.overview ? state.overview.agent_labels : null;
     target.innerHTML = items.map((item) => {
       if (kind === "agent") {
-        const id = agentIdOf(item);
-        return '<span class="tag" title="' + escapeHtml(id) + '">' + escapeHtml(agentLabel(id)) + '</span>';
+        const id = typeof item === "string" ? item : "";
+        return '<span class="tag" title="' + escapeHtml(id) + '">' + escapeHtml(lookupAgentLabel(id, labels)) + '</span>';
       }
       return '<span class="tag">' + escapeHtml(item) + '</span>';
     }).join("");
@@ -1440,7 +1453,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderRuntimeLists(agents, els.runtimeAgentList, "agent");
 
     syncSelect(els.projectSelect, projects, t("field.allProjects"), state.filters.project, true);
-    syncAgentSelect(els.agentSelect, agents, t("field.allAgents"), state.filters.agent);
+    syncAgentSelect(els.agentSelect, agents, t("field.allAgents"), state.filters.agent, state.overview.agent_labels);
     syncSelect(els.contextProjectSelect, projects, t("field.chooseProject"), els.contextProjectSelect.value, true);
     syncSelect(els.dailyDigestProjectSelect, projects, t("field.chooseProject"), els.dailyDigestProjectSelect.value, true);
     syncSelect(els.proceduralProjectSelect, projects, t("field.chooseProject"), els.proceduralProjectSelect.value, true);
@@ -5241,7 +5254,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const mem = state.memory;
     const raw = state.overview && Array.isArray(state.overview[name === "project" ? "projects" : "agents"]) ? state.overview[name === "project" ? "projects" : "agents"] : [];
     if (name === "agent") {
-      const options = dedupeAgentOptions(raw);
+      const options = dedupeAgentOptions(raw, state.overview && state.overview.agent_labels);
       if (mem.agent && !options.some((option) => sameAgent(option.value, mem.agent))) {
         options.push({ value: mem.agent, label: agentLabel(mem.agent) });
       }
@@ -6183,10 +6196,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         if (!cursor) {
           pipe.stages = payload.stages || null;
           if (payload.facets && typeof payload.facets === "object") {
-            pipe.facets = {
+            const nextFacets = {
               projects: Array.isArray(payload.facets.projects) ? payload.facets.projects.filter((value) => typeof value === "string" && value) : [],
-              agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => (typeof value === "string" && value) || (value && typeof value === "object" && value.agent_id)) : [],
+              agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => typeof value === "string" && value) : [],
             };
+            if (payload.facets.agent_labels && typeof payload.facets.agent_labels === "object" && !Array.isArray(payload.facets.agent_labels)) {
+              nextFacets.agent_labels = payload.facets.agent_labels;
+            }
+            pipe.facets = nextFacets;
           }
         }
         pipe.loaded = true;
@@ -6277,7 +6294,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const selected = state.pipeline[name];
     const listed = (value) => name === "agent" ? sameAgent(value, selected) : isActivitySelected(value, selected);
     if (selected && !values.some((value) => listed(value))) values.push(name === "agent" ? canonicalAgentOption(selected) : selected);
-    const label = (value) => (name === "project" ? projectBasename(value) : agentLabel(value));
+    const label = (value) => (name === "project" ? projectBasename(value) : lookupAgentLabel(value, [
+      state.overview && state.overview.agent_labels,
+      state.pipeline.facets && state.pipeline.facets.agent_labels,
+    ]));
     return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: value }));
   }
 
@@ -6985,10 +7005,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         dig.window = win;
         dig.stats = payload.stats || null;
         if (payload.facets && typeof payload.facets === "object") {
-          dig.facets = {
+          const nextFacets = {
             projects: Array.isArray(payload.facets.projects) ? payload.facets.projects.filter((value) => typeof value === "string" && value) : [],
-            agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => (typeof value === "string" && value) || (value && typeof value === "object" && value.agent_id)) : [],
+            agents: Array.isArray(payload.facets.agents) ? payload.facets.agents.filter((value) => typeof value === "string" && value) : [],
           };
+          if (payload.facets.agent_labels && typeof payload.facets.agent_labels === "object" && !Array.isArray(payload.facets.agent_labels)) {
+            nextFacets.agent_labels = payload.facets.agent_labels;
+          }
+          dig.facets = nextFacets;
         }
       }
       dig.nextCursor = payload.next_cursor || null;
@@ -7464,7 +7488,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const selected = state.digests[name];
     const listed = (value) => name === "agent" ? sameAgent(value, selected) : isActivitySelected(value, selected);
     if (selected && !values.some((value) => listed(value))) values.push(name === "agent" ? canonicalAgentOption(selected) : selected);
-    const label = (value) => (name === "project" ? projectBasename(value) : agentLabel(value));
+    const label = (value) => (name === "project" ? projectBasename(value) : lookupAgentLabel(value, state.digests.facets && state.digests.facets.agent_labels));
     return values.sort((left, right) => label(left).localeCompare(label(right))).map((value) => ({ value, label: label(value), title: value }));
   }
 

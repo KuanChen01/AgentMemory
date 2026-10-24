@@ -506,7 +506,8 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
       },
       release: buildReleaseManifest(),
       projects,
-      agents: agents.map((agent_id) => ({ agent_id, agent_label: agentDisplayName(agent_id) })),
+      agents,
+      agent_labels: Object.fromEntries(agents.map((agent_id) => [agent_id, agentDisplayName(agent_id)])),
       startedAt: workerStartedAt || null,
       refreshedAt: new Date().toISOString(),
     });

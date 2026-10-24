@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db';
-import { agentMatchSql, presentAgentIds } from './agent-id';
+import { agentMatchSql, presentedAgents } from './agent-id';
 import { stuckStaleMs, taskPipelineSql } from './task-consolidation';
 
 const PIPELINE_STATES = ['queued', 'processing', 'saved', 'skipped', 'duplicate', 'fallback', 'failed', 'stuck'] as const;
@@ -321,9 +321,10 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
   if (stages) for (const row of scoped) if (STATE_SET.has(row.state)) (stages as any)[row.state]++;
 
   // Facets ignore every filter, including flagged and state; they never rerun the classifier.
-  let facets: { projects: string[]; agents: Array<{ agent_id: string; agent_label: string }> } | undefined;
+  let facets: { projects: string[]; agents: string[]; agent_labels: Record<string, string> } | undefined;
   if (wantStages) {
-    facets = { projects: facetValues(db, 'project_path'), agents: presentAgentIds(facetValues(db, 'agent_id')) };
+    const presented = presentedAgents(facetValues(db, 'agent_id'));
+    facets = { projects: facetValues(db, 'project_path'), agents: presented.agents, agent_labels: presented.agent_labels };
   }
 
   const allStates = normalized.states.length === PIPELINE_STATES.length;

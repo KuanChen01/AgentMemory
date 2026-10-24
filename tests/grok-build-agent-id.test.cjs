@@ -223,22 +223,24 @@ test('reads alias grok and grok-build while stored grok rows stay grok', withDb(
   assert.deepEqual(idsOf(pipeline, 'task_id'), ['task-build', 'task-grok']);
   assert.deepEqual(pipeline.items.map((item) => item.agent_id).sort(), ['grok', 'grok-build']);
   const openPipeline = getAdminPipeline(db, {}, runtime);
-  assert.deepEqual(openPipeline.facets.agents, [
-    { agent_id: 'codex', agent_label: 'codex' },
-    { agent_id: 'grok-bot', agent_label: 'Grok Bot' },
-    { agent_id: 'grok-build', agent_label: 'Grok Build' },
-  ]);
+  assert.deepEqual(openPipeline.facets.agents, ['codex', 'grok-bot', 'grok-build']);
+  assert.deepEqual(openPipeline.facets.agent_labels, {
+    codex: 'codex',
+    'grok-bot': 'Grok Bot',
+    'grok-build': 'Grok Build',
+  });
 
   const digests = getAdminDigestList(db, { agent: 'Grok Build' }, { nowMs: NOW_MS });
   assert.equal(digests.filters.agent, 'Grok Build');
   assert.deepEqual(idsOf(digests), ['d-alias']);
   assert.deepEqual(digests.items[0].agents, ['grok', 'grok-build']);
   const allDigests = getAdminDigestList(db, {}, { nowMs: NOW_MS });
-  assert.deepEqual(allDigests.facets.agents, [
-    { agent_id: 'codex', agent_label: 'codex' },
-    { agent_id: 'grok-bot', agent_label: 'Grok Bot' },
-    { agent_id: 'grok-build', agent_label: 'Grok Build' },
-  ]);
+  assert.deepEqual(allDigests.facets.agents, ['codex', 'grok-bot', 'grok-build']);
+  assert.deepEqual(allDigests.facets.agent_labels, {
+    codex: 'codex',
+    'grok-bot': 'Grok Bot',
+    'grok-build': 'Grok Build',
+  });
   assert.equal(getAdminDigestList(db, { agent: 'grok' }, { nowMs: NOW_MS }).filters.agent, 'grok');
 }));
 
@@ -360,6 +362,7 @@ test('admin client labels Grok Build and dedupes alias options', () => {
     ${uiClientFunction('agentOptionKey')}
     ${uiClientFunction('sameAgent')}
     ${uiClientFunction('canonicalAgentOption')}
+    ${uiClientFunction('lookupAgentLabel')}
     ${uiClientFunction('dedupeAgentOptions')}
     ({
       grok: agentLabel('grok'),
@@ -372,6 +375,7 @@ test('admin client labels Grok Build and dedupes alias options', () => {
       same: sameAgent('grok', 'grok-build'),
       apart: sameAgent('grok-build', 'grok-bot'),
       options: dedupeAgentOptions(['grok', 'grok-build', 'codex', 'grok-bot']),
+      mapped: dedupeAgentOptions(['codex', 'grok-build'], { codex: 'Codex Desk', 'grok-build': 'From Map' }),
     });
   `);
   assert.equal(result.grok, 'Grok Build');
@@ -386,4 +390,6 @@ test('admin client labels Grok Build and dedupes alias options', () => {
   assert.deepEqual(Array.from(result.options, (option) => option.value).sort(), ['codex', 'grok-bot', 'grok-build']);
   assert.equal(result.options.find((option) => option.value === 'grok-build').label, 'Grok Build');
   assert.equal(result.options.find((option) => option.value === 'grok-bot').label, 'Grok Bot');
+  assert.equal(result.mapped.find((option) => option.value === 'codex').label, 'Codex Desk');
+  assert.equal(result.mapped.find((option) => option.value === 'grok-build').label, 'From Map');
 });

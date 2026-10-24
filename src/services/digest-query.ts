@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db';
-import { agentMatchSql, presentAgentIds } from './agent-id';
+import { agentMatchSql, presentedAgents } from './agent-id';
 import { sanitizeLastError, sanitizeText } from './pipeline-query';
 
 const DIGEST_STATUSES = ['succeeded', 'skipped', 'failed'] as const;
@@ -547,7 +547,7 @@ export function getAdminDigestList(db: DatabaseManager, options: AdminDigestList
     total: number; succeeded: number; skipped: number; failed: number;
     latest_covered_day: string | null; latest_covered_day_projects: string[]; latest_generated_at: string | null;
   } | null = null;
-  let facets: { projects: string[]; agents: Array<{ agent_id: string; agent_label: string }> } | null = null;
+  let facets: { projects: string[]; agents: string[]; agent_labels: Record<string, string> } | null = null;
   if (wantStats) {
     const statsWhere = digestScopeSql(baseScope);
     const totals = db.sqlGet(
@@ -583,9 +583,11 @@ export function getAdminDigestList(db: DatabaseManager, options: AdminDigestList
       const key = agent.toLowerCase(); const prev = agentKeys.get(key);
       if (prev === undefined || agent < prev) agentKeys.set(key, agent);
     }
+    const presented = presentedAgents([...agentKeys.values()]);
     facets = {
       projects: facetProjects(db.sqlAll(`SELECT project_path FROM daily_memory_digests`)),
-      agents: presentAgentIds([...agentKeys.values()]),
+      agents: presented.agents,
+      agent_labels: presented.agent_labels,
     };
   }
 
