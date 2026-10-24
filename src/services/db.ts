@@ -10,6 +10,7 @@ import {
   timestampsEqual,
 } from './timestamps';
 import { normalizeAgentId } from './agent-id';
+import { cjkOverlapScore, extractCjkBigrams } from './cjk';
 
 // Type definitions
 export interface Observation {
@@ -2774,23 +2775,27 @@ export class DatabaseManager {
     if (!this.db) throw new Error('Database not initialized');
 
     const normalizedPath = this.normalizeProjectPath(projectPath);
-    const cleanQuery = queryText.replace(/[^a-zA-Z0-9\s_\-\.]/g, ' ');
+    // Trimmed so a stripped CJK tail cannot leave a dangling `*` that FTS5 rejects as a syntax error.
+    const cleanQuery = queryText.replace(/[^a-zA-Z0-9\s_\-\.]/g, ' ').replace(/\s+/g, ' ').trim();
+    const cjkBigrams = extractCjkBigrams(queryText);
     const asOf = options.asOf;
 
     let ftsRows: any[] = [];
-    try {
-      const ftsQuery = `SELECT o.*, fts.bm25Score
-         FROM observations o
-         INNER JOIN (
-           SELECT observation_id, bm25(observations_fts) as bm25Score
-           FROM observations_fts
-           WHERE observations_fts MATCH ?
-         ) fts ON o.id = fts.observation_id
-         WHERE LOWER(o.project_path) = LOWER(?)`;
-      const ftsParams = [cleanQuery ? `${cleanQuery}*` : '*', normalizedPath];
-      ftsRows = this.db.all(ftsQuery, ftsParams) as any[];
-    } catch (e) {
-      // Fallback if FTS search fails or has syntax errors
+    if (cleanQuery) {
+      try {
+        const ftsQuery = `SELECT o.*, fts.bm25Score
+           FROM observations o
+           INNER JOIN (
+             SELECT observation_id, bm25(observations_fts) as bm25Score
+             FROM observations_fts
+             WHERE observations_fts MATCH ?
+           ) fts ON o.id = fts.observation_id
+           WHERE LOWER(o.project_path) = LOWER(?)`;
+        const ftsParams = [`${cleanQuery}*`, normalizedPath];
+        ftsRows = this.db.all(ftsQuery, ftsParams) as any[];
+      } catch (e) {
+        // Fallback if FTS search fails or has syntax errors
+      }
     }
 
     const allRows = this.db.all(
@@ -2805,14 +2810,19 @@ export class DatabaseManager {
       ? ftsRows.filter((row) => isTimestampOnOrBefore(row.created_at, asOf))
       : ftsRows;
 
-    return this.scoreResults(filteredRows, filteredFtsRows, queryVector, limit);
+    const asciiTermCount = cleanQuery ? cleanQuery.split(' ').length : 0;
+    return this.scoreResults(filteredRows, filteredFtsRows, queryVector, limit, {
+      cjkBigrams,
+      asciiTermCount,
+    });
   }
 
   private scoreResults(
     allRows: any[],
     ftsRows: any[],
     queryVector?: number[],
-    limit: number = 10
+    limit: number = 10,
+    lexical: { cjkBigrams: string[]; asciiTermCount: number } = { cjkBigrams: [], asciiTermCount: 0 }
   ): SearchResult[] {
     const ftsMap = new Map<string, number>();
     ftsRows.forEach((row) => {
@@ -2825,6 +2835,7 @@ export class DatabaseManager {
       if (score > maxFts) maxFts = score;
     });
 
+    let lexicalHit = false;
     const results: SearchResult[] = allRows.map((row) => {
       const id = row.id;
       const embedding: number[] = JSON.parse(row.embedding);
@@ -2835,7 +2846,16 @@ export class DatabaseManager {
       }
 
       const rawFts = ftsMap.get(id) || 0.0;
-      const ftsScore = rawFts / maxFts;
+      const asciiScore = rawFts / maxFts;
+      // FTS5 cannot see CJK terms, so they are scored by bigram overlap and blended with the ASCII
+      // FTS score in proportion to how much of the query each side carries.
+      const cjkCount = lexical.cjkBigrams.length;
+      const ftsScore = cjkCount > 0
+        ? (asciiScore * lexical.asciiTermCount + cjkOverlapScore(lexical.cjkBigrams, [
+            row.title, row.narrative, row.facts, row.concepts,
+          ].join('\n')) * cjkCount) / (lexical.asciiTermCount + cjkCount)
+        : asciiScore;
+      if (ftsScore > 0) lexicalHit = true;
 
       const hybridScore = queryVector 
         ? (0.4 * ftsScore + 0.6 * vectorScore)
@@ -2857,7 +2877,7 @@ export class DatabaseManager {
     });
 
     return results
-      .filter((r) => r.hybrid_score > 0.01 || ftsRows.length === 0)
+      .filter((r) => r.hybrid_score > 0.01 || !lexicalHit)
       .sort((a, b) => b.hybrid_score - a.hybrid_score)
       .slice(0, limit);
   }

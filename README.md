@@ -352,7 +352,7 @@ Claude Code uses two different files:
       "type": "stdio",
       "command": "node",
       "args": ["path/to/AgentMemory/dist/servers/mcp-server.js"],
-      "env": {}
+      "env": { "AGENTMEM_AGENT_ID": "claudecode" }
     }
   }
 }
@@ -377,6 +377,14 @@ Claude Code uses two different files:
   }
 }
 ```
+
+**Active-recording mode (optional).** The `PostToolUse` hook is what records Claude Code tool activity automatically. You can leave it out and let Claude Code decide when to save memories through the `agentmem` MCP tools instead; those writes are stored as direct memories under agent id `claudecode` (no task capture).
+
+*   `agentmem install --no-claude-capture` installs or keeps Claude Code without the `PostToolUse` hook.
+*   `agentmem install --claude-capture` adds the hook back.
+*   With neither flag, the installer keeps the current choice: an existing managed setup without the hook stays that way; a fresh install enables capture (same as earlier versions).
+*   The installer writes `AGENTMEM_AGENT_ID=claudecode` into the MCP server `env`, so direct writes are attributed correctly. `agentmem install --strict` checks for it; re-run `agentmem install` on each machine after upgrading.
+*   The `SessionStart` hook prints a compact context (latest summary blocks and daily digests, lines capped) so it stays under Claude Code's hook output preview limit; use `search_memory` for anything omitted.
 
 #### 3. ChatGPT desktop (Codex runtime) (`~/.codex/config.toml` and `~/.codex/hooks.json`)
 The desktop app is currently branded **ChatGPT**, while its Codex runtime continues to use `~/.codex`. Expose the MCP server in `config.toml`, and register lifecycle hooks in `hooks.json`; keep the `codex-*` hook file names unchanged.

@@ -34,6 +34,9 @@ const OPENCODE_RULES_END = '<!-- AgentMemory OpenCode Rules: END -->';
 
 export interface InstallOptions {
   antigravityConfigPath?: string;
+  // Claude Code PostToolUse auto-capture. Unset keeps the machine's current choice: a managed
+  // SessionStart hook without the managed PostToolUse hook means capture was deliberately turned off.
+  claudeToolCapture?: boolean;
   homeDir?: string;
   repoRoot: string;
   strict?: boolean;
@@ -1073,12 +1076,16 @@ function uninstallDedicatedArtifact(
   };
 }
 
-function installClaude(context: InstallContext): InstallResult {
+function installClaude(context: InstallContext, toolCapture?: boolean): InstallResult {
   const claudeSettingsPath = path.join(context.homeDir, '.claude', 'settings.json');
   const claudeGlobalPath = path.join(context.homeDir, '.claude.json');
   ensureDir(path.dirname(claudeSettingsPath));
 
   const settings = readJsonFile(claudeSettingsPath);
+  const captureEnabled = toolCapture ?? !(
+    hasMarkerInJson(settings?.hooks?.SessionStart, ['claude-session-start.js']) &&
+    !hasMarkerInJson(settings?.hooks?.PostToolUse, ['claude-post-tool.js'])
+  );
   cleanupClaudeSettings(settings);
   if (!isObject(settings.hooks)) {
     settings.hooks = {};
@@ -1088,11 +1095,13 @@ function installClaude(context: InstallContext): InstallResult {
     'claude-session-start.js',
     `node "${context.paths.claudeStartHook}"`
   );
-  settings.hooks.PostToolUse = mergeManagedHookEntries(
-    settings.hooks.PostToolUse,
-    'claude-post-tool.js',
-    `node "${context.paths.claudePostHook}"`
-  );
+  if (captureEnabled) {
+    settings.hooks.PostToolUse = mergeManagedHookEntries(
+      settings.hooks.PostToolUse,
+      'claude-post-tool.js',
+      `node "${context.paths.claudePostHook}"`
+    );
+  }
 
   const globalConfig = readJsonFile(claudeGlobalPath);
   cleanupClaudeGlobalConfig(globalConfig);
@@ -1103,7 +1112,9 @@ function installClaude(context: InstallContext): InstallResult {
     type: 'stdio',
     command: 'node',
     args: [context.paths.mcpServerPath],
-    env: {},
+    env: {
+      AGENTMEM_AGENT_ID: 'claudecode',
+    },
   };
 
   const warnings = [
@@ -1128,7 +1139,7 @@ function installClaude(context: InstallContext): InstallResult {
     agent: 'claude',
     ok: true,
     targetPath: claudeSettingsPath,
-    message: `Registered hooks and MCP server in Claude Code (${claudeSettingsPath}, ${claudeGlobalPath})`,
+    message: `Registered hooks and MCP server in Claude Code (${claudeSettingsPath}, ${claudeGlobalPath}); PostToolUse auto-capture ${captureEnabled ? 'enabled' : 'disabled'}`,
     warnings,
   };
 }
@@ -1810,8 +1821,9 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   if (!JSON.stringify(claudeSettings).includes(paths.claudeStartHook)) {
     issues.push(`Claude Code SessionStart hook is missing (${claudeSettingsPath}).`);
   }
-  if (!JSON.stringify(claudeSettings).includes(paths.claudePostHook)) {
-    issues.push(`Claude Code PostToolUse hook is missing (${claudeSettingsPath}).`);
+  // PostToolUse auto-capture is optional for Claude Code (deliberate record_memory is supported), so it is not checked.
+  if (claudeGlobal?.mcpServers?.agentmem?.env?.AGENTMEM_AGENT_ID !== 'claudecode') {
+    issues.push(`Claude Code MCP server is missing AGENTMEM_AGENT_ID=claudecode (${claudeGlobalPath}).`);
   }
 
   const codexToml = fs.existsSync(codexConfigPath) ? fs.readFileSync(codexConfigPath, 'utf8') : '';
@@ -1972,7 +1984,7 @@ export function installAgentMemory(options: InstallOptions): InstallResult[] {
   const failures: string[] = [];
 
   const steps: Array<{ agent: InstallResult['agent']; run: () => InstallResult }> = [
-    { agent: 'claude', run: () => installClaude(context) },
+    { agent: 'claude', run: () => installClaude(context, options.claudeToolCapture) },
     { agent: 'opencode', run: () => installOpenCode(context) },
     { agent: 'codex', run: () => installCodex(context) },
     { agent: 'grok', run: () => installGrok(context) },

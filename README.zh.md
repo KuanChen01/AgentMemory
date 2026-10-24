@@ -352,7 +352,7 @@ Claude Code 当前使用两份不同配置文件：
       "type": "stdio",
       "command": "node",
       "args": ["您的开发路径/AgentMemory/dist/servers/mcp-server.js"],
-      "env": {}
+      "env": { "AGENTMEM_AGENT_ID": "claudecode" }
     }
   }
 }
@@ -377,6 +377,14 @@ Claude Code 当前使用两份不同配置文件：
   }
 }
 ```
+
+**主动记录模式（可选）。** `PostToolUse` hook 负责自动记录 Claude Code 的工具活动。也可以不装这个 hook，改由 Claude Code 自己决定何时通过 `agentmem` MCP 工具保存记忆；这类写入会作为直接记忆存储，agent id 为 `claudecode`（没有任务捕获）。
+
+*   `agentmem install --no-claude-capture`：安装或保持不带 `PostToolUse` hook 的 Claude Code 配置。
+*   `agentmem install --claude-capture`：重新加上该 hook。
+*   两个参数都不传时沿用当前选择：已有的受管配置若没有该 hook 就保持不变；全新安装默认开启捕获（与旧版一致）。
+*   安装器会在 MCP server 的 `env` 中写入 `AGENTMEM_AGENT_ID=claudecode`，保证直接写入的记忆归属正确。`agentmem install --strict` 会检查这一项；升级后请在每台机器上重新运行一次 `agentmem install`。
+*   `SessionStart` hook 输出精简上下文（最新摘要块和每日摘要，单行截断），保证不超过 Claude Code 的 hook 输出预览上限；被省略的内容可用 `search_memory` 查询。
 
 #### 3. ChatGPT desktop（Codex runtime）（`~/.codex/config.toml` 与 `~/.codex/hooks.json`）
 桌面应用当前显示为 **ChatGPT**，但内部 Codex runtime 仍使用 `~/.codex`。MCP server 注册在 `config.toml`，生命周期 hooks 注册在 `hooks.json`；请保留 `codex-*` hook 文件名不变：
