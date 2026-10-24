@@ -19,6 +19,12 @@ export interface AdminPipelineOptions {
   stats?: boolean;
   /** When true, items are tasks that have a duplicate_flags row in status needs_confirmation. Stages stay unfiltered. */
   flagged?: boolean;
+  /**
+   * Result-time fallback window: items are tasks with at least one fallback result row whose own created_at
+   * falls in [fallbackFrom, fallbackTo), whatever the task's final state. Stages stay unfiltered.
+   */
+  fallbackFrom?: string;
+  fallbackTo?: string;
 }
 
 export interface PipelineRuntime {
@@ -45,6 +51,8 @@ interface NormalizedAdminPipeline {
   cursor: PipelineCursor | null;
   stats: boolean;
   flagged: boolean;
+  fallbackFromIso: string | null;
+  fallbackToIso: string | null;
   filterHash: string;
 }
 
@@ -82,7 +90,7 @@ function pipelineStatsFlag(value: boolean | undefined): boolean {
   return value;
 }
 
-function pipelineInstant(value: string | undefined, label: 'from' | 'to'): string | null {
+function pipelineInstant(value: string | undefined, label: 'from' | 'to' | 'fallback_from' | 'fallback_to'): string | null {
   if (value === undefined) return null;
   if (typeof value !== 'string' || value.trim() === '') throw invalidPipeline(label);
   const ms = Date.parse(value);
@@ -112,7 +120,10 @@ function pipelineFlagged(value: boolean | undefined): boolean {
 
 function pipelineFilterHash(filters: {
   project: string | null; agent: string | null; state: PipelineState[]; from: string | null; to: string | null; flagged: boolean;
+  fallbackFrom: string | null; fallbackTo: string | null;
 }): string {
+  // Fallback keys are only added when set, so cursors issued before the fallback window existed stay valid.
+  const fallback = filters.fallbackFrom || filters.fallbackTo ? { fallback_from: filters.fallbackFrom, fallback_to: filters.fallbackTo } : {};
   return createHash('sha1').update(JSON.stringify({
     project: filters.project,
     agent: filters.agent,
@@ -120,6 +131,7 @@ function pipelineFilterHash(filters: {
     from: filters.from,
     to: filters.to,
     flagged: filters.flagged,
+    ...fallback,
   })).digest('hex').slice(0, 12);
 }
 
@@ -152,6 +164,9 @@ function normalizeAdminPipeline(options: AdminPipelineOptions): NormalizedAdminP
   const agent = pipelineExact(options.agent, 'agent');
   const states = pipelineStateList(options.state);
   const flagged = pipelineFlagged(options.flagged);
+  const fallbackFromIso = pipelineInstant(options.fallbackFrom, 'fallback_from');
+  const fallbackToIso = pipelineInstant(options.fallbackTo, 'fallback_to');
+  if (fallbackFromIso && fallbackToIso && !(Date.parse(fallbackToIso) > Date.parse(fallbackFromIso))) throw invalidPipeline('fallback_from');
   const filterHash = pipelineFilterHash({
     project: project ?? null,
     agent: agent ?? null,
@@ -159,6 +174,8 @@ function normalizeAdminPipeline(options: AdminPipelineOptions): NormalizedAdminP
     from: fromIso,
     to: toIso,
     flagged,
+    fallbackFrom: fallbackFromIso,
+    fallbackTo: fallbackToIso,
   });
   let cursor: PipelineCursor | null = null;
   if (options.cursor !== undefined && options.cursor !== null && options.cursor !== '') {
@@ -177,6 +194,8 @@ function normalizeAdminPipeline(options: AdminPipelineOptions): NormalizedAdminP
     cursor,
     stats: pipelineStatsFlag(options.stats),
     flagged,
+    fallbackFromIso,
+    fallbackToIso,
     filterHash,
   };
 }
@@ -191,6 +210,13 @@ export function sanitizeLastError(value: unknown): string | null {
   return text.length > 200 ? text.slice(0, 200) : text;
 }
 
+const QUOTED_PATH_START = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/)/;
+const QUOTED_SPANS: Array<[string, RegExp]> = [
+  ['"', /"([^"]*)"/g],
+  ['`', /`([^`]*)`/g],
+  ["'", /(?<!\w)'((?:[^']|'(?=\w))*)'(?!\w)/g],
+];
+
 /** Path/email/token redaction shared by last_error, title and summary. */
 export function sanitizeText(value: unknown): string | null {
   if (value == null) return null;
@@ -201,10 +227,12 @@ export function sanitizeText(value: unknown): string | null {
   text = text.replace(/\b(?:api[_-]?key|secret|password|key|token)\s*=\s*[^\s&;,]+/gi, '<redacted>');
   // A quoted absolute path may contain spaces ("C:\Users\Jane Roe\private.txt", '\\server\share\...', `/work/a b`).
   // Take the whole quoted span before the unquoted rules, which stop at the first space.
-  text = text.replace(/(["'`])([^"'`]*)\1/g, (full, quote: string, inner: string) => {
-    if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/)/.test(inner)) return `${quote}<path>${quote}`;
-    return full;
-  });
+  // Each quote kind is matched on its own so a path may contain the other kinds ("C:\O'Brien Smith\x.txt").
+  // Double quotes and backticks go first; a single quote only opens/closes at a word boundary, and an
+  // apostrophe followed by a letter (O'Brien, don't) stays inside the span.
+  for (const [quote, pattern] of QUOTED_SPANS) {
+    text = text.replace(pattern, (full: string, inner: string) => (QUOTED_PATH_START.test(inner) ? `${quote}<path>${quote}` : full));
+  }
   text = text.replace(/(?:\\\\|\/\/)[^\s\\/]+[\\/][^\s]*/g, '<path>');
   text = text.replace(/[A-Za-z]:[\\/][^\s]*/g, '<path>');
   text = text.replace(/(^|[\s"'`(=:<>])(\/[^\s"'`)<>]+)/g, '$1<path>');
@@ -286,17 +314,18 @@ function emptyStages(consolidating: number) {
   return { queued: 0, processing: 0, consolidating, saved: 0, skipped: 0, duplicate: 0, fallback: 0, failed: 0, stuck: 0 };
 }
 
-/** Distinct non-empty values, case-insensitive sort, capped. Exact spelling is kept. */
-function facetValues(rows: any[], field: string): string[] {
-  const seen = new Set<string>();
-  for (const row of rows) {
-    const value = row[field];
-    if (typeof value !== 'string') continue;
-    const text = value.trim();
-    if (!text || seen.has(text)) continue;
-    seen.add(text);
-  }
-  return [...seen].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })).slice(0, PIPELINE_FACET_CAP);
+/**
+ * Distinct non-empty project/agent values over every task source the classifier reads identity from
+ * (result rows, frozen buffer rows, tool evidence), deduplicated, sorted case-insensitively and capped in SQL.
+ * One cheap scan per column instead of a second classifier pass; exact spelling is kept.
+ */
+function facetValues(db: DatabaseManager, field: 'project_path' | 'agent_id'): string[] {
+  const rows = db.sqlAll(`SELECT v FROM (
+      SELECT TRIM(${field}) AS v FROM task_results
+      UNION SELECT TRIM(${field}) FROM task_event_buffer WHERE task_result_id >= 'task:' AND task_result_id < 'task;'
+      UNION SELECT TRIM(${field}) FROM tool_evidence WHERE task_id IS NOT NULL
+    ) WHERE v IS NOT NULL AND v <> '' ORDER BY v COLLATE NOCASE, v LIMIT ?`, [PIPELINE_FACET_CAP]);
+  return rows.map((row: any) => String(row.v)).sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 }
 
 /**
@@ -325,13 +354,10 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
   const stages = wantStages ? emptyStages(consolidating) : null;
   if (stages) for (const row of scoped) if (STATE_SET.has(row.state)) (stages as any)[row.state]++;
 
-  // Facets ignore every filter, including flagged and state. A second pass is only needed when the list itself is scoped.
+  // Facets ignore every filter, including flagged and state; they never rerun the classifier.
   let facets: { projects: string[]; agents: string[] } | undefined;
   if (wantStages) {
-    const universe = where.length
-      ? db.sqlAll(`WITH ${built.sql} SELECT project_path, agent_id FROM pipeline_tasks`, built.params)
-      : scoped;
-    facets = { projects: facetValues(universe, 'project_path'), agents: facetValues(universe, 'agent_id') };
+    facets = { projects: facetValues(db, 'project_path'), agents: facetValues(db, 'agent_id') };
   }
 
   const allStates = normalized.states.length === PIPELINE_STATES.length;
@@ -340,7 +366,15 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
   const flaggedIds = normalized.flagged
     ? new Set(db.sqlAll(`SELECT DISTINCT task_id FROM duplicate_flags WHERE status = 'needs_confirmation'`).map((row) => String(row.task_id)))
     : null;
-  const matching = (flaggedIds ? stateMatched.filter((row) => flaggedIds.has(String(row.task_id))) : stateMatched).sort(compareDesc);
+  const fallbackIds = normalized.fallbackFromIso || normalized.fallbackToIso
+    ? new Set(db.sqlAll(`SELECT DISTINCT task_id FROM task_results WHERE status = 'fallback'
+        ${normalized.fallbackFromIso ? 'AND julianday(created_at) >= julianday(?)' : ''}
+        ${normalized.fallbackToIso ? 'AND julianday(created_at) < julianday(?)' : ''}`,
+      [normalized.fallbackFromIso, normalized.fallbackToIso].filter((v): v is string => !!v)).map((row) => String(row.task_id)))
+    : null;
+  const matching = stateMatched
+    .filter((row) => (!flaggedIds || flaggedIds.has(String(row.task_id))) && (!fallbackIds || fallbackIds.has(String(row.task_id))))
+    .sort(compareDesc);
   const cursor = normalized.cursor;
   const start = cursor ? matching.findIndex((row) => afterCursor(row, cursor)) : 0;
   const rest = start < 0 ? [] : matching.slice(start);
@@ -416,6 +450,8 @@ export function getAdminPipeline(db: DatabaseManager, options: AdminPipelineOpti
       from: normalized.fromIso,
       to: normalized.toIso,
       tz_offset_minutes: normalized.offset,
+      ...(normalized.fallbackFromIso || normalized.fallbackToIso
+        ? { fallback_from: normalized.fallbackFromIso, fallback_to: normalized.fallbackToIso } : {}),
     },
     stages,
     ...(facets ? { facets } : {}),
