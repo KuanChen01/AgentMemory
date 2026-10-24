@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import {
   hasProjectContextData,
-  renderProjectContextView,
+  renderCompactProjectContextView,
 } from '../services/context-view';
 import { fetchAgentMemoryWorker } from './worker-client';
 
@@ -26,7 +26,8 @@ async function main() {
 
     const data: any = await response.json();
     if (data?.disabled || hasProjectContextData(data)) {
-      const output = renderProjectContextView(data);
+      // Claude Code keeps only a ~2KB preview of SessionStart output over 10,000 chars.
+      const output = renderCompactProjectContextView(data);
       if (output) {
         console.log(output);
       }
