@@ -1039,6 +1039,7 @@ test('theme settings persist under am.theme and apply in <head> before first pai
     mode: 'auto',
     light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
     dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    legacyImageSlot: null,
   });
   const head = html.slice(0, html.indexOf('<body>'));
   const boot = head.match(/<script id="amThemeBoot">([\s\S]*?)<\/script>/);
@@ -1114,6 +1115,7 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
     mode: 'auto',
     light: { wallpaper: 'mist', tone: 'auto', blur: 40, dim: 0, opacity: 10, customLuma: null, customColor: null },
     dark: { wallpaper: 'graphite', tone: 'dark', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    legacyImageSlot: null,
   });
 
   const migrated = (old) => plain(api.migrateLegacy(old));
@@ -1143,16 +1145,33 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
 
   const customDark = migrated({ preset: 'custom', customLuma: 0.2, customColor: '#112233', blur: 3 });
   assert.equal(customDark.legacySlot, 'dark');
+  assert.equal(customDark.settings.legacyImageSlot, 'dark');
   assert.equal(customDark.settings.mode, 'dark');
   assert.deepEqual(customDark.settings.dark, { wallpaper: 'custom', tone: 'auto', blur: 3, dim: 0, opacity: 30, customLuma: 0.2, customColor: '#112233' });
   assert.deepEqual(customDark.settings.light, defaults.light);
 
   const customLight = migrated({ preset: 'custom', customLuma: 0.8 });
   assert.equal(customLight.legacySlot, 'light');
+  assert.equal(customLight.settings.legacyImageSlot, 'light');
   assert.equal(customLight.settings.mode, 'light');
   assert.equal(customLight.settings.light.wallpaper, 'custom');
   assert.equal(customLight.settings.light.customLuma, 0.8);
   assert.deepEqual(customLight.settings.dark, defaults.dark);
+
+  // The upload is no longer selected. It still lands on the dark set; wallpaper and mode stay put.
+  const parked = plain(api.migrateLegacy({ preset: 'mist', blur: 20, dim: 10, opacity: 40 }, 0.2));
+  assert.equal(parked.legacySlot, null);
+  assert.equal(parked.settings.legacyImageSlot, 'dark');
+  assert.equal(parked.settings.mode, 'auto');
+  assert.deepEqual(parked.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 20, dim: 10, opacity: 40, customLuma: null, customColor: null });
+  assert.deepEqual(parked.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: 0.2, customColor: null });
+  const parkedColor = plain(api.migrateLegacy({ preset: 'aurora' }, { luma: null, color: '#abcdef' }));
+  assert.equal(parkedColor.settings.legacyImageSlot, 'light');
+  assert.equal(parkedColor.settings.mode, 'auto');
+  assert.equal(parkedColor.settings.light.wallpaper, 'mist');
+  assert.equal(parkedColor.settings.dark.wallpaper, 'graphite');
+  assert.equal(parkedColor.settings.light.customLuma, 0.75);
+  assert.equal(parkedColor.settings.light.customColor, '#abcdef');
 
   const toneWins = migrated({ preset: 'aurora', tone: 'dark', blur: 7 });
   assert.equal(toneWins.legacySlot, null);
@@ -1185,6 +1204,9 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
   // Mist at full Dim crosses the 0.5 threshold (0.93 × 0.4).
   assert.equal(api.resolveTone({ wallpaper: 'mist', tone: 'auto', dim: 60 }), 'dark');
   assert.equal(api.resolveTone({ wallpaper: 'graphite', tone: 'light', dim: 0 }), 'light');
+  assert.equal(plain(api.normalize({ legacyImageSlot: 'dark', mode: 'light' })).legacyImageSlot, 'dark');
+  assert.equal(plain(api.normalize({ legacyImageSlot: 'nope' })).legacyImageSlot, null);
+  assert.equal(defaults.legacyImageSlot, null);
 });
 
 test('glass surfaces are driven by :root variables and the wallpaper is one static layer', () => {

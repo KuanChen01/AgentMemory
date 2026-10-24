@@ -16,6 +16,8 @@ export const ADMIN_UI_THEME_DEFAULTS = {
   mode: 'auto',
   light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
   dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+  // Which set owns the v2.2.1 IndexedDB "custom" image. null until that record is seen.
+  legacyImageSlot: null,
 };
 const ADMIN_UI_LEGACY_WALLPAPER_LUMAS = {
   aurora: 0.9,
@@ -63,8 +65,28 @@ export function renderAdminThemeBootScript(): string {
         v: 1,
         mode: source.mode === "light" || source.mode === "dark" ? source.mode : "auto",
         light: normalizeSet(source.light, "light"),
-        dark: normalizeSet(source.dark, "dark")
+        dark: normalizeSet(source.dark, "dark"),
+        legacyImageSlot: source.legacyImageSlot === "light" || source.legacyImageSlot === "dark" ? source.legacyImageSlot : null
       };
+    }
+    function clampUnit(value) {
+      var number = Number(value);
+      if (value === null || value === undefined || value === "" || !isFinite(number)) return null;
+      return Math.min(1, Math.max(0, number));
+    }
+    // image is present only when the legacy IndexedDB "custom" record exists: a luma number, or {luma, color}.
+    function legacyImageInfo(old, image) {
+      if (image === undefined || image === null || image === false) return null;
+      var luma = null;
+      var color = null;
+      if (typeof image === "number") luma = clampUnit(image);
+      else if (typeof image === "object") {
+        luma = clampUnit(image.luma);
+        color = /^#[0-9a-f]{6}$/i.test(String(image.color || "")) ? String(image.color) : null;
+      } else return null;
+      if (luma === null && old && typeof old === "object" && !Array.isArray(old)) luma = clampUnit(old.customLuma);
+      if (luma === null) luma = 0.75;
+      return { luma: luma, color: color };
     }
     // Old glass mode: an explicit tone wins, otherwise luma scaled by Dim. Removed presets keep their old lumas.
     function legacyMode(old) {
@@ -79,33 +101,46 @@ export function renderAdminThemeBootScript(): string {
       }
       return luma * (1 - dim / 100) < 0.5 ? "dark" : "light";
     }
-    function migrateLegacy(oldBg) {
+    function migrateLegacy(oldBg, image) {
       var settings = normalize(null);
-      if (!oldBg || typeof oldBg !== "object" || Array.isArray(oldBg)) return { settings: settings, legacySlot: null };
-      var slot = legacyMode(oldBg);
-      var preset = typeof oldBg.preset === "string" ? oldBg.preset : "";
       var legacySlot = null;
-      var mode = "auto";
-      var set = {
-        wallpaper: slot === "dark" ? DEFAULTS.dark.wallpaper : DEFAULTS.light.wallpaper,
-        tone: oldBg.tone === "light" || oldBg.tone === "dark" ? oldBg.tone : "auto",
-        blur: oldBg.blur,
-        dim: oldBg.dim,
-        opacity: oldBg.opacity,
-        customLuma: null,
-        customColor: null
-      };
-      if (preset === "mist") settings.light.wallpaper = "mist";
-      else if (preset === "graphite") settings.dark.wallpaper = "graphite";
-      else if (preset === "custom") {
-        set.wallpaper = "custom";
-        set.customLuma = oldBg.customLuma;
-        set.customColor = oldBg.customColor;
-        mode = slot;
-        legacySlot = slot;
+      var preset = "";
+      if (oldBg && typeof oldBg === "object" && !Array.isArray(oldBg)) {
+        var slot = legacyMode(oldBg);
+        preset = typeof oldBg.preset === "string" ? oldBg.preset : "";
+        var mode = "auto";
+        var set = {
+          wallpaper: slot === "dark" ? DEFAULTS.dark.wallpaper : DEFAULTS.light.wallpaper,
+          tone: oldBg.tone === "light" || oldBg.tone === "dark" ? oldBg.tone : "auto",
+          blur: oldBg.blur,
+          dim: oldBg.dim,
+          opacity: oldBg.opacity,
+          customLuma: null,
+          customColor: null
+        };
+        if (preset === "mist") settings.light.wallpaper = "mist";
+        else if (preset === "graphite") settings.dark.wallpaper = "graphite";
+        else if (preset === "custom") {
+          set.wallpaper = "custom";
+          set.customLuma = oldBg.customLuma;
+          set.customColor = oldBg.customColor;
+          mode = slot;
+          legacySlot = slot;
+          settings.legacyImageSlot = slot;
+        }
+        settings[slot] = set;
+        settings.mode = mode;
       }
-      settings[slot] = set;
-      settings.mode = mode;
+      // An upload that is no longer selected still belongs to one set. Wallpaper and mode stay as migrated.
+      if (preset !== "custom") {
+        var info = legacyImageInfo(oldBg, image);
+        if (info) {
+          var imageSlot = info.luma < 0.5 ? "dark" : "light";
+          settings.legacyImageSlot = imageSlot;
+          settings[imageSlot].customLuma = info.luma;
+          settings[imageSlot].customColor = info.color;
+        }
+      }
       return { settings: normalize(settings), legacySlot: legacySlot };
     }
     function resolveMode(settings, prefersDark) {
@@ -10877,6 +10912,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const next = {
       v: 1,
       mode: patch.mode === "light" || patch.mode === "dark" || patch.mode === "auto" ? patch.mode : bg.settings.mode,
+      legacyImageSlot: bg.settings.legacyImageSlot,
       light: Object.assign({}, bg.settings.light),
       dark: Object.assign({}, bg.settings.dark),
     };
@@ -10958,7 +10994,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     try {
       existing = await withWallpaperStore("readonly", (store) => store.get(slot));
     } catch (_error) {
-      existing = null;
+      return;
     }
     if (existing) return;
     let legacy = null;
@@ -10975,26 +11011,48 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
-  async function loadSetWallpaper(slot) {
-    let record = null;
+  // missing: true only when the key was read and has no usable blob. A thrown read is not "missing".
+  async function readWallpaper(key) {
     try {
-      record = await withWallpaperStore("readonly", (store) => store.get(slot));
+      const record = await withWallpaperStore("readonly", (store) => store.get(key));
+      const usable = !!(record && record.blob instanceof Blob);
+      return { record: usable ? record : null, missing: !usable };
     } catch (_error) {
-      record = null;
+      return { record: null, missing: false };
     }
-    if (record && record.blob instanceof Blob) {
-      const meta = bg.customMeta[slot] || { luma: null, color: null };
-      bg.customMeta[slot] = {
-        luma: record.luma === undefined || record.luma === null ? meta.luma : record.luma,
-        color: record.color || meta.color || null,
-      };
-      useSetBlob(slot, record.blob);
+  }
+
+  function rememberWallpaper(slot, record) {
+    const meta = bg.customMeta[slot] || { luma: null, color: null };
+    bg.customMeta[slot] = {
+      luma: record.luma === undefined || record.luma === null ? meta.luma : record.luma,
+      color: record.color || meta.color || null,
+    };
+    useSetBlob(slot, record.blob);
+  }
+
+  async function loadSetWallpaper(slot) {
+    const own = await readWallpaper(slot);
+    if (own.record) {
+      rememberWallpaper(slot, own.record);
       return;
+    }
+    if (!own.missing) return;
+    // The copy into this set may have failed. The legacy key still holds the image; keep the selection.
+    if (bg.settings && bg.settings.legacyImageSlot === slot) {
+      const legacy = await readWallpaper(BG_DB_LEGACY_KEY);
+      if (legacy.record) {
+        rememberWallpaper(slot, legacy.record);
+        await copyLegacyWallpaper(slot);
+        return;
+      }
+      if (!legacy.missing) return;
     }
     if (!bg.settings || bg.settings[slot].wallpaper !== "custom") return;
     const next = {
       v: 1,
       mode: bg.settings.mode,
+      legacyImageSlot: bg.settings.legacyImageSlot,
       light: Object.assign({}, bg.settings.light),
       dark: Object.assign({}, bg.settings.dark),
     };
@@ -11010,15 +11068,52 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
-  async function loadStoredWallpapers() {
-    let legacySlot = null;
-    try {
-      const raw = window.localStorage.getItem(LEGACY_BG_STORAGE_KEY);
-      if (raw) legacySlot = bg.api.migrateLegacy(JSON.parse(raw)).legacySlot;
-    } catch (_error) {
-      legacySlot = null;
+  // Parks a legacy upload on one set when am.theme does not name a slot yet. Does not delete "custom".
+  async function adoptLegacyImage() {
+    if (!bg.api || !bg.settings) return;
+    let slot = bg.settings.legacyImageSlot === "light" || bg.settings.legacyImageSlot === "dark" ? bg.settings.legacyImageSlot : "";
+    if (!slot) {
+      let oldBg = null;
+      try {
+        const raw = window.localStorage.getItem(LEGACY_BG_STORAGE_KEY);
+        if (raw) oldBg = JSON.parse(raw);
+      } catch (_error) {
+        oldBg = null;
+      }
+      const legacy = await readWallpaper(BG_DB_LEGACY_KEY);
+      if (legacy.record) {
+        const computed = bg.api.migrateLegacy(oldBg, { luma: legacy.record.luma, color: legacy.record.color });
+        const assigned = computed.settings.legacyImageSlot;
+        if (assigned === "light" || assigned === "dark") {
+          const presetCustom = !!(oldBg && oldBg.preset === "custom");
+          const next = {
+            v: 1,
+            mode: bg.settings.mode,
+            legacyImageSlot: assigned,
+            light: Object.assign({}, bg.settings.light),
+            dark: Object.assign({}, bg.settings.dark),
+          };
+          if (!presetCustom) {
+            next[assigned] = Object.assign({}, next[assigned], {
+              customLuma: computed.settings[assigned].customLuma,
+              customColor: computed.settings[assigned].customColor,
+            });
+            bg.customMeta[assigned] = {
+              luma: computed.settings[assigned].customLuma,
+              color: computed.settings[assigned].customColor,
+            };
+          }
+          bg.settings = bg.api.normalize(next);
+          persistTheme();
+          slot = assigned;
+        }
+      }
     }
-    if (legacySlot === "light" || legacySlot === "dark") await copyLegacyWallpaper(legacySlot);
+    if (slot === "light" || slot === "dark") await copyLegacyWallpaper(slot);
+  }
+
+  async function loadStoredWallpapers() {
+    await adoptLegacyImage();
     await loadSetWallpaper("light");
     await loadSetWallpaper("dark");
     applyTheme();
