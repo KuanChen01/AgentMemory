@@ -390,7 +390,7 @@ test('Settings client wiring keeps legacy panels and does not check for updates 
   assert.match(bind, /llmTestButton[\s\S]{0,200}runLlmConnectionTest\(\)/);
   assert.match(bind, /releaseCheckButton[\s\S]{0,240}loadReleaseCheck\(\)/);
   assert.match(uiClientFunction('applyLocale'), /renderSettings\(\)/);
-  assert.match(uiClientFunction('usesActivityBackdrop'), /state\.activeView === "settingsView"/);
+  assert.doesNotMatch(uiScript, /usesActivityBackdrop|data-act-bg/);
   for (const name of ['renderSettingsLlm', 'renderSettingsDigest', 'saveSettingsLlm']) {
     assert.doesNotMatch(uiClientFunction(name), /readEnabled|readsDisabled/, `${name} stays usable while reads are off`);
   }

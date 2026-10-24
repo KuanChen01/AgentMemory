@@ -113,7 +113,7 @@ test('Pipeline client reads /admin/api/pipeline with from, to and the tz offset,
   assert.match(load, /error\.status === 400/);
   assert.match(load, /mergeMemoryDays\(pipe\.days, days\)/);
   assert.match(uiClientFunction('pollVisibleView'), /pipelineCanPoll\(\)\) await loadPipeline\("refresh"\)/);
-  assert.match(uiClientFunction('usesActivityBackdrop'), /state\.activeView === "pipelineView"/);
+  assert.doesNotMatch(uiScript, /usesActivityBackdrop|data-act-bg/);
   assert.match(uiClientFunction('memoryDrawerIsDocked'), /host === "pipelineView"/);
 });
 

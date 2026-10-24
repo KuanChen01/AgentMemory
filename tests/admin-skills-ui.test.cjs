@@ -153,7 +153,7 @@ test('Skills client wiring: sequencing, stale cursor, reads off, backdrop, docki
   assert.match(policy, /skl\.seq \+= 1/);
   assert.match(policy, /els\.sklList\.innerHTML = ""/);
   assert.match(policy, /loadSkills\("reset"\)/);
-  assert.match(uiClientFunction('usesActivityBackdrop'), /state\.activeView === "skillsView"/);
+  assert.doesNotMatch(uiScript, /usesActivityBackdrop|data-act-bg/);
   assert.match(uiClientFunction('memoryDrawerIsDocked'), /host === "skillsView"/);
   assert.match(uiClientFunction('activateView'), /showSkillsView\(\)/);
   assert.match(uiClientFunction('isMemoryDrawerOpen'), /state\.drawer\.skill/);

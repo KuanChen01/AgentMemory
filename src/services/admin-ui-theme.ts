@@ -1,5 +1,3 @@
-import { ACTIVITY_BG_DARK_WEBP, ACTIVITY_BG_LIGHT_WEBP } from './admin-ui-bg-assets';
-
 export interface AdminUiWallpaper {
   id: string;
   key: string;
@@ -13,49 +11,11 @@ export interface AdminUiWallpaper {
   swatch: string;
 }
 
-// Wallpaper presets, drawn with gradients only. Light presets keep their blobs pale enough for dark text on
-// light glass; dark presets keep theirs dim enough for light text on dark glass (see the contrast test).
+// Wallpaper presets, drawn with gradients only. Mist stays pale enough for dark text on light glass;
+// graphite stays dim enough for light text on dark glass (see the contrast test).
 export const ADMIN_UI_WALLPAPERS: AdminUiWallpaper[] = [
   {
-    id: 'aurora', key: 'bg.presetAurora', label: 'Aurora', tone: 'light', luma: 0.9, angle: 165,
-    stops: [['#edf3f9', 0], ['#e7eef6', 50], ['#f2ebe7', 100]],
-    blobs: [
-      { size: '46% 30%', at: '58% 14%', rgb: [125, 200, 240], alpha: 0.70 },
-      { size: '30% 36%', at: '84% 28%', rgb: [112, 192, 240], alpha: 0.62 },
-      { size: '30% 20%', at: '32% 10%', rgb: [140, 208, 242], alpha: 0.55 },
-      { size: '18% 22%', at: '10% 16%', rgb: [140, 208, 242], alpha: 0.40 },
-      { size: '28% 32%', at: '12% 56%', rgb: [186, 172, 250], alpha: 0.52 },
-      { size: '24% 22%', at: '42% 64%', rgb: [196, 186, 255], alpha: 0.30 },
-      { size: '36% 34%', at: '84% 88%', rgb: [255, 190, 150], alpha: 0.60 },
-      { size: '24% 22%', at: '62% 98%', rgb: [255, 204, 170], alpha: 0.38 },
-    ],
-    swatch: 'linear-gradient(135deg, #7dc8f0, #baacfa 55%, #ffbe96)',
-  },
-  {
-    id: 'sunset', key: 'bg.presetSunset', label: 'Sunset', tone: 'light', luma: 0.82, angle: 160,
-    stops: [['#ffe2c2', 0], ['#ffc9b8', 40], ['#f8b6cf', 72], ['#d4c6f7', 100]],
-    blobs: [
-      { size: '44% 36%', at: '16% 12%', rgb: [255, 214, 120], alpha: 0.70 },
-      { size: '30% 22%', at: '80% 12%', rgb: [255, 236, 214], alpha: 0.55 },
-      { size: '34% 32%', at: '60% 40%', rgb: [255, 122, 160], alpha: 0.40 },
-      { size: '28% 28%', at: '14% 88%', rgb: [255, 160, 100], alpha: 0.45 },
-      { size: '40% 40%', at: '90% 90%', rgb: [150, 130, 250], alpha: 0.50 },
-    ],
-    swatch: 'linear-gradient(135deg, #ffd678, #ff8fae 55%, #a596f6)',
-  },
-  {
-    id: 'lagoon', key: 'bg.presetLagoon', label: 'Lagoon', tone: 'light', luma: 0.84, angle: 150,
-    stops: [['#d8f8f1', 0], ['#b3e8eb', 45], ['#a9cff3', 100]],
-    blobs: [
-      { size: '44% 38%', at: '14% 10%', rgb: [220, 255, 245], alpha: 0.80 },
-      { size: '36% 36%', at: '82% 22%', rgb: [90, 200, 230], alpha: 0.45 },
-      { size: '28% 28%', at: '18% 82%', rgb: [255, 200, 140], alpha: 0.38 },
-      { size: '40% 36%', at: '70% 92%', rgb: [90, 140, 235], alpha: 0.38 },
-    ],
-    swatch: 'linear-gradient(135deg, #c8f5ec, #5ac8e6 55%, #5a8ceb)',
-  },
-  {
-    id: 'mist', key: 'bg.presetMist', label: 'Mist', tone: 'light', luma: 0.93, angle: 160,
+    id: 'mist', key: 'theme.presetMist', label: 'Mist', tone: 'light', luma: 0.93, angle: 160,
     stops: [['#f5f7fb', 0], ['#e8ecf5', 50], ['#e1e6f2', 100]],
     blobs: [
       { size: '38% 38%', at: '14% 10%', rgb: [207, 224, 255], alpha: 0.85 },
@@ -65,18 +25,7 @@ export const ADMIN_UI_WALLPAPERS: AdminUiWallpaper[] = [
     swatch: 'linear-gradient(135deg, #f5f7fb, #cfe0ff 55%, #ffe2d1)',
   },
   {
-    id: 'night', key: 'bg.presetNight', label: 'Night', tone: 'dark', luma: 0.1, angle: 150,
-    stops: [['#070b1f', 0], ['#0e1440', 45], ['#1b0f3d', 100]],
-    blobs: [
-      { size: '46% 38%', at: '14% 8%', rgb: [43, 92, 255], alpha: 0.50 },
-      { size: '40% 44%', at: '88% 40%', rgb: [155, 60, 255], alpha: 0.40 },
-      { size: '22% 22%', at: '64% 46%', rgb: [255, 79, 163], alpha: 0.20 },
-      { size: '44% 30%', at: '50% 100%', rgb: [0, 194, 199], alpha: 0.26 },
-    ],
-    swatch: 'linear-gradient(135deg, #0e1440, #2b5cff 50%, #9b3cff)',
-  },
-  {
-    id: 'graphite', key: 'bg.presetGraphite', label: 'Graphite', tone: 'dark', luma: 0.16, angle: 150,
+    id: 'graphite', key: 'theme.presetGraphite', label: 'Graphite', tone: 'dark', luma: 0.16, angle: 150,
     stops: [['#1d1f24', 0], ['#2b2e36', 50], ['#15161a', 100]],
     blobs: [
       { size: '40% 40%', at: '12% 10%', rgb: [74, 84, 104], alpha: 0.75 },
@@ -93,8 +42,8 @@ function renderWallpaperLayers(wallpaper: AdminUiWallpaper): string {
   return [...blobs, base].join(',\n      ');
 }
 
-// The selected preset feeds --wallpaper (the one fixed background layer) and the sidebar swatch; each picker
-// thumbnail paints its own preset. Aurora doubles as the :root default so a page without settings looks unchanged.
+// The selected preset feeds --wallpaper (the one fixed background layer); each picker thumbnail paints its
+// own preset. Mist is the :root default so a page paints the light preset before the theme script runs.
 const WALLPAPER_CSS = ADMIN_UI_WALLPAPERS.map((wallpaper, index) => `
   ${index === 0 ? ':root,\n  ' : ''}html[data-bg="${wallpaper.id}"] {
     --wallpaper: ${renderWallpaperLayers(wallpaper)};
@@ -237,20 +186,6 @@ ${WALLPAPER_CSS}
     --wallpaper: var(--bg-image, none) center / cover no-repeat, var(--bg-custom-color, #8a93a6);
     --wallpaper-base: var(--bg-custom-color, #8a93a6);
     --wallpaper-swatch: var(--bg-image, none) center / cover no-repeat, var(--bg-custom-color, #8a93a6);
-  }
-
-  /* Activity's default backdrop (only while no background has been picked; see applyBackdrop in the client).
-     The artwork is inline. The solid colour is the field of each image, so it shows until the WebP paints. */
-  html[data-act-bg="light"] {
-    --wallpaper: url("${ACTIVITY_BG_LIGHT_WEBP}") center / cover no-repeat, #e7eefb;
-    --wallpaper-base: #e7eefb;
-    --wallpaper-swatch: #e7eefb;
-  }
-
-  html[data-act-bg="dark"] {
-    --wallpaper: url("${ACTIVITY_BG_DARK_WEBP}") center / cover no-repeat, #0b1226;
-    --wallpaper-base: #0b1226;
-    --wallpaper-swatch: #0b1226;
   }
 
   /* The only background layer: one fixed, static element that the poll never repaints. The Wallpaper blur and
@@ -1546,27 +1481,30 @@ ${WALLPAPER_CSS}
     background: var(--shell-hover);
   }
 
-  /* Same pill as Developer tools, shown on: the row still opens the background picker. */
-  .bgSwatch {
-    position: relative;
-    width: 44px;
-    height: 26px;
-    flex: 0 0 44px;
-    border-radius: 999px;
-    background: #0a84ff;
-    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+  .bgPickerButton .devToggleLabel {
+    flex: 0 0 auto;
+    overflow: visible;
+    text-overflow: clip;
   }
 
-  .bgSwatch::after {
-    content: "";
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22), 0 0 0 0.5px rgba(15, 23, 42, 0.06);
+  .sidebarRowValue {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: auto;
+    color: var(--text-3);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sidebarChevron {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    color: var(--text-3);
   }
 
   .devToggleLabel {
@@ -4433,46 +4371,9 @@ ${WALLPAPER_CSS}
     margin-top: 14px;
   }
 
-  /* The Activity default backdrop retunes the shell glass a touch so the sidebar and top pills sit in the same
-     material as the page (only while that backdrop shows; a user background keeps the stock shell glass). */
-  html[data-act-bg="light"] {
-    --glass-rgb-top: 255, 255, 255;
-    --glass-rgb-bottom: 250, 250, 255;
-    --glass-a-top: 0.46;
-    --glass-a-bottom: 0.30;
-    --pill-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.44));
-    --nav-active-fill: linear-gradient(180deg, rgba(232, 240, 255, 0.92), rgba(214, 228, 255, 0.64));
-    --nav-active-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.96);
-    --shell-accent: #0a63d1;
-  }
-
-  html[data-act-bg="dark"] {
-    --glass-rgb-top: 26, 36, 80;
-    --glass-rgb-bottom: 10, 15, 40;
-    --glass-a-top: 0.46;
-    --glass-a-bottom: 0.40;
-    --pill-fill: linear-gradient(180deg, rgba(36, 48, 96, 0.60), rgba(16, 22, 56, 0.50));
-    --nav-active-fill: linear-gradient(180deg, rgba(48, 120, 255, 0.55), rgba(22, 76, 210, 0.42));
-    --nav-active-shadow: inset 0 0 0 1px rgba(160, 190, 255, 0.50);
-    --shell-accent: #ffffff;
-  }
-
-  html[data-act-bg="dark"] .sidebar.glassSurface,
   html[data-glass="dark"] .sidebar.glassSurface {
     background: linear-gradient(180deg, rgba(40, 48, 90, 0.34), rgba(20, 24, 56, 0.22));
     box-shadow: var(--glass-shadow);
-  }
-
-  html[data-act-bg="light"] .navIcon {
-    color: #2d7cf0;
-  }
-
-  html[data-act-bg="dark"] .navIcon {
-    color: #6fa8ff;
-  }
-
-  html[data-act-bg] .navItem.is-active .navIcon {
-    color: var(--shell-accent);
   }
 
   @media (max-width: 1360px) {
@@ -6463,7 +6364,7 @@ ${WALLPAPER_CSS}
     }
   }
 
-  /* Background picker popover. */
+  /* Theme panel. */
   .bgPopover {
     position: fixed;
     z-index: 40;
@@ -6533,9 +6434,22 @@ ${WALLPAPER_CSS}
     height: 18px;
   }
 
+  .bgSetTabs {
+    display: flex;
+    gap: 4px;
+    margin-top: 16px;
+    padding: 3px;
+    border-radius: 10px;
+    background: rgba(120, 130, 170, 0.18);
+  }
+
+  .bgSetTabs .bgSegment {
+    flex: 1 1 0;
+  }
+
   .bgTiles {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
     margin-top: 16px;
   }
@@ -6604,7 +6518,6 @@ ${WALLPAPER_CSS}
     background: rgba(255, 255, 255, 0.32);
   }
 
-  .bgThumb[data-wall="night"] .bgPane,
   .bgThumb[data-wall="graphite"] .bgPane {
     border-color: rgba(255, 255, 255, 0.2);
     background: rgba(255, 255, 255, 0.1);
@@ -6685,7 +6598,8 @@ ${WALLPAPER_CSS}
     cursor: pointer;
   }
 
-  .bgSegment[aria-pressed="true"] {
+  .bgSegment[aria-pressed="true"],
+  .bgSetTabs .bgSegment[aria-selected="true"] {
     background: rgba(255, 255, 255, 0.88);
     color: #0b1220;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
@@ -6857,7 +6771,8 @@ ${WALLPAPER_CSS}
     }
 
     .devToggle .navIcon,
-    .bgPickerButton .navIcon {
+    .sidebarRowValue,
+    .sidebarChevron {
       display: none;
     }
 
