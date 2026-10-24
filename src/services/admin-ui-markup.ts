@@ -38,6 +38,8 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   layers: '<path d="m12 4 8.5 4.3L12 12.6 3.5 8.3z"/><path d="m3.5 12.2 8.5 4.3 8.5-4.3"/><path d="m3.5 16 8.5 4.3 8.5-4.3"/>',
   minus: '<path d="M7.5 12h9"/>',
+  star: '<path d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.9l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"/>',
+  pulse: '<path d="M3 12.5h4.2l2.3-6.5 5 13 2.3-6.5H21"/>',
 };
 
 export function renderAdminIcon(name: string, className: string = 'icon'): string {
@@ -78,7 +80,6 @@ export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: stri
 ];
 
 const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [
-  { id: 'projectsView', icon: 'projects', titleKey: 'nav.projects', title: 'Projects', leadKey: 'shell.projectsLead', lead: 'Every project with its startup context, state facts, digests and skills.' },
   { id: 'skillsView', icon: 'skills', titleKey: 'nav.skills', title: 'Skills', leadKey: 'shell.skillsLead', lead: 'Procedural skills, digest candidates and how often post-task reviews matched them.' },
 ];
 
@@ -779,6 +780,84 @@ function renderDigestsView(): string {
       </section>`;
 }
 
+// Range presets of the Projects toolbar (days, as project-list takes them); 30 days is the default. No custom range.
+export const ADMIN_UI_PROJECT_RANGES: Array<{ id: string; days: number; key: string; label: string }> = [
+  { id: 'prjRange7', days: 7, key: 'projects.range7', label: '7 days' },
+  { id: 'prjRange30', days: 30, key: 'projects.range30', label: '30 days' },
+  { id: 'prjRange90', days: 90, key: 'projects.range90', label: '90 days' },
+];
+
+// One summary tile: an icon, a quiet label over the value, an optional chip beside it, and an optional sub-label
+// under it for totals that only cover the rows loaded so far.
+function renderProjectStat(id: string, icon: string, labelKey: string, label: string, sub = false): string {
+  const subLabel = sub ? `<span class="prjStatSub" id="${id}Sub" hidden></span>` : '';
+  return `
+          <div class="prjStat digGlass glassCard glassBlur" id="${id}">
+            <span class="prjStatIcon" aria-hidden="true">${renderAdminIcon(icon, 'prjStatGlyph')}</span>
+            <span class="prjStatText">
+              <span class="prjStatLabel" id="${id}Label" data-i18n="${labelKey}">${label}</span>
+              <span class="prjStatLine"><span class="prjStatValue" id="${id}Value">—</span><span class="prjStatNote" id="${id}Note" hidden></span></span>${subLabel}
+            </span>
+          </div>`;
+}
+
+// Projects: a toolbar, four summary tiles and one glass list card. The client fills #prjList keyed by project_key;
+// the detail drawer is the one Activity owns, moved in on open, with a project body of its own.
+function renderProjectsView(): string {
+  const segments = ADMIN_UI_PROJECT_RANGES.map((item) => `
+            <button class="actSegment" id="${item.id}" type="button" data-project-range="${item.days}" aria-pressed="${item.days === 30}" data-i18n="${item.key}">${item.label}</button>`).join('');
+  const column = (key: string, label: string, extra: string = '') => `<span class="prjCol${extra}" data-i18n="${key}">${label}</span>`;
+  return `
+      <section id="projectsView" class="appView projectsView" aria-labelledby="pageTitle">
+        <div class="pipeLeadRow prjLeadRow">
+          <p class="memLead pipeLead" id="prjLead" data-i18n="shell.projectsLead">Every project with its startup context, state facts, digests and skills.</p>
+          <span class="memUpdated" id="prjUpdated"></span>
+        </div>
+
+        <div class="memToolbar prjToolbar digGlass glassSurface glassBlur" id="prjToolbar" role="search" data-i18n-aria-label="projects.toolbarLabel" aria-label="Project filters">
+          <label class="memSearch prjSearch" for="prjSearchInput">
+            ${renderAdminIcon('search', 'memSearchIcon')}
+            <span class="visuallyHidden" data-i18n="projects.searchLabel">Search projects</span>
+            <input class="memSearchInput" id="prjSearchInput" type="search" maxlength="200" autocomplete="off" spellcheck="false" data-i18n-placeholder="projects.searchPlaceholder" placeholder="Search projects" />
+            <button class="memSearchClear" id="prjSearchClear" type="button" data-i18n-aria-label="projects.searchClear" aria-label="Clear search" hidden>${renderAdminIcon('close', 'memSearchClearIcon')}</button>
+          </label>
+          <button class="actPopup prjSort" id="prjSortButton" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="prjSortPopover">
+            <span class="actPopupLabel" data-i18n="projects.sort">Sort</span>
+            <span class="actPopupValue" id="prjSortValue" data-i18n="projects.sortLastActivity">Last activity</span>
+            ${renderAdminIcon('chevronUpDown', 'actPopupIcon')}
+          </button>
+          <div class="actSegmented memSegmented" id="prjRangeControl" role="group" data-i18n-aria-label="projects.rangeLabel" aria-label="Activity range">${segments}
+          </div>
+        </div>
+
+        <div class="prjStats" id="prjStats">${renderProjectStat('prjStatProjects', 'projects', 'projects.statProjects', 'Projects')}${renderProjectStat('prjStatActive', 'pulse', 'projects.statActive', 'Active in 30 days')}${renderProjectStat('prjStatDigests', 'digestDoc', 'projects.statDigestDays', 'Digest days', true)}${renderProjectStat('prjStatSkills', 'star', 'projects.statSkills', 'Skills', true)}
+        </div>
+
+        <div class="prjBoard" id="prjBoard">
+          <div class="prjCard digGlass glassCard glassBlur" id="prjCard">
+            <div class="prjHead" id="prjListHead" aria-hidden="true">${column('projects.colProject', 'Project', ' is-name')}${column('projects.colMemories', 'Memories')}${column('projects.colLastActivity', 'Last activity')}${column('projects.colDigests', 'Digests')}${column('projects.colSkills', 'Skills')}
+            </div>
+            <div class="prjList" id="prjList" role="region" data-i18n-aria-label="projects.listLabel" aria-label="Projects" aria-busy="true"></div>
+            <div class="prjFoot" id="prjFoot">
+              <span class="prjCount" id="prjCount"></span>
+              <button class="memMore digGlass" id="prjLoadMore" type="button" hidden data-i18n="projects.loadMore">Load more</button>
+            </div>
+          </div>
+          <div class="actNotice memNotice digGlass glassCard glassBlur" id="prjNotice" role="status" hidden>
+            <div class="placeholderIcon" id="prjNoticeIcon">${renderAdminIcon('projects', 'placeholderGlyph')}</div>
+            <h2 class="actNoticeTitle" id="prjNoticeTitle"></h2>
+            <p class="actNoticeLead" id="prjNoticeLead"></p>
+            <div class="actNoticeActions">
+              <button class="bgButton is-primary" id="prjNoticeAction" type="button" hidden></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- The popover sits outside the blurred toolbar so its own blur sees the page. -->
+        <div class="actPopover actMenu" id="prjSortPopover" role="listbox" data-i18n-aria-label="projects.sortMenu" aria-label="Sort projects" hidden></div>
+      </section>`;
+}
+
 function renderPlaceholderViews(): string {
   return PLACEHOLDER_VIEWS.map((view) => `
       <section id="${view.id}" class="appView" aria-labelledby="pageTitle">
@@ -823,7 +902,7 @@ export function renderAdminWorkbenchMarkup(): string {
   return `
   <div class="appShell">${renderSidebar()}${renderBackgroundPopover()}
     <main class="mainArea" id="mainArea">
-      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderDigestsView()}${renderPlaceholderViews()}${renderSettingsView()}
+      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderDigestsView()}${renderProjectsView()}${renderPlaceholderViews()}${renderSettingsView()}
 
       <section id="devToolsView" class="appView devToolsView" aria-labelledby="pageTitle">
     <p class="devToolsLead" data-i18n="devtools.lead">Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.</p>

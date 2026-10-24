@@ -309,11 +309,36 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       // Unfiltered digest-list stats for the Nightly card's Last run (filters must not move it).
       lastRun: null,
     },
+    // Projects: page 1 of project-list carries the summary; later pages follow next_cursor, which is bound to the
+    // filters (q, sort, days). Rows are keyed by project_key; project_path is never rendered.
+    projects: {
+      q: "",
+      sort: "last_activity",
+      days: 30,
+      items: [],
+      summary: null,
+      nextCursor: null,
+      key: "",
+      loaded: false,
+      loadedAt: 0,
+      error: "",
+      errorStatus: 0,
+      readsDisabled: false,
+      stale: false,
+      seq: 0,
+      busySeq: 0,
+      moreSeq: 0,
+      searchTimer: 0,
+      openPopover: "",
+      rowNodes: new Map(),
+      signatures: {},
+    },
     // The one detail drawer. host is the view that opened it; the drawer node moves into that view. id is the memory
     // on show; task is the Pipeline task it was opened from (task alone shows the task body, taskItem its last copy).
     // digest is the Digests row it was opened from (digestPayload its detail); a source memory opened from it keeps
-    // digest set, so Back returns to the digest.
-    drawer: { id: "", task: "", taskItem: null, digest: "", digestPayload: null, digestError: "", digestFactsOpen: false, digestSourcesOpen: false, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
+    // digest set, so Back returns to the digest. project is the Projects row (project_key) it was opened from.
+    drawer: { id: "", task: "", taskItem: null, digest: "", digestPayload: null, digestError: "", digestFactsOpen: false, digestSourcesOpen: false,
+      project: "", projectPayload: null, projectError: "", projectContextOpen: false, projectFactsOpen: false, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
   };
 
   const els = {
@@ -645,6 +670,26 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     digNoticeLead: document.getElementById("digNoticeLead"),
     digNoticeAction: document.getElementById("digNoticeAction"),
     digLoadMore: document.getElementById("digLoadMore"),
+    projectsView: document.getElementById("projectsView"),
+    prjUpdated: document.getElementById("prjUpdated"),
+    prjToolbar: document.getElementById("prjToolbar"),
+    prjSearchInput: document.getElementById("prjSearchInput"),
+    prjSearchClear: document.getElementById("prjSearchClear"),
+    prjSortButton: document.getElementById("prjSortButton"),
+    prjSortValue: document.getElementById("prjSortValue"),
+    prjSortPopover: document.getElementById("prjSortPopover"),
+    prjRangeButtons: Array.from(document.querySelectorAll("[data-project-range]")),
+    prjStats: document.getElementById("prjStats"),
+    prjBoard: document.getElementById("prjBoard"),
+    prjCard: document.getElementById("prjCard"),
+    prjList: document.getElementById("prjList"),
+    prjCount: document.getElementById("prjCount"),
+    prjLoadMore: document.getElementById("prjLoadMore"),
+    prjNotice: document.getElementById("prjNotice"),
+    prjNoticeIcon: document.getElementById("prjNoticeIcon"),
+    prjNoticeTitle: document.getElementById("prjNoticeTitle"),
+    prjNoticeLead: document.getElementById("prjNoticeLead"),
+    prjNoticeAction: document.getElementById("prjNoticeAction"),
   };
 
   // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
@@ -880,6 +925,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderMemory();
     renderPipeline();
     renderDigests();
+    renderProjects();
     renderMemoryDrawer();
     renderProceduralWorkspace();
     renderLlmConfig();
@@ -3481,7 +3527,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   // Open with a memory (id), a Pipeline task body (task alone) or a digest body (digest alone).
   function isMemoryDrawerOpen() {
-    return !!(state.drawer.id || state.drawer.task || state.drawer.digest);
+    return !!(state.drawer.id || state.drawer.task || state.drawer.digest || state.drawer.project);
   }
 
   // The drawer markup lives in Activity. It moves into the view that opens it, so its blur only runs inside the
@@ -3489,7 +3535,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // list only at 1440px and wider; below that they use the same modal sheet, scrim and focus handling as Activity.
   function memoryDrawerIsDocked(host) {
     const query = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
-    return (host === "memoryView" || host === "pipelineView" || host === "digestsView") && !!(query && query.matches);
+    return (host === "memoryView" || host === "pipelineView" || host === "digestsView" || host === "projectsView") && !!(query && query.matches);
   }
 
   function mountMemoryDrawer(host) {
@@ -3524,6 +3570,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       entry.node.classList.toggle("is-open", key === digest);
       setAttr(entry.node, "aria-expanded", key === digest ? "true" : "false");
     });
+    // A 404 leaves the drawer open with a quiet missing state, but the list row is no longer selected.
+    const project = state.drawer.projectError === "missing" ? "" : state.drawer.project;
+    state.projects.rowNodes.forEach((entry, key) => {
+      entry.node.classList.toggle("is-open", key === project);
+      setAttr(entry.node, "aria-expanded", key === project ? "true" : "false");
+    });
   }
 
   // Pipeline has no detail call: the task body renders from the list item. "Open memory" swaps in the memory
@@ -3535,6 +3587,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.taskItem = findPipelineTask(taskId);
     drawer.digest = "";
     drawer.digestPayload = null;
+    drawer.project = "";
+    drawer.projectPayload = null;
     drawer.id = "";
     drawer.host = "pipelineView";
     drawer.payload = null;
@@ -3587,6 +3641,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       drawer.digestPayload = null;
       drawer.digestError = "";
     }
+    drawer.project = "";
+    drawer.projectPayload = null;
+    drawer.projectError = "";
     drawer.id = id;
     drawer.host = nextHost;
     drawer.payload = null;
@@ -3638,6 +3695,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.digest = "";
     drawer.digestPayload = null;
     drawer.digestError = "";
+    drawer.project = "";
+    drawer.projectPayload = null;
+    drawer.projectError = "";
     drawer.payload = null;
     drawer.error = "";
     drawer.missing = false;
@@ -3660,17 +3720,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (!drawerEl) return;
     const pipeline = state.drawer.host === "pipelineView";
     const digests = state.drawer.host === "digestsView";
-    if (!memoryDrawerIsDocked(state.drawer.host) || !isMemoryDrawerOpen() || !(digests ? els.digCards : pipeline ? els.pipelineFlowRow : els.memorySummary)) {
+    const projects = state.drawer.host === "projectsView";
+    if (!memoryDrawerIsDocked(state.drawer.host) || !isMemoryDrawerOpen() || !(projects ? els.prjStats : digests ? els.digCards : pipeline ? els.pipelineFlowRow : els.memorySummary)) {
       if (drawerEl.style.top) drawerEl.style.top = "";
       return;
     }
-    // On Digests the docked sheet lines up with the first day card, under the two status cards.
-    const anchor = digests
+    // On Digests the docked sheet lines up with the first day card, under the two status cards; on Projects with
+    // the list card, under the summary tiles.
+    const anchor = projects
+      ? (els.prjStats.hidden ? els.prjToolbar : els.prjStats)
+      : digests
       ? (els.digCards.hidden ? els.digToolbar : els.digCards)
       : pipeline
         ? (els.pipelineFlowRow.hidden ? els.pipelineToolbar : els.pipelineFlowRow)
         : (els.memorySummary.hidden ? els.memoryToolbar : els.memorySummary);
-    const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + (digests ? 16 : 10))) + "px";
+    const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + (digests || projects ? 16 : 10))) + "px";
     if (drawerEl.style.top !== next) drawerEl.style.top = next;
   }
 
@@ -3684,12 +3748,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   // Copies the memory id, or the task or digest id while the drawer shows a Pipeline task or a digest.
+  // A project copies its display name and key, never its path.
   function copyMemoryId() {
     const drawer = state.drawer;
-    const id = drawer.id || drawer.task || drawer.digest;
+    const id = drawer.id || drawer.task || drawer.digest || drawer.project;
     if (!id || !navigator.clipboard) return;
-    navigator.clipboard.writeText(id).then(() => {
-      if ((drawer.id || drawer.task || drawer.digest) !== id) return;
+    const project = !drawer.id && !drawer.task && !drawer.digest ? projectDrawerItem() : null;
+    const text = project ? String(project.display_name || "") + " · " + id : id;
+    navigator.clipboard.writeText(text).then(() => {
+      if ((drawer.id || drawer.task || drawer.digest || drawer.project) !== id) return;
       drawer.copied = true;
       renderMemoryDrawerCopy();
       window.setTimeout(() => {
@@ -3702,7 +3769,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function renderMemoryDrawerCopy() {
     const button = els.memoryDrawerCopy;
     if (!button) return;
-    const label = t(state.drawer.copied ? "memory.drawerCopied" : !state.drawer.id && state.drawer.digest ? "digests.drawerCopyId" : state.drawer.id || !state.drawer.task ? "memory.drawerCopyId" : "pipeline.drawerCopyId");
+    const label = t(state.drawer.copied ? "memory.drawerCopied" : !state.drawer.id && state.drawer.project ? "projects.drawerCopy" : !state.drawer.id && state.drawer.digest ? "digests.drawerCopyId" : state.drawer.id || !state.drawer.task ? "memory.drawerCopyId" : "pipeline.drawerCopyId");
     setAttr(button, "title", label);
     setAttr(button, "aria-label", label);
     button.classList.toggle("is-done", !!state.drawer.copied);
@@ -3928,7 +3995,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const open = isMemoryDrawerOpen();
     // A digest without a source memory on show renders the digest body; a Pipeline task the task body.
     const digestMode = open && !drawer.id && !!drawer.digest;
-    const taskMode = open && !drawer.id && !drawer.digest;
+    const projectMode = open && !drawer.id && !drawer.digest && !!drawer.project;
+    const taskMode = open && !drawer.id && !drawer.digest && !drawer.project;
     setHidden(drawerEl, !open);
     setHidden(els.memoryDrawerCopy, !!drawer.readsDisabled);
     // Activity's sheet is always modal over the scrim. Memory and Pipeline hide the scrim only while docked (1440px
@@ -3939,13 +4007,16 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (els.memoryView) els.memoryView.classList.toggle("is-drawer-open", open && drawer.host === "memoryView");
     if (els.pipelineView) els.pipelineView.classList.toggle("is-drawer-open", open && drawer.host === "pipelineView");
     if (els.digestsView) els.digestsView.classList.toggle("is-drawer-open", open && drawer.host === "digestsView");
+    if (els.projectsView) els.projectsView.classList.toggle("is-drawer-open", open && drawer.host === "projectsView");
     drawerEl.classList.toggle("is-task", taskMode);
     drawerEl.classList.toggle("is-digest", digestMode);
+    drawerEl.classList.toggle("is-project", projectMode);
     if (drawer.task && !drawer.readsDisabled) drawer.taskItem = findPipelineTask(drawer.task) || drawer.taskItem;
-    const card = !open || drawer.readsDisabled || taskMode || digestMode ? null : findDrawerCard(drawer.id);
+    const card = !open || drawer.readsDisabled || taskMode || digestMode || projectMode ? null : findDrawerCard(drawer.id);
     const digestItem = drawer.digest ? findDigestItem(drawer.digest) : null;
     const signature = [state.locale, drawer.id, drawer.task, drawer.host, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload), drawer.payload ? "" : JSON.stringify(card), drawer.task ? JSON.stringify(drawer.taskItem) : "",
-      drawer.digest, drawer.digestError, drawer.digestFactsOpen, drawer.digestSourcesOpen, digestMode ? JSON.stringify(drawer.digestPayload) + JSON.stringify(digestItem) : ""].join("|");
+      drawer.digest, drawer.digestError, drawer.digestFactsOpen, drawer.digestSourcesOpen, digestMode ? JSON.stringify(drawer.digestPayload) + JSON.stringify(digestItem) : "",
+      drawer.project, drawer.projectError, drawer.projectContextOpen, drawer.projectFactsOpen, projectMode ? JSON.stringify(drawer.projectPayload) + JSON.stringify(projectDrawerItem()) : ""].join("|");
     if (drawer.signature === signature) return;
     drawer.signature = signature;
     renderMemoryDrawerCopy();
@@ -3958,6 +4029,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     if (digestMode) {
       renderDigestDrawer(digestItem);
+      return;
+    }
+    if (projectMode) {
+      renderProjectDrawer();
       return;
     }
     if (taskMode) {
@@ -4055,6 +4130,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         void openDigestDrawer(digestRetry.getAttribute("data-digest-open"), null);
         return;
       }
+      const projectToggle = event.target.closest("[data-project-toggle]");
+      if (projectToggle) {
+        const which = projectToggle.getAttribute("data-project-toggle") === "facts" ? "projectFactsOpen" : "projectContextOpen";
+        drawer[which] = !drawer[which];
+        renderMemoryDrawer();
+        return;
+      }
+      const projectRetry = event.target.closest("[data-project-open]");
+      if (projectRetry) {
+        void openProjectDrawer(projectRetry.getAttribute("data-project-open"), null);
+        return;
+      }
+      const projectDigest = event.target.closest("[data-project-digest]");
+      if (projectDigest) {
+        openProjectDigest(projectDigest.getAttribute("data-project-digest"));
+        return;
+      }
       const digestToggle = event.target.closest("[data-digest-toggle]");
       if (digestToggle) {
         const which = digestToggle.getAttribute("data-digest-toggle") === "sources" ? "digestSourcesOpen" : "digestFactsOpen";
@@ -4098,13 +4190,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     // One listener: crossing 1440px while Memory's or Pipeline's drawer is open flips docked and modal (scrim,
     // aria-modal, focus).
     const memoryDrawerDockQuery = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
+    const redockMemoryDrawer = () => {
+      mountMemoryDrawer(state.drawer.host);
+      renderMemoryDrawer();
+      placeMemoryDrawer();
+      if (!memoryDrawerIsDocked(state.drawer.host) && els.activityDrawerClose) els.activityDrawerClose.focus();
+    };
     if (memoryDrawerDockQuery && memoryDrawerDockQuery.addEventListener) {
       memoryDrawerDockQuery.addEventListener("change", () => {
+        // Projects docks like Digests.
+        if (isMemoryDrawerOpen() && state.drawer.host === "projectsView") {
+          redockMemoryDrawer();
+          return;
+        }
         if (!isMemoryDrawerOpen() || (state.drawer.host !== "memoryView" && state.drawer.host !== "pipelineView" && state.drawer.host !== "digestsView")) return;
-        mountMemoryDrawer(state.drawer.host);
-        renderMemoryDrawer();
-        placeMemoryDrawer();
-        if (!memoryDrawerIsDocked(state.drawer.host) && els.activityDrawerClose) els.activityDrawerClose.focus();
+        redockMemoryDrawer();
       });
     }
   }
@@ -6747,6 +6847,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.digest = id;
     drawer.digestPayload = null;
     drawer.digestError = "";
+    drawer.project = "";
+    drawer.projectPayload = null;
+    drawer.projectError = "";
     drawer.id = "";
     drawer.task = "";
     drawer.taskItem = null;
@@ -7062,6 +7165,722 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     });
     window.addEventListener("scroll", () => {
       if (state.activeView === "digestsView") scheduleMemoryDrawerPlace();
+    }, { passive: true });
+  }
+
+  // ---------- Projects ----------
+
+  const PROJECT_PAGE = 50;
+  const PROJECT_RANGES = [7, 30, 90];
+  const PROJECT_SORTS = [["last_activity", "projects.sortLastActivity"], ["memories", "projects.sortMemories"], ["name", "projects.sortName"]];
+  // Project totals move slowly: reopening the view reloads page 1 only after a quiet spell. The list does not poll.
+  const PROJECT_LIST_REFRESH_MS = 2 * 60 * 1000;
+  const PROJECT_SEARCH_DEBOUNCE_MS = 250;
+  const PROJECT_AGENT_CHIPS = 2;
+  const PROJECT_FACTS_PREVIEW = 5;
+  const PROJECT_CONTEXT_LINES = 3;
+  const PROJECT_SKELETON_ROW = '<div class="memRow prjRow is-skeleton" aria-hidden="true"><span class="prjIcon"></span><span class="prjMain"><span class="actSkel is-mid"></span><span class="actSkel is-short"></span></span></div>';
+
+  function findProjectItem(key) {
+    return state.projects.items.find((item) => item.project_key === key) || null;
+  }
+
+  // The project on show in the drawer: the detail once it arrives, the list row until then.
+  function projectDrawerItem() {
+    const drawer = state.drawer;
+    if (!drawer.project) return null;
+    return drawer.projectPayload && drawer.projectPayload.project ? drawer.projectPayload.project : findProjectItem(drawer.project);
+  }
+
+  function projectsKey() {
+    const prj = state.projects;
+    return JSON.stringify([prj.q.trim().toLowerCase(), prj.sort, prj.days]);
+  }
+
+  function projectsUrl(cursor) {
+    const prj = state.projects;
+    const params = new URLSearchParams({
+      days: String(prj.days),
+      sort: prj.sort,
+      limit: String(PROJECT_PAGE),
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+    });
+    const q = prj.q.trim();
+    if (q) params.set("q", q);
+    if (cursor) params.set("cursor", cursor);
+    return "/admin/api/project-list?" + params.toString();
+  }
+
+  // mode: "reset" loads page 1 of the current filters, "more" appends the page after next_cursor. Only the newest
+  // request may write state; a 400 on a cursor means it went stale, so page 1 loads again.
+  async function loadProjects(mode) {
+    const prj = state.projects;
+    const key = projectsKey();
+    if (prj.readsDisabled || key !== prj.key) mode = "reset";
+    if (mode === "more" && (!prj.nextCursor || prj.moreSeq)) return;
+    const seq = prj.seq + 1;
+    prj.seq = seq;
+    const cursor = mode === "more" ? prj.nextCursor : null;
+    if (mode === "reset") {
+      prj.key = key;
+      prj.error = "";
+      prj.errorStatus = 0;
+      prj.stale = true;
+      prj.busySeq = seq;
+      prj.moreSeq = 0;
+      prj.nextCursor = null;
+    } else {
+      prj.moreSeq = seq;
+    }
+    renderProjects();
+    try {
+      const payload = await fetchJson(projectsUrl(cursor));
+      if (seq !== prj.seq) return;
+      if (payload.disabled || payload.status === "reads_disabled") {
+        applyReadPolicyToViews({ readEnabled: false });
+        return;
+      }
+      prj.readsDisabled = false;
+      const incoming = Array.isArray(payload.items) ? payload.items.filter((item) => item && item.project_key) : [];
+      if (mode === "more") {
+        const seen = new Set(prj.items.map((item) => item.project_key));
+        prj.items = prj.items.concat(incoming.filter((item) => !seen.has(item.project_key)));
+      } else {
+        prj.items = incoming;
+        prj.summary = payload.summary || null;
+      }
+      prj.nextCursor = payload.next_cursor || null;
+      prj.loaded = true;
+      prj.loadedAt = Date.now();
+      prj.error = "";
+      prj.errorStatus = 0;
+    } catch (error) {
+      if (seq !== prj.seq) return;
+      if (mode === "more" && error && error.status === 400 && /cursor/i.test(String(error.message || ""))) {
+        prj.moreSeq = 0;
+        void loadProjects("reset");
+        return;
+      }
+      if (mode === "reset") {
+        prj.items = [];
+        prj.summary = null;
+        prj.loaded = false;
+        // A worker without the route answers 404, or an HTML page that does not parse: both mean "not available yet".
+        prj.errorStatus = error instanceof SyntaxError ? 404 : (error && error.status) || 0;
+        prj.error = (error && error.message) || t("projects.errorTitle");
+      }
+    } finally {
+      if (prj.busySeq === seq) prj.busySeq = 0;
+      if (prj.moreSeq === seq) prj.moreSeq = 0;
+      if (seq === prj.seq) {
+        prj.stale = false;
+        renderProjects();
+      }
+    }
+  }
+
+  function setProjectFilters(patch) {
+    const prj = state.projects;
+    const daysChanged = Object.prototype.hasOwnProperty.call(patch, "days") && Number(patch.days) !== prj.days;
+    const openKey = state.drawer.host === "projectsView" ? state.drawer.project : "";
+    Object.assign(prj, patch);
+    void loadProjects("reset");
+    if (daysChanged && openKey) void openProjectDrawer(openKey, null);
+  }
+
+  function applyProjectSearch(value) {
+    const prj = state.projects;
+    window.clearTimeout(prj.searchTimer);
+    const q = String(value || "").slice(0, 200);
+    if (q.trim() === prj.q.trim()) {
+      prj.q = q;
+      return;
+    }
+    setProjectFilters({ q });
+  }
+
+  function projectPlural(key, count) {
+    return t(Number(count) === 1 ? key + "One" : key, { n: formatCount(count) });
+  }
+
+  // "Just now", "12m ago", "5h ago" within a day, then "Yesterday", then the short date.
+  function projectAgo(value) {
+    const date = parseTimestamp(value);
+    if (!date) return "";
+    const ms = Date.now() - date.getTime();
+    if (ms < 60000) return t("projects.agoNow");
+    if (ms < 3600000) return t("projects.agoMinutes", { n: formatCount(Math.floor(ms / 60000)) });
+    if (ms < 86400000) return t("projects.agoHours", { n: formatCount(Math.floor(ms / 3600000)) });
+    if (calendarDaysAgo(date) === 1) return t("projects.yesterday");
+    const withYear = date.getFullYear() !== new Date().getFullYear();
+    return date.toLocaleDateString(state.locale, { month: "short", day: "numeric", year: withYear ? "numeric" : undefined });
+  }
+
+  // Every folder shares the family's blue tint; only the open row's tile is a little stronger.
+  function renderProjectIcon(className) {
+    return '<span class="' + className + '" aria-hidden="true">' + svgIcon("projects", "prjIconGlyph") + '</span>';
+  }
+
+  // "<agent> <count>" chips, at most two, then "+N" with the rest in its tooltip.
+  function renderProjectAgents(item) {
+    const agents = Array.isArray(item.agents) ? item.agents.filter((agent) => agent && agent.agent_id) : [];
+    const shown = agents.slice(0, PROJECT_AGENT_CHIPS);
+    const rest = agents.slice(PROJECT_AGENT_CHIPS);
+    return shown.map((agent) => '<span class="prjChip" title="' + escapeHtml(agent.agent_id) + '"><span class="prjChipName">' + escapeHtml(agent.agent_id) + '</span>' +
+      '<span class="prjChipCount">' + escapeHtml(formatCount(agent.count)) + '</span></span>').join("") +
+      (rest.length ? '<span class="prjChip is-more" title="' + escapeHtml(rest.map((agent) => agent.agent_id + " " + formatCount(agent.count)).join(", ")) + '">' +
+        escapeHtml(t("projects.moreAgents", { n: formatCount(rest.length) })) + '</span>' : '');
+  }
+
+  function renderProjectRowBody(item) {
+    const days = state.projects.days;
+    const inRange = Number(item.memories_in_range || 0);
+    const skills = Number(item.skills_count || 0);
+    const candidates = Number(item.candidates_count || 0);
+    const digestDays = Number(item.digest_days_in_range || 0);
+    const last = parseTimestamp(item.last_activity_at);
+    const latestDay = parseLocalDay(item.latest_digest_covered_day);
+    const digestTitle = t("projects.digestDaysTitle", { n: formatCount(digestDays), days: formatCount(days) }) + " · " +
+      (latestDay ? formatShortDate(latestDay) : t("projects.noLatestDigest"));
+    const sub = inRange > 0
+      ? '<span class="prjChips">' + renderProjectAgents(item) + '</span>'
+      : '<span class="prjQuiet">' + escapeHtml(t("projects.noActivity", { n: formatCount(days) })) + '</span>';
+    return renderProjectIcon("prjIcon") +
+      '<span class="prjMain"><span class="prjName" title="' + escapeHtml(item.display_name || "") + '">' + escapeHtml(item.display_name || "—") + '</span>' + sub + '</span>' +
+      '<span class="prjMem"><span class="prjNum">' + escapeHtml(formatCount(inRange)) + '</span><span class="prjSub">' + escapeHtml(t("projects.memoriesOf", { n: formatCount(item.memories_total) })) + '</span></span>' +
+      '<time class="prjWhen"' + (last ? ' datetime="' + escapeHtml(last.toISOString()) + '" title="' + escapeHtml(last.toLocaleString(state.locale)) + '"' : '') + '>' +
+        escapeHtml(last ? projectAgo(item.last_activity_at) : t("projects.never")) + '</time>' +
+      '<span class="prjDigests' + (digestDays ? '' : ' is-zero') + '" title="' + escapeHtml(digestTitle) + '">' +
+        escapeHtml(t("projects.digestDays", { n: formatCount(digestDays), days: formatCount(days) })) + '</span>' +
+      '<span class="prjSkills">' + (skills ? '<span class="prjSkillCount">' + escapeHtml(formatCount(skills)) + '</span>' : '<span class="prjDash">—</span>') +
+        (candidates ? '<span class="prjCand" title="' + escapeHtml(t("projects.candidatesTitle", { n: formatCount(candidates) })) + '">+' + escapeHtml(formatCount(candidates)) + '</span>' : '') + '</span>';
+  }
+
+  // Keyed reconcile, as on Digests: one node per project_key, rewritten only when its fields, the range or the locale change.
+  function syncProjectRows(container, items) {
+    const prj = state.projects;
+    const nodes = prj.rowNodes;
+    const open = state.drawer.projectError === "missing" ? "" : state.drawer.project;
+    let cursor = container.firstElementChild;
+    items.forEach((item) => {
+      const key = item.project_key;
+      let entry = nodes.get(key);
+      if (!entry) {
+        const node = document.createElement("article");
+        node.setAttribute("data-project-key", key);
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-haspopup", "dialog");
+        entry = { node, signature: "" };
+        nodes.set(key, entry);
+      }
+      setClass(entry.node, "memRow prjRow" + (Number(item.memories_in_range || 0) > 0 ? "" : " is-quiet") + (open === key ? " is-open" : ""));
+      setAttr(entry.node, "aria-expanded", open === key ? "true" : "false");
+      const signature = [state.locale, prj.days, JSON.stringify(item)].join("|");
+      if (entry.signature !== signature) {
+        entry.signature = signature;
+        entry.node.innerHTML = renderProjectRowBody(item);
+      }
+      if (entry.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        container.insertBefore(entry.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+    const visible = new Set(items.map((item) => item.project_key));
+    nodes.forEach((_entry, key) => {
+      if (!visible.has(key)) nodes.delete(key);
+    });
+  }
+
+  function renderProjectNotice() {
+    const prj = state.projects;
+    let notice = null;
+    if (prj.readsDisabled) {
+      notice = { tone: "", icon: "pause", title: t("projects.readsDisabledTitle"), lead: t("projects.readsDisabledLead"), action: null };
+    } else if (!prj.loaded && prj.error) {
+      // Until the backend ships project-list, the route is a 404: say so quietly rather than as a failure.
+      notice = prj.errorStatus === 404
+        ? { tone: "", icon: "projects", title: t("projects.unavailableTitle"), lead: t("projects.unavailableLead"), action: ["retry", t("projects.retry")] }
+        : { tone: " is-error", icon: "warning", title: t("projects.errorTitle"), lead: t("projects.errorLead"), action: ["retry", t("projects.retry")] };
+    } else if (prj.loaded && !prj.stale && !prj.items.length) {
+      const q = prj.q.trim();
+      notice = q
+        ? { tone: "", icon: "search", title: t("projects.noMatchTitle", { q }), lead: t("projects.noMatchLead"), action: ["clear", t("projects.clearSearch")] }
+        : { tone: "", icon: "projects", title: t("projects.emptyTitle"), lead: t("projects.emptyLead"), action: null };
+    }
+    setHidden(els.prjNotice, !notice);
+    if (notice) {
+      setClass(els.prjNotice, "actNotice memNotice digGlass glassCard glassBlur" + notice.tone);
+      if (prj.signatures.noticeIcon !== notice.icon) {
+        prj.signatures.noticeIcon = notice.icon;
+        els.prjNoticeIcon.innerHTML = svgIcon(notice.icon, "placeholderGlyph");
+      }
+      setText(els.prjNoticeTitle, notice.title);
+      setText(els.prjNoticeLead, notice.lead);
+      setHidden(els.prjNoticeAction, !notice.action);
+      setAttr(els.prjNoticeAction, "data-project-action", notice.action ? notice.action[0] : null);
+      setText(els.prjNoticeAction, notice.action ? notice.action[1] : "");
+    }
+    return !!notice;
+  }
+
+  function renderProjectList() {
+    const prj = state.projects;
+    const list = els.prjList;
+    if (prj.readsDisabled && list.firstChild && !list.querySelector(".is-skeleton")) {
+      list.innerHTML = "";
+      prj.rowNodes.clear();
+    }
+    const noticed = renderProjectNotice();
+    setHidden(els.prjCard, noticed);
+    setAttr(list, "aria-busy", prj.stale || !prj.loaded ? "true" : "false");
+    list.classList.toggle("is-stale", prj.stale && prj.items.length > 0);
+    setHidden(els.prjLoadMore, noticed || !prj.nextCursor);
+    setText(els.prjLoadMore, t(prj.moreSeq ? "projects.loadingMore" : "projects.loadMore"));
+    setAttr(els.prjLoadMore, "aria-busy", prj.moreSeq ? "true" : null);
+    setHidden(els.prjCount, !!prj.nextCursor || !prj.items.length);
+    setText(els.prjCount, prj.items.length ? projectPlural("projects.count", prj.items.length) : "");
+    if (noticed) return;
+    if (!prj.items.length) {
+      if (!list.querySelector(".is-skeleton")) {
+        list.innerHTML = PROJECT_SKELETON_ROW + PROJECT_SKELETON_ROW + PROJECT_SKELETON_ROW;
+        prj.rowNodes.clear();
+      }
+      return;
+    }
+    list.querySelectorAll(".is-skeleton").forEach((node) => node.remove());
+    syncProjectRows(list, prj.items);
+  }
+
+  // Summary tiles: Projects and Active come from the server summary (they ignore q). Digest days, Skills and the
+  // candidates chip add up the loaded rows. While the latest page left a next_cursor, those three are partial: the
+  // number wears a trailing "+" and the tile names how many projects are loaded. A finished list shows the plain totals.
+  // Zeros stay calm: the value dims and Skills says "None yet" instead of an empty chip.
+  function renderProjectStats() {
+    const prj = state.projects;
+    setHidden(els.prjStats, !!prj.readsDisabled || (!prj.loaded && !!prj.error));
+    const summary = prj.loaded ? prj.summary || {} : null;
+    const partial = !!(summary && prj.nextCursor);
+    const sum = (field) => prj.items.reduce((total, item) => total + Number(item[field] || 0), 0);
+    const tile = (id, value, withPlus) => {
+      const valueEl = document.getElementById(id + "Value");
+      setText(valueEl, value === null ? "—" : formatCount(value) + (withPlus ? "+" : ""));
+      if (valueEl) valueEl.classList.toggle("is-zero", !value);
+    };
+    const setPartialSub = (id) => {
+      const el = document.getElementById(id + "Sub");
+      setHidden(el, !partial);
+      setText(el, partial ? projectPlural("projects.statLoaded", prj.items.length) : "");
+    };
+    setText(document.getElementById("prjStatActiveLabel"), t("projects.statActive", { n: formatCount(prj.days) }));
+    tile("prjStatProjects", summary ? Number(summary.projects_total || 0) : null, false);
+    tile("prjStatActive", summary ? Number(summary.active_in_range || 0) : null, false);
+    tile("prjStatDigests", summary ? sum("digest_days_in_range") : null, partial);
+    setPartialSub("prjStatDigests");
+    const skills = summary ? sum("skills_count") : null;
+    tile("prjStatSkills", skills, partial);
+    setPartialSub("prjStatSkills");
+    const candidates = summary ? sum("candidates_count") : 0;
+    const note = document.getElementById("prjStatSkillsNote");
+    const text = candidates > 0
+      ? t(Number(candidates) === 1 ? "projects.statCandidatesOne" : "projects.statCandidates", { n: formatCount(candidates) + (partial ? "+" : "") })
+      : skills === 0 ? t("projects.statNoSkills") : "";
+    setHidden(note, !text);
+    setText(note, text);
+    setClass(note, "prjStatNote" + (candidates > 0 ? " is-candidates" : " is-quiet"));
+  }
+
+  function renderProjectToolbar() {
+    const prj = state.projects;
+    els.prjRangeButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", Number(button.getAttribute("data-project-range")) === prj.days ? "true" : "false");
+    });
+    const sort = PROJECT_SORTS.find((entry) => entry[0] === prj.sort) || PROJECT_SORTS[0];
+    setAttr(els.prjSortValue, "data-i18n", sort[1]);
+    setText(els.prjSortValue, t(sort[1]));
+    if (els.prjSearchInput && document.activeElement !== els.prjSearchInput && els.prjSearchInput.value !== prj.q) els.prjSearchInput.value = prj.q;
+    setHidden(els.prjSearchClear, !(els.prjSearchInput && els.prjSearchInput.value));
+    setText(els.prjUpdated, prj.loaded && prj.loadedAt ? t("projects.updated", { time: formatClock(new Date(prj.loadedAt)) }) : "");
+  }
+
+  function renderProjectMenu() {
+    const prj = state.projects;
+    const popover = els.prjSortPopover;
+    if (!popover) return;
+    const signature = [state.locale, prj.sort].join("|");
+    if (prj.signatures.sortMenu !== signature) {
+      prj.signatures.sortMenu = signature;
+      popover.innerHTML = PROJECT_SORTS.map((entry) => '<button class="actOption" type="button" role="option" tabindex="-1" data-project-sort="' + entry[0] + '" aria-selected="' + (entry[0] === prj.sort) + '">' +
+        svgIcon("check", "actOptionCheck") + '<span class="actOptionName">' + escapeHtml(t(entry[1])) + '</span></button>').join("");
+    }
+    if (prj.openPopover) placeViewPopover(els.projectsView, popover, els.prjSortButton);
+  }
+
+  function setProjectPopover(open) {
+    if (!els.projectsView) return;
+    state.projects.openPopover = open ? "sort" : "";
+    setHidden(els.prjSortPopover, !open);
+    setAttr(els.prjSortButton, "aria-expanded", open ? "true" : "false");
+    if (open) placeViewPopover(els.projectsView, els.prjSortPopover, els.prjSortButton);
+  }
+
+  function renderProjects() {
+    if (!els.projectsView) return;
+    renderProjectToolbar();
+    renderProjectStats();
+    renderProjectList();
+    renderProjectMenu();
+    if (state.drawer.host === "projectsView") renderMemoryDrawer();
+    placeMemoryDrawer();
+  }
+
+  async function openProjectDrawer(key, trigger) {
+    const drawer = state.drawer;
+    const wasOpen = isMemoryDrawerOpen();
+    if (drawer.project !== key) {
+      drawer.projectContextOpen = false;
+      drawer.projectFactsOpen = false;
+    }
+    drawer.project = key;
+    drawer.projectPayload = null;
+    drawer.projectError = "";
+    drawer.id = "";
+    drawer.task = "";
+    drawer.taskItem = null;
+    drawer.digest = "";
+    drawer.digestPayload = null;
+    drawer.digestError = "";
+    drawer.host = "projectsView";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.readsDisabled = !!state.projects.readsDisabled;
+    drawer.copied = false;
+    if (!wasOpen || trigger) drawer.returnFocus = trigger || document.activeElement;
+    const seq = drawer.seq + 1;
+    drawer.seq = seq;
+    setProjectPopover(false);
+    mountMemoryDrawer("projectsView");
+    renderMemoryDrawer();
+    markOpenMemory();
+    placeMemoryDrawer();
+    if (!memoryDrawerIsDocked("projectsView") && els.activityDrawerClose) els.activityDrawerClose.focus();
+    if (drawer.readsDisabled) return;
+    try {
+      const params = new URLSearchParams({ project: key, days: String(state.projects.days), tz_offset_minutes: String(-new Date().getTimezoneOffset()) });
+      const payload = await fetchJson("/admin/api/project-detail?" + params.toString());
+      if (seq !== drawer.seq) return;
+      if (payload.disabled || payload.status === "reads_disabled") {
+        applyReadPolicyToViews({ readEnabled: false });
+        return;
+      }
+      drawer.projectPayload = payload;
+    } catch (error) {
+      if (seq !== drawer.seq) return;
+      // A calm state only: the server message can name a field, never a path, and the row selection drops.
+      drawer.projectError = error && error.status === 404 ? "missing" : "error";
+    } finally {
+      if (seq === drawer.seq) {
+        markOpenMemory();
+        renderMemoryDrawer();
+      }
+    }
+  }
+
+  // A recent digest opens on the Digests page, in its drawer.
+  function openProjectDigest(id) {
+    if (!id) return;
+    activateView("digestsView");
+    void openDigestDrawer(id, null);
+  }
+
+  function projectSection(title, extra, inner, className) {
+    return '<section class="actSection prjSection' + (className || "") + '"><h3 class="prjSectionTitle"><span class="prjSectionName">' + escapeHtml(title) + '</span>' + (extra || "") + '</h3>' + inner + '</section>';
+  }
+
+  // Empty sections keep their heading and say so on one quiet line, so a sparse project still reads as finished.
+  function projectEmpty(icon, text) {
+    return '<p class="prjEmpty">' + svgIcon(icon, "prjEmptyIcon") + '<span>' + escapeHtml(text) + '</span></p>';
+  }
+
+  function projectShowToggle(which, open, label) {
+    return '<button class="digShowAll prjShowAll" type="button" data-project-toggle="' + which + '" aria-expanded="' + (open ? "true" : "false") + '"><span>' + escapeHtml(label) + '</span>' +
+      (open ? '' : svgIcon("arrowRight", "digShowAllIcon")) + '</button>';
+  }
+
+  // Fourteen slim bars, oldest first; a day without memories keeps a faint stub so the rhythm never breaks.
+  function renderProjectBars(days) {
+    const list = Array.isArray(days) ? days.slice(-14) : [];
+    const max = list.reduce((top, day) => Math.max(top, Number(day && day.memories || 0)), 0);
+    const label = (day) => {
+      const date = parseLocalDay(day && day.date);
+      return date ? formatShortDate(date) : String(day && day.date || "");
+    };
+    const bars = list.map((day) => {
+      const count = Number(day && day.memories || 0);
+      const height = count > 0 && max > 0 ? Math.max(16, Math.round((count / max) * 100)) : 0;
+      return '<span class="prjBar' + (count > 0 ? '' : ' is-zero') + '" title="' + escapeHtml(t("projects.drawerDayTip", { day: label(day), n: formatCount(count) })) + '">' +
+        '<span class="prjBarFill"' + (height ? ' style="height: ' + height + '%"' : '') + '></span></span>';
+    }).join("");
+    const ends = list.length ? '<div class="prjBarDays" aria-hidden="true"><span>' + escapeHtml(label(list[0])) + '</span><span>' + escapeHtml(label(list[list.length - 1])) + '</span></div>' : '';
+    return '<div class="prjBars' + (max ? '' : ' is-empty') + '" role="img" aria-label="' + escapeHtml(t("projects.drawerBarsLabel")) + '">' + bars + '</div>' + ends +
+      (max ? '' : '<p class="prjNote">' + escapeHtml(t("projects.drawerNoMemories")) + '</p>');
+  }
+
+  // State fact values are JSON text: a string reads bare, an object as "key: value · key: value".
+  function projectFactValue(text) {
+    const raw = String(text === null || text === undefined ? "" : text);
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === "string") return parsed;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return Object.keys(parsed).map((name) => name + ": " + (typeof parsed[name] === "string" ? parsed[name] : JSON.stringify(parsed[name]))).join(" · ");
+      }
+      return JSON.stringify(parsed);
+    } catch (_error) {
+      return raw;
+    }
+  }
+
+  function renderProjectDrawerBody(payload) {
+    const drawer = state.drawer;
+    const project = payload.project || projectDrawerItem() || {};
+    const newline = String.fromCharCode(10);
+    const parts = [];
+
+    parts.push(projectSection(t("projects.drawerMemories"), '<span class="prjSectionSub">· ' + escapeHtml(t("projects.drawerLast14")) + '</span>', renderProjectBars(payload.days), " is-bars"));
+
+    const ctx = payload.startup_context && typeof payload.startup_context === "object" ? payload.startup_context : null;
+    const preview = ctx && typeof ctx.preview === "string" ? ctx.preview.replace(/\\s+$/, "") : "";
+    let contextHtml = projectEmpty("layers", t("projects.drawerContextEmpty"));
+    let contextMeta = "";
+    if (preview) {
+      const lines = preview.split(newline);
+      const open = drawer.projectContextOpen;
+      const clamp = lines.length > PROJECT_CONTEXT_LINES || !!ctx.truncated;
+      contextMeta = '<span class="prjSectionMeta">' + escapeHtml(t("projects.drawerContextMeta", { items: formatCount(ctx.item_count), chars: formatCount(ctx.chars) })) + '</span>';
+      contextHtml = '<pre class="prjContext' + (open ? ' is-open' : '') + '" tabindex="' + (open ? '0' : '-1') + '">' + escapeHtml(open || !clamp ? preview : lines.slice(0, PROJECT_CONTEXT_LINES).join(newline)) + '</pre>';
+      if (open && ctx.truncated) contextHtml += '<p class="prjNote">' + escapeHtml(t("projects.drawerContextTruncated", { shown: formatCount(preview.length), chars: formatCount(ctx.chars) })) + '</p>';
+      if (clamp) contextHtml += projectShowToggle("context", open, t(open ? "projects.drawerContextShowLess" : "projects.drawerContextShowFull"));
+    }
+    parts.push(projectSection(t("projects.drawerContext"), contextMeta, contextHtml));
+
+    const facts = Array.isArray(payload.state_facts) ? payload.state_facts.filter((fact) => fact && typeof fact === "object") : [];
+    const factsTotal = Math.max(Number(payload.state_facts_total || 0), facts.length);
+    let factsHtml = projectEmpty("facts", t("projects.drawerFactsEmpty"));
+    if (facts.length) {
+      const open = drawer.projectFactsOpen;
+      const shown = open ? facts : facts.slice(0, PROJECT_FACTS_PREVIEW);
+      const name = String(project.display_name || "");
+      factsHtml = '<dl class="prjFacts prjWell">' + shown.map((fact) => {
+        const scope = fact.entity_key && fact.entity_key !== name && fact.entity_key !== fact.fact_key ? String(fact.entity_key) : "";
+        const value = projectFactValue(fact.value);
+        return '<div class="prjFact"><dt title="' + escapeHtml([fact.entity_type, fact.entity_key, fact.fact_key].filter(Boolean).join(" / ")) + '">' +
+          (scope ? '<span class="prjFactScope">' + escapeHtml(scope) + '</span>' : '') + escapeHtml(fact.fact_key || "—") + '</dt>' +
+          '<dd title="' + escapeHtml(value) + '">' + escapeHtml(value || "—") + '</dd></div>';
+      }).join("") + '</dl>';
+      if (open && factsTotal > facts.length) factsHtml += '<p class="prjNote">' + escapeHtml(t("projects.drawerFactsCapped", { shown: formatCount(facts.length), n: formatCount(factsTotal) })) + '</p>';
+      if (facts.length > PROJECT_FACTS_PREVIEW) factsHtml += projectShowToggle("facts", open, open ? t("projects.drawerFactsShowFewer") : t("projects.drawerFactsShowAll", { n: formatCount(factsTotal) }));
+    }
+    parts.push(projectSection(t("projects.drawerFacts"), factsTotal ? '<span class="prjSectionCount">(' + escapeHtml(formatCount(factsTotal)) + ')</span>' : '', factsHtml));
+
+    const digests = Array.isArray(payload.recent_digests) ? payload.recent_digests.filter((digest) => digest && digest.id !== null && digest.id !== undefined) : [];
+    const digestsHtml = digests.length
+      ? '<ul class="prjDigestList prjWell">' + digests.map((digest) => {
+        const status = digest.status === "failed" ? "failed" : digest.status === "skipped" ? "skipped" : "succeeded";
+        const day = parseLocalDay(digest.covered_day);
+        const dayText = day ? formatShortDate(day) : String(digest.covered_day || "—");
+        const summary = String(digest.summary_first_sentence || "").trim();
+        const word = status === "failed" ? t("projects.drawerDigestFailed") : status === "skipped" ? t("projects.drawerDigestSkipped") : "";
+        const text = word && summary ? word + " · " + summary : word || summary || "—";
+        return '<li><button class="prjDigest is-' + status + '" type="button" data-project-digest="' + escapeHtml(String(digest.id)) + '" title="' + escapeHtml(t("projects.drawerDigestOpen", { day: dayText })) + '">' +
+          '<span class="prjDigestDay">' + escapeHtml(dayText) + '</span><span class="prjDigestDot" aria-hidden="true"></span>' +
+          '<span class="prjDigestText' + (word ? ' is-quiet' : '') + '">' + escapeHtml(text) + '</span></button></li>';
+      }).join("") + '</ul>'
+      : projectEmpty("digestDoc", t("projects.drawerDigestsEmpty"));
+    parts.push(projectSection(t("projects.drawerDigests"), "", digestsHtml));
+
+    const skills = Array.isArray(payload.skills) ? payload.skills.filter((skill) => skill && String(skill.name || "").trim()) : [];
+    const skillsHtml = skills.length
+      ? '<ul class="prjSkillList">' + skills.map((skill) => {
+        const candidate = skill.status === "candidate" || skill.kind === "digest_candidate";
+        const disabled = !candidate && skill.status === "disabled";
+        const chip = candidate ? '<span class="digChip is-warn"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t("projects.skillCandidate")) + '</span>'
+          : disabled ? '<span class="digChip is-muted"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t("projects.skillDisabled")) + '</span>'
+            : '<span class="digChip is-ok"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t("projects.skillActive")) + '</span>';
+        const sourceDay = skill.source_digest && skill.source_digest.covered_day ? parseLocalDay(skill.source_digest.covered_day) : null;
+        const matches = Number(skill.match_count_in_range || 0);
+        const meta = candidate
+          ? (sourceDay ? t("projects.skillFrom", { day: formatShortDate(sourceDay) }) : t("projects.skillNoSource"))
+          : projectPlural("projects.skillMatches", matches);
+        const matched = parseTimestamp(skill.last_matched_at);
+        // Candidates never match. A skill with matches but no timestamp keeps a dash rather than "never".
+        const matchedLabel = candidate ? ""
+          : matched ? t("projects.skillLastMatched", { time: projectAgo(skill.last_matched_at) })
+          : matches > 0 ? "—"
+          : t("projects.skillNeverMatched");
+        const summary = String(skill.summary || "").trim();
+        const title = [summary, matchedLabel].filter(Boolean).join(" · ");
+        return '<li class="prjSkill' + (disabled ? ' is-disabled' : '') + '" title="' + escapeHtml(title) + '">' + svgIcon(candidate ? "llm" : "star", "prjSkillIcon") +
+          '<span class="prjSkillName">' + escapeHtml(String(skill.name).trim()) + '</span>' + chip + '<span class="prjSkillMeta">' + escapeHtml(meta) + '</span></li>';
+      }).join("") + '</ul>'
+      : projectEmpty("star", t("projects.drawerSkillsEmpty"));
+    parts.push(projectSection(t("projects.drawerSkills"), "", skillsHtml));
+    return parts.join("");
+  }
+
+  // Project body of the shared drawer. Until the detail arrives, the list row supplies the header.
+  function renderProjectDrawer() {
+    const drawer = state.drawer;
+    const payload = drawer.projectPayload;
+    const item = projectDrawerItem();
+    els.activityDrawerSub.innerHTML = "";
+    if (item) {
+      const name = String(item.display_name || "").trim() || "—";
+      const agents = Array.isArray(item.agents) ? item.agents.length : 0;
+      const parts = [item.last_activity_at && parseTimestamp(item.last_activity_at) ? t("projects.drawerLastActivity", { time: projectAgo(item.last_activity_at) }) : t("projects.never")];
+      if (agents) parts.push(projectPlural("projects.drawerAgents", agents));
+      els.activityDrawerMeta.innerHTML = renderProjectIcon("prjDrawerIcon") +
+        '<span class="digDrawerHeading" aria-hidden="true"><span class="digDrawerProject">' + escapeHtml(name) + '</span>' +
+        '<span class="digDrawerWhen prjDrawerWhen">' + parts.map((part) => escapeHtml(part)).join('<span class="prjSep">·</span>') + '</span></span>';
+      setText(els.activityDrawerTitle, name);
+      setAttr(els.activityDrawerTitle, "title", "");
+    } else {
+      els.activityDrawerMeta.innerHTML = "";
+      setText(els.activityDrawerTitle, drawer.readsDisabled ? t("projects.readsDisabledTitle") : drawer.projectError === "missing" ? t("projects.drawerMissing") : drawer.projectError ? t("projects.drawerError") : t("projects.drawerLoading"));
+      setAttr(els.activityDrawerTitle, "title", "");
+    }
+    if (drawer.readsDisabled) {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState"><p>' + escapeHtml(t("projects.drawerReadsDisabled")) + '</p></div>';
+    } else if (payload) {
+      els.activityDrawerBody.innerHTML = renderProjectDrawerBody(payload);
+    } else if (drawer.projectError) {
+      const missing = drawer.projectError === "missing";
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState' + (missing ? '' : ' is-error') + '"><p>' + escapeHtml(t(missing ? "projects.drawerMissing" : "projects.drawerError")) + '</p>' +
+        (missing ? '' : '<button class="bgButton" type="button" data-project-open="' + escapeHtml(drawer.project) + '">' + escapeHtml(t("projects.retry")) + '</button>') + '</div>';
+    } else {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerSkeleton" aria-hidden="true"><span class="is-long"></span><span class="is-long"></span><span class="is-mid"></span><span class="is-short"></span></div>' +
+        '<p class="visuallyHidden">' + escapeHtml(t("projects.drawerLoading")) + '</p>';
+    }
+  }
+
+  // Opening the view reloads page 1 after a quiet spell, or when the last attempt failed.
+  function showProjectsView() {
+    const prj = state.projects;
+    if (!prj.loaded || prj.key !== projectsKey() || Date.now() - prj.loadedAt > PROJECT_LIST_REFRESH_MS) void loadProjects("reset");
+    else renderProjects();
+  }
+
+  function bindProjectEvents() {
+    if (!els.projectsView) return;
+    els.projectsView.addEventListener("click", (event) => {
+      // The shared drawer and its scrim handle their own clicks (see bindMemoryDrawerEvents).
+      if (els.activityDrawer.contains(event.target) || event.target === els.activityDrawerScrim) return;
+      const row = event.target.closest(".prjRow[data-project-key]");
+      if (row) {
+        const key = row.getAttribute("data-project-key");
+        // The open row closes the drawer again; any other row swaps its content.
+        if (state.drawer.project === key && !state.drawer.id) closeMemoryDrawer(false);
+        else void openProjectDrawer(key, row);
+        return;
+      }
+      const range = event.target.closest("[data-project-range]");
+      if (range) {
+        const days = Number(range.getAttribute("data-project-range"));
+        setProjectPopover(false);
+        if (PROJECT_RANGES.indexOf(days) >= 0 && days !== state.projects.days) setProjectFilters({ days });
+        return;
+      }
+      if (event.target.closest("#prjSortButton")) {
+        const open = !state.projects.openPopover;
+        setProjectPopover(open);
+        if (open) {
+          const target = els.prjSortPopover.querySelector('[aria-selected="true"]') || els.prjSortPopover.querySelector(".actOption");
+          if (target) target.focus();
+        }
+        return;
+      }
+      const option = event.target.closest("[data-project-sort]");
+      if (option) {
+        setProjectPopover(false);
+        els.prjSortButton.focus();
+        const sort = option.getAttribute("data-project-sort");
+        if (sort !== state.projects.sort) setProjectFilters({ sort });
+        return;
+      }
+      if (event.target.closest("#prjSearchClear")) {
+        els.prjSearchInput.value = "";
+        applyProjectSearch("");
+        renderProjectToolbar();
+        els.prjSearchInput.focus();
+        return;
+      }
+      if (event.target.closest("#prjLoadMore")) {
+        void loadProjects("more");
+        return;
+      }
+      const action = event.target.closest("[data-project-action]");
+      if (action) {
+        if (action.getAttribute("data-project-action") === "clear") {
+          els.prjSearchInput.value = "";
+          applyProjectSearch("");
+        } else {
+          void loadProjects("reset");
+        }
+      }
+    });
+
+    els.prjSearchInput.addEventListener("input", () => {
+      const prj = state.projects;
+      setHidden(els.prjSearchClear, !els.prjSearchInput.value);
+      window.clearTimeout(prj.searchTimer);
+      prj.searchTimer = window.setTimeout(() => applyProjectSearch(els.prjSearchInput.value), PROJECT_SEARCH_DEBOUNCE_MS);
+    });
+
+    els.projectsView.addEventListener("keydown", (event) => {
+      if (els.activityDrawer.contains(event.target)) return;
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches(".prjRow[data-project-key]")) {
+        event.preventDefault();
+        event.target.click();
+        return;
+      }
+      if (event.key === "Enter" && event.target === els.prjSearchInput) {
+        applyProjectSearch(els.prjSearchInput.value);
+        return;
+      }
+      if (!state.projects.openPopover) return;
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        setProjectPopover(false);
+        els.prjSortButton.focus();
+        return;
+      }
+      const options = Array.from(els.prjSortPopover.querySelectorAll(".actOption"));
+      const index = options.indexOf(document.activeElement);
+      const next = event.key === "ArrowDown" ? Math.min(options.length - 1, index + 1) : event.key === "ArrowUp" ? Math.max(0, index - 1) : -1;
+      if (next >= 0 && options[next]) {
+        event.preventDefault();
+        options[next].focus();
+      }
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      if (!state.projects.openPopover || els.prjSortPopover.contains(event.target) || els.prjSortButton.contains(event.target)) return;
+      setProjectPopover(false);
+    });
+    window.addEventListener("resize", () => {
+      if (state.projects.openPopover) setProjectPopover(false);
+    });
+    window.addEventListener("scroll", () => {
+      if (state.activeView === "projectsView") scheduleMemoryDrawerPlace();
     }, { passive: true });
   }
 
@@ -7654,13 +8473,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const mem = state.memory;
     const pipe = state.pipeline;
     const dig = state.digests;
+    const prj = state.projects;
     const early = state.activity.earlier;
     const drawer = state.drawer;
     if (policy.readEnabled) {
-      if (!mem.readsDisabled && !pipe.readsDisabled && !dig.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
+      if (!mem.readsDisabled && !pipe.readsDisabled && !dig.readsDisabled && !prj.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
       mem.readsDisabled = false;
       pipe.readsDisabled = false;
       dig.readsDisabled = false;
+      prj.readsDisabled = false;
       early.readsDisabled = false;
       early.message = "";
       early.payload = null;
@@ -7670,6 +8491,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       early.seq += 1;
       const refreshDrawer = !!drawer.id && drawer.readsDisabled;
       const refreshDigest = !drawer.id && !!drawer.digest && drawer.readsDisabled;
+      const refreshProject = !drawer.id && !drawer.digest && !!drawer.project && drawer.readsDisabled;
       drawer.readsDisabled = false;
       if (state.activeView === "memoryView") void loadMemories("reset");
       if (state.activeView === "pipelineView") void loadPipeline("reset");
@@ -7677,8 +8499,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         void loadDigests("reset");
         void loadDigestCards(true);
       }
+      if (state.activeView === "projectsView") void loadProjects("reset");
       if (state.activeView === "activityView") void loadActivityEarlier(true);
-      if (refreshDigest) void openDigestDrawer(drawer.digest, null);
+      if (refreshProject) void openProjectDrawer(drawer.project, null);
+      else if (refreshDigest) void openDigestDrawer(drawer.digest, null);
       else if (refreshDrawer) void openMemoryDrawer(drawer.id, null, drawer.host);
       // A task body comes back with the reloaded list.
       else if (drawer.task) renderMemoryDrawer();
@@ -7686,6 +8510,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && pipe.readsDisabled && pipe.items.length === 0 && !pipe.nextCursor && !drawer.taskItem &&
       dig.readsDisabled && dig.items.length === 0 && !dig.nextCursor && !dig.vault && !dig.lastRun && !drawer.digestPayload &&
+      prj.readsDisabled && prj.items.length === 0 && !prj.nextCursor && !prj.summary && !drawer.projectPayload &&
       !drawer.payload && (!isMemoryDrawerOpen() || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
     mem.items = [];
     mem.days = [];
@@ -7739,10 +8564,25 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     dig.vaultSeq += 1;
     dig.vaultAt = 0;
     if (els.digList) els.digList.innerHTML = "";
+    prj.items = [];
+    prj.summary = null;
+    prj.nextCursor = null;
+    prj.loaded = false;
+    prj.error = "";
+    prj.errorStatus = 0;
+    prj.stale = false;
+    prj.readsDisabled = true;
+    prj.rowNodes.clear();
+    prj.busySeq = 0;
+    prj.moreSeq = 0;
+    prj.seq += 1;
+    if (els.prjList) els.prjList.innerHTML = "";
     drawer.payload = null;
     drawer.taskItem = null;
     drawer.digestPayload = null;
     drawer.digestError = "";
+    drawer.projectPayload = null;
+    drawer.projectError = "";
     drawer.error = "";
     drawer.missing = false;
     drawer.copied = false;
@@ -7759,6 +8599,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderMemory();
     renderPipeline();
     renderDigests();
+    renderProjects();
     renderActivityEarlier();
     if (isMemoryDrawerOpen()) renderMemoryDrawer();
   }
@@ -7854,7 +8695,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // It shows while the user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
   function usesActivityBackdrop() {
     const settings = bg.settings;
-    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView") && !!settings && !settings.pinned &&
+    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView" || state.activeView === "projectsView") && !!settings && !settings.pinned &&
       settings.preset === bg.api.defaults.preset && settings.tone === "auto";
   }
 
@@ -8221,6 +9062,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       showDigestsView();
     } else if (state.digests.openPopover) {
       setDigestPopover("");
+    }
+    if (nextView === "projectsView") {
+      showProjectsView();
+    } else if (state.projects.openPopover) {
+      setProjectPopover(false);
     }
     if (isMemoryDrawerOpen() && state.drawer.host !== nextView) closeMemoryDrawer(false);
     if (nextView === "devToolsView") {
@@ -8714,6 +9560,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindMemoryEvents();
     bindPipelineEvents();
     bindDigestEvents();
+    bindProjectEvents();
     bindMemoryDrawerEvents();
     activateView("homeView");
     try {

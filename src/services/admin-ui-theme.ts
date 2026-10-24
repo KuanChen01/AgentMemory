@@ -2638,6 +2638,7 @@ ${WALLPAPER_CSS}
   /* Activity tokens. Light glass is milky white with a faint periwinkle shadow; dark glass is deep navy with a
      cool rim. The shell's own tokens (--text, --shell-hover, ...) still drive ink, so a user background keeps
      working; these only shape Activity's surfaces. Memory and Pipeline share them. */
+  .projectsView,
   .activityView,
   .memoryView,
   .pipelineView,
@@ -2699,6 +2700,7 @@ ${WALLPAPER_CSS}
     --proj-none: #a3a9b6;
   }
 
+  html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .activityView,
   html[data-glass="dark"] .memoryView,
   html[data-glass="dark"] .pipelineView,
@@ -3694,6 +3696,7 @@ ${WALLPAPER_CSS}
   /* Memory detail drawer: a tall glass sheet from the right. Inside the view, so its blur only runs on Activity.
      A transform animation that keeps filling would make the view the containing block of the fixed drawer and
      scrim, so Activity's entry animation does not fill forwards (its end state is transform: none anyway). */
+  .projectsView.is-active,
   .activityView.is-active,
   .memoryView.is-active,
   .pipelineView.is-active,
@@ -4434,6 +4437,7 @@ ${WALLPAPER_CSS}
 
   /* ---------- Memory detail drawer (shared by Activity and Memory) ---------- */
 
+  .projectsView,
   .activityView,
   .memoryView,
   .pipelineView,
@@ -4445,6 +4449,7 @@ ${WALLPAPER_CSS}
     --a-concept-ring: rgba(10, 132, 255, 0.20);
   }
 
+  html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .activityView,
   html[data-glass="dark"] .memoryView,
   html[data-glass="dark"] .pipelineView,
@@ -4733,6 +4738,7 @@ ${WALLPAPER_CSS}
 
   /* ---------- Memory ---------- */
 
+  .projectsView,
   .memoryView,
   .pipelineView,
   .digestsView {
@@ -4762,6 +4768,7 @@ ${WALLPAPER_CSS}
     --m-dot-4: #f2697a;
   }
 
+  html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .memoryView,
   html[data-glass="dark"] .pipelineView,
   html[data-glass="dark"] .digestsView {
@@ -6857,6 +6864,7 @@ ${WALLPAPER_CSS}
      catch-light where it reaches the bottom. --d-edge gives the slab its thickness: a crisp top bevel, a softer
      left one, a soft inner refraction glow and a thin reflection along the bottom edge. --d-sheen is the specular
      wash on the face. Fills multiply --glass-scale like the other views. */
+  .projectsView,
   .digestsView {
     --d-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.58 * var(--glass-scale))), rgba(248, 250, 255, calc(0.38 * var(--glass-scale))));
     --d-rim: linear-gradient(168deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.86) 12%, rgba(255, 255, 255, 0.40) 34%, rgba(190, 198, 238, 0.28) 62%, rgba(210, 216, 248, 0.34) 86%, rgba(255, 255, 255, 0.88) 100%);
@@ -6902,6 +6910,7 @@ ${WALLPAPER_CSS}
     --d-accent: #2f7cf6;
   }
 
+  html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .digestsView {
     --d-glass: linear-gradient(180deg, rgba(32, 44, 92, calc(0.52 * var(--glass-scale))), rgba(12, 18, 46, calc(0.48 * var(--glass-scale))));
     --d-rim: linear-gradient(168deg, rgba(222, 232, 255, 0.62) 0%, rgba(196, 212, 255, 0.38) 12%, rgba(150, 175, 255, 0.14) 36%, rgba(100, 128, 230, 0.08) 64%, rgba(120, 150, 240, 0.14) 86%, rgba(170, 196, 255, 0.42) 100%);
@@ -6949,7 +6958,8 @@ ${WALLPAPER_CSS}
     margin-top: 0;
   }
 
-  .digestsView .digGlass {
+  .digestsView .digGlass,
+  .projectsView .digGlass {
     position: relative;
     isolation: isolate;
     border: 1px solid transparent;
@@ -6957,7 +6967,8 @@ ${WALLPAPER_CSS}
     box-shadow: var(--d-shadow);
   }
 
-  .digestsView .digGlass::before {
+  .digestsView .digGlass::before,
+  .projectsView .digGlass::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -6968,7 +6979,9 @@ ${WALLPAPER_CSS}
   }
 
   .digestsView .digGlass::after,
-  .digestsView .actDrawer::after {
+  .digestsView .actDrawer::after,
+  .projectsView .digGlass::after,
+  .projectsView .actDrawer::after {
     content: "";
     position: absolute;
     inset: -1px;
@@ -7495,11 +7508,13 @@ ${WALLPAPER_CSS}
   }
 
   /* Digest body of the shared drawer. */
-  .digestsView .actDrawer {
+  .digestsView .actDrawer,
+  .projectsView .actDrawer {
     box-shadow: var(--d-drawer-shadow);
   }
 
-  .digestsView .actDrawer::before {
+  .digestsView .actDrawer::before,
+  .projectsView .actDrawer::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -7902,5 +7917,840 @@ ${WALLPAPER_CSS}
     padding-top: 14px;
     border-top: 1px solid var(--a-line);
     border-radius: 0;
+  }
+
+  /* ---------- Projects ---------- */
+
+  /* A sibling of Digests: the same glass material (--d-* tokens, .digGlass), toolbar, chips and drawer. Folder
+     tiles share one calm blue tint; nothing here is colour-coded per project. */
+  .projectsView {
+    --prj-cols: 42px minmax(0, 1fr) 96px 120px 84px 84px;
+    --prj-tile: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 7%, rgba(255, 255, 255, 0.96)), color-mix(in srgb, var(--d-accent) 15%, rgba(242, 245, 255, 0.74)));
+    --prj-tile-on: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 14%, rgba(255, 255, 255, 0.96)), color-mix(in srgb, var(--d-accent) 26%, rgba(236, 242, 255, 0.80)));
+    --prj-bar: linear-gradient(180deg, #62a8ff, #2f7cf6);
+    --prj-bar-glow: inset 0 1px 0 rgba(255, 255, 255, 0.50), 0 4px 10px -6px rgba(47, 124, 246, 0.75);
+    --prj-bar-zero: rgba(150, 160, 200, 0.20);
+  }
+
+  html[data-glass="dark"] .projectsView {
+    --prj-tile: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 22%, rgba(64, 80, 140, 0.62)), color-mix(in srgb, var(--d-accent) 12%, rgba(26, 36, 80, 0.58)));
+    --prj-tile-on: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 38%, rgba(64, 86, 160, 0.70)), color-mix(in srgb, var(--d-accent) 22%, rgba(30, 44, 100, 0.64)));
+    --prj-bar: linear-gradient(180deg, #74b4ff, #2f7cff);
+    --prj-bar-glow: inset 0 1px 0 rgba(255, 255, 255, 0.30), 0 0 12px -3px rgba(60, 140, 255, 0.70);
+    --prj-bar-zero: rgba(160, 180, 230, 0.16);
+  }
+
+  .policyBanner:not([hidden]) ~ .projectsView .pipeLeadRow {
+    margin-top: 0;
+  }
+
+  /* Toolbar: the search well, a quiet Sort picker after a hairline, the range on the right. */
+  .prjToolbar .prjSearch {
+    flex: 0 1 340px;
+  }
+
+  .prjToolbar .prjSort {
+    gap: 10px;
+    margin-left: 4px;
+    padding: 0 14px 0 20px;
+    border-color: transparent;
+    border-radius: 14px;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .prjToolbar .prjSort::after {
+    content: none;
+  }
+
+  .prjToolbar .prjSort::before {
+    content: "";
+    position: absolute;
+    top: 9px;
+    bottom: 9px;
+    left: 0;
+    width: 1px;
+    background: var(--a-line);
+  }
+
+  .prjToolbar .prjSort:hover,
+  .prjToolbar .prjSort[aria-expanded="true"] {
+    background: var(--shell-hover);
+  }
+
+  .prjToolbar .prjSort .actPopupValue {
+    font-weight: 500;
+  }
+
+  .prjToolbar .prjSort .actPopupIcon {
+    color: var(--text);
+  }
+
+  /* Summary tiles. */
+  .prjStats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 16px;
+  }
+
+  .prjStats[hidden],
+  .prjCard[hidden] {
+    display: none;
+  }
+
+  .prjStat {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+    min-height: 86px;
+    padding: 14px 18px;
+    border-radius: 22px;
+  }
+
+  .prjStatIcon {
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 14px;
+    background: var(--d-tile);
+    box-shadow: var(--d-tile-shadow);
+    color: var(--d-accent);
+  }
+
+  .prjStatGlyph {
+    width: 24px;
+    height: 24px;
+  }
+
+  .prjStatText {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .prjStatLabel {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjStatLine {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .prjStatValue {
+    color: var(--text);
+    font-size: 27px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prjStatValue.is-zero {
+    color: var(--text-3);
+  }
+
+  .prjStatNote {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjStatNote[hidden] {
+    display: none;
+  }
+
+  .prjStatNote.is-candidates {
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: var(--d-warn-fill);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    color: var(--d-warn-ink);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .prjStatNote.is-quiet {
+    color: var(--text-3);
+    font-size: 13.5px;
+  }
+
+  .prjStatSub {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 12.5px;
+    line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* List card: one glass card, column headers, rows on the card itself. */
+  .prjBoard {
+    margin-top: 16px;
+  }
+
+  .prjCard {
+    padding: 4px 8px 6px;
+    border-radius: 24px;
+  }
+
+  .prjHead,
+  .projectsView .prjRow {
+    display: grid;
+    grid-template-columns: var(--prj-cols);
+    align-items: center;
+    column-gap: 14px;
+  }
+
+  .prjHead {
+    padding: 14px 16px 10px;
+    color: var(--text-2);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .prjCol {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjCol.is-name {
+    grid-column: span 2;
+  }
+
+  .prjList {
+    display: grid;
+    transition: opacity 200ms var(--ease-out);
+  }
+
+  .prjList.is-stale {
+    opacity: 0.55;
+  }
+
+  .projectsView .prjRow {
+    min-height: 78px;
+    padding: 10px 14px;
+    border-radius: 16px;
+  }
+
+  .projectsView .prjRow + .prjRow {
+    box-shadow: none;
+  }
+
+  .prjRow + .prjRow::before {
+    content: "";
+    position: absolute;
+    top: -0.5px;
+    right: 14px;
+    left: 14px;
+    height: 1px;
+    background: var(--d-row-line);
+    pointer-events: none;
+  }
+
+  .prjRow.is-open::before,
+  .prjRow.is-open + .prjRow::before,
+  .prjRow:hover::before,
+  .prjRow:hover + .prjRow::before {
+    opacity: 0;
+  }
+
+  .prjIcon,
+  .prjDrawerIcon {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+    background: var(--prj-tile);
+    box-shadow: var(--d-tile-shadow);
+    color: var(--d-accent);
+  }
+
+  .prjRow.is-open .prjIcon {
+    background: var(--prj-tile-on);
+  }
+
+  .prjIconGlyph {
+    width: 22px;
+    height: 22px;
+  }
+
+  .prjMain {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .prjName {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 16.5px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjChips {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .prjChip {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    font-size: 12.5px;
+    line-height: 1.45;
+    white-space: nowrap;
+  }
+
+  .prjChip.is-more {
+    flex: 0 0 auto;
+  }
+
+  .prjChipName {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    opacity: 0.82;
+    text-overflow: ellipsis;
+  }
+
+  .prjChipCount {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prjQuiet {
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 13.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjMem {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .prjNum {
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prjSub {
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjWhen,
+  .prjDigests {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 14.5px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjDigests.is-zero {
+    color: var(--text-3);
+  }
+
+  .prjSkills {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .prjSkillCount {
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prjDash {
+    color: var(--text-3);
+  }
+
+  .prjCand {
+    display: inline-grid;
+    place-items: center;
+    min-width: 32px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--d-warn-fill);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    color: var(--d-warn-ink);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* No activity in the range: the row steps back, the folder goes neutral. */
+  .prjRow.is-quiet .prjIcon {
+    background: var(--d-tile);
+    color: var(--d-muted-dot);
+  }
+
+  .prjRow.is-quiet .prjName {
+    color: var(--text-2);
+    font-weight: 550;
+  }
+
+  .prjRow.is-quiet .prjNum,
+  .prjRow.is-quiet .prjWhen,
+  .prjRow.is-quiet .prjSkillCount {
+    color: var(--text-2);
+    font-weight: 500;
+  }
+
+  .prjRow.is-skeleton {
+    cursor: default;
+  }
+
+  .prjRow.is-skeleton .prjIcon {
+    background: var(--prj-bar-zero);
+    box-shadow: none;
+  }
+
+  .prjRow.is-skeleton .actSkel.is-mid { width: 38%; }
+  .prjRow.is-skeleton .actSkel.is-short { width: 22%; }
+
+  .prjFoot {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 52px;
+    padding: 6px 0 4px;
+  }
+
+  .prjCount {
+    color: var(--text-2);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prjCount[hidden],
+  .prjFoot .memMore[hidden] {
+    display: none;
+  }
+
+  /* Docked beside the list (1440px and wider): the toolbar and tiles stay full width, the list steps aside. */
+  @media (min-width: 1440px) {
+    .projectsView.is-drawer-open .prjBoard {
+      margin-right: calc(min(456px, calc(100vw - 32px)) + 16px);
+    }
+
+    .projectsView.is-drawer-open {
+      --prj-cols: 40px minmax(0, 1fr) 76px 96px 66px 66px;
+    }
+
+    .projectsView.is-drawer-open .prjHead,
+    .projectsView.is-drawer-open .prjRow {
+      column-gap: 12px;
+    }
+  }
+
+  @media (max-width: 1180px) {
+    .prjStats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  /* Project body of the shared drawer. */
+  .actDrawer.is-project .actDrawerTitle {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .actDrawer.is-project .actDrawerMeta {
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 14px;
+    padding-top: 0;
+  }
+
+  .prjDrawerIcon {
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 14px;
+    background: var(--prj-tile-on);
+  }
+
+  .prjDrawerIcon .prjIconGlyph {
+    width: 24px;
+    height: 24px;
+  }
+
+  .prjDrawerWhen {
+    gap: 8px;
+  }
+
+  .prjSep {
+    color: var(--text-3);
+  }
+
+  .actDrawer.is-project .actDrawerBody {
+    margin-top: 16px;
+  }
+
+  .projectsView .actSection.prjSection {
+    margin-top: 20px;
+  }
+
+  .projectsView .actSection.prjSection:first-child {
+    margin-top: 0;
+  }
+
+  .prjSectionTitle {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0 0 9px;
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .prjSectionSub,
+  .prjSectionCount {
+    color: var(--text-2);
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prjSectionMeta {
+    margin-left: auto;
+    color: var(--text-2);
+    font-size: 13.5px;
+    font-weight: 400;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* Fourteen slim bars, oldest first; empty days keep a faint stub. */
+  .prjBars {
+    display: grid;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    align-items: end;
+    gap: 8px;
+    height: 46px;
+    padding: 0 2px;
+  }
+
+  .prjBars.is-empty {
+    height: 10px;
+  }
+
+  .prjBar {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    height: 100%;
+  }
+
+  .prjBarFill {
+    width: 100%;
+    max-width: 22px;
+    border-radius: 5px 5px 4px 4px;
+    background: var(--prj-bar);
+    box-shadow: var(--prj-bar-glow);
+  }
+
+  .prjBar.is-zero .prjBarFill {
+    height: 6px;
+    background: var(--prj-bar-zero);
+    box-shadow: none;
+  }
+
+  .prjBarDays {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    padding: 0 2px;
+    color: var(--text-3);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prjNote {
+    margin: 6px 0 0;
+    color: var(--text-3);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .prjBars.is-empty + .prjBarDays + .prjNote {
+    color: var(--text-2);
+    font-size: 13.5px;
+  }
+
+  .prjContext {
+    margin: 0;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--d-well);
+    box-shadow: var(--d-well-edge);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+  }
+
+  /* Expanded, the whole preview wraps inside its own scroll box. */
+  .prjContext.is-open {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 280px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  .prjShowAll {
+    margin-top: 6px;
+    font-size: 13.5px;
+  }
+
+  .prjWell {
+    margin: 0;
+    padding: 4px 12px;
+    border-radius: 14px;
+    background: var(--d-well);
+    box-shadow: var(--d-well-edge);
+    list-style: none;
+  }
+
+  .prjFact {
+    display: grid;
+    grid-template-columns: minmax(0, 40%) minmax(0, 1fr);
+    gap: 12px;
+    align-items: baseline;
+    padding: 5px 0;
+    font-size: 13.5px;
+  }
+
+  .prjFact + .prjFact {
+    box-shadow: 0 -1px 0 var(--d-row-line);
+  }
+
+  .prjFact dt,
+  .prjFact dd {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjFact dt {
+    color: var(--text-2);
+  }
+
+  .prjFact dd {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .prjFactScope {
+    color: var(--text-3);
+  }
+
+  .prjFactScope::after {
+    content: " · ";
+  }
+
+  .prjDigestList {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 4px 6px;
+  }
+
+  .prjDigest {
+    display: grid;
+    grid-template-columns: 4.4em 8px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 30px;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .prjDigest:hover {
+    background: var(--shell-hover);
+  }
+
+  .prjDigest:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.30);
+  }
+
+  .prjDigestDay {
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .prjDigestDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--d-ok-dot);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--d-ok-dot) 16%, transparent);
+  }
+
+  .prjDigest.is-skipped .prjDigestDot {
+    background: var(--d-muted-dot);
+    box-shadow: none;
+  }
+
+  .prjDigest.is-failed .prjDigestDot {
+    background: var(--d-err-dot);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--d-err-dot) 16%, transparent);
+  }
+
+  .prjDigestText {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjDigestText.is-quiet {
+    color: var(--text-2);
+  }
+
+  .prjSkillList {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .prjSkill {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 36px;
+    padding: 2px 4px;
+    font-size: 14px;
+  }
+
+  .prjSkillIcon {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    color: var(--d-accent);
+  }
+
+  .prjSkillName {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prjSkill .digChip {
+    flex: 0 0 auto;
+    min-height: 22px;
+    padding: 0 9px 0 8px;
+    font-size: 12px;
+  }
+
+  .prjSkillMeta {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: var(--text-2);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .prjSkill.is-disabled .prjSkillName,
+  .prjSkill.is-disabled .prjSkillIcon {
+    opacity: 0.55;
+  }
+
+  /* One quiet line for an empty section, on the same inset well as the filled ones. */
+  .prjEmpty {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 9px 12px;
+    border-radius: 12px;
+    background: var(--d-well);
+    box-shadow: var(--d-well-edge);
+    color: var(--text-2);
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+
+  .prjEmptyIcon {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 17px;
+    color: var(--text-3);
   }
 `;
