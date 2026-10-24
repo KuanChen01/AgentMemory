@@ -949,6 +949,48 @@ ${WALLPAPER_CSS}
     margin-right: auto;
   }
 
+  .emptyStateIcon {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(10, 132, 255, 0.16), rgba(10, 132, 255, 0.06)), var(--chip-fill);
+    box-shadow: inset 0 1px 0 var(--chip-highlight), 0 8px 20px -12px rgba(10, 132, 255, 0.5);
+    color: var(--shell-accent);
+  }
+
+  .emptyStateIcon .placeholderGlyph,
+  .emptyStateIcon svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .emptyStateLine {
+    margin: 6px 0 0;
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .emptyStateHint {
+    max-width: 460px;
+    margin: 0;
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .emptyStateActions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
   .statusLine {
     display: inline-flex;
     align-items: center;
@@ -3521,7 +3563,8 @@ ${WALLPAPER_CSS}
     box-shadow: var(--a-glass-shadow);
   }
 
-  .actNotice.is-error .placeholderIcon {
+  .actNotice.is-error .placeholderIcon,
+  .actNotice.is-error .emptyStateIcon {
     background: rgba(255, 69, 58, 0.12);
     box-shadow: inset 0 1px 0 var(--chip-highlight);
     color: var(--err-ink);
@@ -5981,7 +6024,7 @@ ${WALLPAPER_CSS}
   .pipePill.state-duplicate { background: var(--p-dup-fill); color: var(--p-dup-ink); }
   .pipePill.state-duplicate::before { background: var(--p-dup-dot); }
 
-  .pipePill.statusChip.is-success { background: var(--d-ok-fill); color: var(--d-ok-ink); }
+  .pipePill.statusChip.is-success { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ring-ok-ink); }
   .pipePill.statusChip.is-warning { background: var(--p-warn-fill); color: var(--p-warn-ink); }
   .pipePill.statusChip.is-danger { background: var(--p-err-fill); color: var(--p-err-ink); }
   .pipePill.statusChip.is-neutral { background: var(--p-muted-fill); color: var(--p-muted-ink); }
@@ -7108,24 +7151,35 @@ ${WALLPAPER_CSS}
     mask-composite: exclude;
   }
 
-  /* Toolbar: the two pickers (and the Failed chip from Home) on the left, the range on the right. */
+  /* Toolbar: Project and Agent stay on one row between search and the range, same as Pipeline. */
+  .digToolbar {
+    flex-wrap: nowrap;
+  }
+
   .digFilters {
     display: flex;
     flex: 1 1 auto;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 8px;
     min-width: 0;
   }
 
   .digToolbar .actPopup {
-    flex: 0 1 250px;
-    min-width: 150px;
-    max-width: 260px;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 230px;
   }
 
   .digToolbar .actPopupIcon {
     margin-left: auto;
+  }
+
+  @media (max-width: 860px) {
+    .digToolbar,
+    .digFilters {
+      flex-wrap: wrap;
+    }
   }
 
   .digStatusChip {
@@ -9391,6 +9445,37 @@ ${WALLPAPER_CSS}
   .sklEmpty.is-quiet .sklEmptyGlyph {
     width: 18px;
     height: 18px;
+  }
+
+  .sklEmpty.emptyState,
+  .sklEmpty.is-quiet {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: min(100%, 480px);
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 48px 32px;
+    text-align: center;
+  }
+
+  .sklEmpty.is-quiet .emptyStateIcon,
+  .sklEmpty .emptyStateIcon {
+    width: 56px;
+    height: 56px;
+    margin: 0;
+    border-radius: 18px;
+  }
+
+  .sklEmpty.is-quiet .emptyStateLine,
+  .sklEmpty .emptyStateLine {
+    margin: 6px 0 0;
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 650;
   }
 
   .sklEmpty.is-quiet .sklEmptyTitle {

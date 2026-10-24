@@ -940,11 +940,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return dayText;
   }
 
-  function formatDate(value) {
+  function formatDate(value, kind) {
     if (!value) return t("common.unknownTimestamp");
     const parsed = new Date(String(value).replace(" ", "T") + (String(value).includes("T") ? "" : "Z"));
     if (Number.isNaN(parsed.getTime())) return String(value);
-    return formatUiDate(parsed, "full");
+    return formatUiDate(parsed, kind || "dateTime");
   }
 
   function statusVariantClass(variant) {
@@ -959,11 +959,46 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return '<span class="' + statusVariantClass(tone) + (extra ? " " + extra : "") + '">' + dot + escapeHtml(label) + "</span>";
   }
 
-  function renderEmptyState(icon, line, hint, actionLabel) {
+  function renderEmptyState(icon, line, hint, actionLabel, options) {
+    const opts = options || {};
     const iconHtml = icon ? '<div class="emptyStateIcon" aria-hidden="true">' + icon + "</div>" : "";
     const hintHtml = hint ? '<p class="emptyStateHint">' + escapeHtml(hint) + "</p>" : "";
-    const actionHtml = actionLabel ? '<button class="bgButton is-primary emptyStateAction" type="button">' + escapeHtml(actionLabel) + "</button>" : "";
+    const buttons = [];
+    const primary = actionLabel || "";
+    if (primary || opts.actionId) {
+      const id = opts.actionId ? ' id="' + escapeHtml(opts.actionId) + '"' : "";
+      const attr = opts.actionAttr && opts.actionValue ? " " + opts.actionAttr + '="' + escapeHtml(opts.actionValue) + '"' : "";
+      buttons.push('<button class="bgButton is-primary emptyStateAction" type="button"' + id + attr + (primary ? "" : " hidden") + ">" + escapeHtml(primary) + "</button>");
+    }
+    if (opts.secondaryId || opts.secondaryLabel) {
+      const id = opts.secondaryId ? ' id="' + escapeHtml(opts.secondaryId) + '"' : "";
+      const attr = opts.secondaryAttr && opts.secondaryValue ? " " + opts.secondaryAttr + '="' + escapeHtml(opts.secondaryValue) + '"' : "";
+      buttons.push('<button class="bgButton emptyStateAction" type="button"' + id + attr + (opts.secondaryLabel ? "" : " hidden") + ">" + escapeHtml(opts.secondaryLabel || "") + "</button>");
+    }
+    const wrapped = buttons.length && (opts.actionId || opts.secondaryId);
+    const actionHtml = buttons.length ? (wrapped ? '<div class="emptyStateActions">' + buttons.join("") + "</div>" : buttons.join("")) : "";
     return '<div class="emptyState">' + iconHtml + '<p class="emptyStateLine">' + escapeHtml(line || "") + "</p>" + hintHtml + actionHtml + "</div>";
+  }
+
+  // Hosts already carry emptyState; drop the helper's outer wrapper so padding is not doubled.
+  function applyEmptyMarkup(host, html) {
+    if (!host) return;
+    if (host.getAttribute && host.getAttribute("data-empty") === html) return;
+    if (host.setAttribute) host.setAttribute("data-empty", html);
+    const open = html.indexOf(">");
+    const close = html.lastIndexOf("</div>");
+    host.innerHTML = open >= 0 && close > open ? html.slice(open + 1, close) : html;
+  }
+
+  // Copy the shared chip's classes onto a live element. The label stays text, so titles set afterwards survive.
+  function applyChipMarkup(element, html) {
+    if (!element || !html) return;
+    const mark = 'class="';
+    const start = html.indexOf(mark);
+    if (start < 0) return;
+    const from = start + mark.length;
+    const end = html.indexOf('"', from);
+    if (end > from) setClass(element, html.slice(from, end));
   }
 
   function escapeHtml(value) {
@@ -1386,6 +1421,49 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return "";
   }
 
+  // Known release-check sentences stay on the server. Map them here so zh-CN does not show the English prose.
+  function localizeReleaseMessage(result) {
+    if (!result) return "";
+    const message = String(result.message || "");
+    const status = String(result.status || "");
+    if (message.indexOf("ahead of the latest") >= 0) return t("runtime.releaseAhead");
+    if (status === "up_to_date") {
+      if (!message || message === "You are on the latest release." || message.indexOf("latest published release") >= 0) return t("runtime.releaseLatestMessage");
+      return message;
+    }
+    if (message === "You are on the latest release.") return t("runtime.releaseLatestMessage");
+    if (status === "update_available") {
+      if (!message || message.indexOf("newer AgentMemory release") >= 0) return t("runtime.releaseUpdateMessage");
+      return message;
+    }
+    if (status === "invalid_latest_tag") {
+      if (!message || message.indexOf("not a strict SemVer") >= 0) return t("runtime.releaseInvalidTagMessage", { tag: String(result.latestTag || "unknown") });
+      return message;
+    }
+    if (status === "network_error") {
+      const prefix = "Unable to check the latest GitHub Release right now";
+      if (message === prefix || message === prefix + ".") return t("runtime.releaseNetworkMessage");
+      if (message.indexOf(prefix) === 0 && message.charAt(prefix.length) === ":") {
+        let detail = message.slice(prefix.length + 1);
+        if (detail.charAt(0) === " ") detail = detail.slice(1);
+        return detail ? t("runtime.releaseNetworkDetail", { detail: detail }) : t("runtime.releaseNetworkMessage");
+      }
+      return message;
+    }
+    return message;
+  }
+
+  function localizeReleaseGuidance(guidance) {
+    if (!guidance) return "";
+    const summary = String(guidance.summary || "");
+    const mode = String(guidance.installMode || "");
+    if (mode === "git_checkout" || summary.indexOf("git checkout") >= 0 || summary.indexOf("pulling the latest") >= 0 || summary.indexOf("Pull the latest code") >= 0) {
+      return t("runtime.releaseGuideGit");
+    }
+    if (mode === "source_archive" || summary.indexOf("source archive") >= 0) return t("runtime.releaseGuideArchive");
+    return summary;
+  }
+
   function renderReleaseCheck() {
     if (!state.overview || !state.overview.release) return;
     const manifest = state.overview.release;
@@ -1413,11 +1491,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         ? t("runtime.releaseCheckedAt", { timestamp: formatDate(result.checkedAt) })
         : t("runtime.releaseNotChecked");
     els.releaseCheckMessage.textContent = result
-      ? String(result.message || "")
+      ? localizeReleaseMessage(result)
       : t("runtime.releaseNotChecked");
 
     if (result && result.upgradeGuidance) {
-      els.releaseGuidanceSummary.textContent = String(result.upgradeGuidance.summary || "");
+      els.releaseGuidanceSummary.textContent = localizeReleaseGuidance(result.upgradeGuidance);
       const commands = Array.isArray(result.upgradeGuidance.commands)
         ? result.upgradeGuidance.commands
         : [];
@@ -1597,7 +1675,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const compact = !!(options && options.compact);
     const meta = [
       localDate ? localDate : "",
-      generatedAt ? formatDate(generatedAt) : "",
+      generatedAt ? formatDate(generatedAt, "full") : "",
       t("runtime.dailyDigestSources", { count: String(sourceCount) }),
       t("runtime.dailyDigestConfidence", { confidence: formatConfidence(confidence) }),
     ].filter(Boolean);
@@ -1940,7 +2018,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         '<div class="metaRow" style="margin-top: 10px;">' +
           '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(skill.confidence)) + '</span>' +
           '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.successFailureLabel")) + '</strong> ' + escapeHtml(String(skill.success_count || 0) + "/" + String(skill.failure_count || 0)) + '</span>' +
-          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at) : t("procedural.neverUsed")) + '</span>' +
+          '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at, "full") : t("procedural.neverUsed")) + '</span>' +
         '</div>' +
         '<div class="toolbarFooter" style="margin-top: 12px;">' +
           '<div class="finePrint">' + escapeHtml(skill.trigger_text || t("common.none")) + '</div>' +
@@ -1970,7 +2048,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       '<div class="proceduralDetailStats">' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.confidenceLabel")) + '</strong> ' + escapeHtml(formatConfidence(skill.confidence)) + '</span>' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.successFailureLabel")) + '</strong> ' + escapeHtml(String(skill.success_count || 0) + "/" + String(skill.failure_count || 0)) + '</span>' +
-        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at) : t("procedural.neverUsed")) + '</span>' +
+        '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.lastUsedLabel")) + '</strong> ' + escapeHtml(skill.last_used_at ? formatDate(skill.last_used_at, "full") : t("procedural.neverUsed")) + '</span>' +
         '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.feedbackCountLabel")) + '</strong> ' + escapeHtml(String(feedbackSummary.total || 0)) + '</span>' +
       '</div>' +
       '<div class="detailCard">' +
@@ -1992,7 +2070,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         '<div class="chipsRow" style="margin-top: 10px;">' +
           '<span class="tag">' + escapeHtml(t("procedural.sourceDigestLabel")) + ': ' + escapeHtml(String(skill.source_digest_id || t("common.none"))) + '</span>' +
           '<span class="tag">' + escapeHtml(t("procedural.sourceObservationsLabel")) + ': ' + escapeHtml(String(skill.source_observation_count || 0)) + '</span>' +
-          '<span class="tag">' + escapeHtml(t("procedural.statusEffectiveLabel")) + ': ' + escapeHtml(skill.status_effective_at ? formatDate(skill.status_effective_at) : t("common.none")) + '</span>' +
+          '<span class="tag">' + escapeHtml(t("procedural.statusEffectiveLabel")) + ': ' + escapeHtml(skill.status_effective_at ? formatDate(skill.status_effective_at, "full") : t("common.none")) + '</span>' +
         '</div>' +
         (lifecycleSignal
           ? '<div class="recordSummary" style="margin-top: 10px;">' + escapeHtml(t("procedural.lifecycleSignalLabel")) + ': ' + escapeHtml(lifecycleSignal.state) + ' (' + escapeHtml(String(Number(lifecycleSignal.score || 0).toFixed ? Number(lifecycleSignal.score || 0).toFixed(2) : lifecycleSignal.score)) + ')</div>' +
@@ -2004,7 +2082,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         (feedbackHistory.length
           ? '<ul class="listDetails" style="margin-top: 10px;">' + feedbackHistory.map((feedback) =>
               '<li><strong>' + escapeHtml(formatProceduralOutcomeLabel(feedback.outcome)) + '</strong> · ' +
-              escapeHtml(feedback.created_at ? formatDate(feedback.created_at) : t("common.none")) +
+              escapeHtml(feedback.created_at ? formatDate(feedback.created_at, "full") : t("common.none")) +
               (feedback.task_text ? ' · ' + escapeHtml(feedback.task_text) : '') +
               (feedback.notes ? ' · ' + escapeHtml(feedback.notes) : '') +
               '</li>'
@@ -2153,7 +2231,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           '<span class="metricBadge"><strong>' + escapeHtml(t("procedural.actionLabel")) + '</strong> ' + escapeHtml(String(review.status || "open")) + '</span>' +
         '</div>' +
         '<div class="finePrint" style="margin-top: 6px;">' +
-          escapeHtml(t("procedural.generatedAt", { timestamp: formatDate(review.generated_at) })) +
+          escapeHtml(t("procedural.generatedAt", { timestamp: formatDate(review.generated_at, "full") })) +
         '</div>' +
         '<div class="detailCard">' +
           '<div class="metaLabel">' + escapeHtml(t("procedural.postTaskReviewQueryLabel")) + '</div>' +
@@ -2286,7 +2364,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="metaLabel">' + escapeHtml(fact.entity_type + ":" + fact.entity_key) + '</div>' +
             '<div style="margin-top: 8px; font-weight: 700;">' + escapeHtml(fact.fact_key) + '</div>' +
             '<div class="factValue subtle" style="margin-top: 6px;">' + escapeHtml(typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value)) + '</div>' +
-            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at, "full")) + '</div>' +
           '</div>'
         )).join("")
       : '<div class="emptyState">' + escapeHtml(t("projectContext.noCurrentStructuredState")) + '</div>';
@@ -2302,7 +2380,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
               '<div style="font-weight: 700;">' + escapeHtml(block.title) + '</div>' +
               '<span class="tag">' + escapeHtml(block.agent_id) + '</span>' +
             '</div>' +
-            '<div class="finePrint" style="margin-top: 4px;">' + escapeHtml(formatDate(block.created_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 4px;">' + escapeHtml(formatDate(block.created_at, "full")) + '</div>' +
             '<div style="margin-top: 10px;">' +
               (block.lines || []).map((line) => '<div class="summaryLine subtle">' + escapeHtml(line) + '</div>').join("") +
             '</div>' +
@@ -2317,7 +2395,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
               '<div style="font-weight: 700;">' + escapeHtml(entry.title) + '</div>' +
               '<span class="tag">' + escapeHtml(entry.agent_id) + '</span>' +
             '</div>' +
-            '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(formatDate(entry.created_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 6px;">' + escapeHtml(formatDate(entry.created_at, "full")) + '</div>' +
             '<div class="mono subtle" style="margin-top: 8px;">' + escapeHtml(entry.id) + '</div>' +
           '</div>'
         )).join("")
@@ -2379,7 +2457,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
             '<div class="metaLabel">' + escapeHtml(fact.entity_type + ":" + fact.entity_key) + '</div>' +
             '<div style="margin-top: 8px; font-weight: 700;">' + escapeHtml(fact.fact_key) + '</div>' +
             '<div class="factValue subtle" style="margin-top: 6px;">' + escapeHtml(typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value)) + '</div>' +
-            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at)) + '</div>' +
+            '<div class="finePrint" style="margin-top: 8px;">' + escapeHtml(t("field.effectiveAt")) + ' ' + escapeHtml(formatDate(fact.effective_at, "full")) + '</div>' +
           '</div>'
         )).join("")
       : '<div class="emptyState">' + escapeHtml(t("stateLab.noMatchingFacts")) + '</div>';
@@ -2410,7 +2488,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
               '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricHybrid")) + '</strong> ' + escapeHtml(Number(result.hybrid_score || 0).toFixed(3)) + '</span>' +
               '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricFts")) + '</strong> ' + escapeHtml(Number(result.fts_score || 0).toFixed(3)) + '</span>' +
               '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricVector")) + '</strong> ' + escapeHtml(Number(result.vector_score || 0).toFixed(3)) + '</span>' +
-              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricDate")) + '</strong> ' + escapeHtml(formatDate(result.created_at)) + '</span>' +
+              '<span class="scoreBadge"><strong>' + escapeHtml(t("search.metricDate")) + '</strong> ' + escapeHtml(formatDate(result.created_at, "full")) + '</span>' +
             '</div>' +
             '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(summarize(result.narrative, 220)) + '</p>' +
           '</div>'
@@ -2441,7 +2519,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         '<p class="recordSummary" style="margin-top: 10px;">' + escapeHtml(summarize(record.narrative)) + '</p>' +
         '<div class="metaRow">' +
           '<span class="tag">' + escapeHtml(record.project_path) + '</span>' +
-          '<span class="tag">' + escapeHtml(formatDate(record.created_at)) + '</span>' +
+          '<span class="tag">' + escapeHtml(formatDate(record.created_at, "full")) + '</span>' +
         '</div>' +
       '</button>';
     }).join("");
@@ -2494,7 +2572,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
 
     els.detailTitle.textContent = record.title;
-    els.detailTimestamp.textContent = formatDate(record.created_at);
+    els.detailTimestamp.textContent = formatDate(record.created_at, "full");
     els.detailContent.className = "";
     els.detailContent.innerHTML = [
       '<div class="metaRow">',
@@ -3618,19 +3696,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (act.readsDisabled) {
       notice = {
         error: false,
+        icon: "pause",
         title: t("activity.readsDisabledTitle"),
         lead: t("activity.readsDisabledLead"),
         action: null,
         secondary: null,
       };
     } else if (!payload && act.error) {
-      notice = { error: true, title: t("activity.errorTitle"), lead: act.error, action: ["retry", t("activity.retry")] };
+      notice = { error: true, icon: "warning", title: t("activity.errorTitle"), lead: act.error, action: ["retry", t("activity.retry")], secondary: null };
     } else if (payload && activityMeasure(payload.totals) === 0) {
       const legacy = Number(payload.totals && payload.totals.legacy || 0);
       const filtered = !!(act.project || act.agent);
       const offerLegacy = act.kind === "typed" && legacy > 0;
       notice = {
         error: false,
+        icon: filtered ? "search" : "activity",
         title: t("activity.emptyTitle"),
         lead: offerLegacy ? t("activity.emptyLeadLegacy", { n: formatCount(legacy) }) : t(filtered ? "activity.emptyLeadFiltered" : "activity.emptyLead"),
         action: offerLegacy ? ["legacy", t("activity.showLegacy")] : null,
@@ -3641,13 +3721,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(els.activityColumns, !!notice);
     if (notice) {
       setClass(els.activityNotice, "actNotice emptyState glassCard glassBlur" + (notice.error ? " is-error" : ""));
-      setText(els.activityNoticeTitle, notice.title);
-      setText(els.activityNoticeLead, notice.lead);
-      [[els.activityNoticeAction, notice.action], [els.activityNoticeSecondary, notice.secondary]].forEach((entry) => {
-        setHidden(entry[0], !entry[1]);
-        setAttr(entry[0], "data-activity-action", entry[1] ? entry[1][0] : null);
-        setText(entry[0], entry[1] ? entry[1][1] : "");
-      });
+      applyEmptyMarkup(els.activityNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "activityNoticeAction",
+        actionAttr: "data-activity-action",
+        actionValue: notice.action ? notice.action[0] : "",
+        secondaryId: "activityNoticeSecondary",
+        secondaryAttr: "data-activity-action",
+        secondaryValue: notice.secondary ? notice.secondary[0] : "",
+        secondaryLabel: notice.secondary ? notice.secondary[1] : "",
+      }));
     }
 
     setAttr(els.activityColumns, "aria-busy", !payload || act.stale ? "true" : "false");
@@ -4176,6 +4258,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return "neutral";
   }
 
+  function taskStatusVariant(status) {
+    const tone = taskStatusTone(status);
+    if (tone === "ok") return "success";
+    if (tone === "warn") return "warning";
+    if (tone === "err") return "danger";
+    return "neutral";
+  }
+
   // Review recommendation entries are objects of varying shape; show the readable fields when there are any.
   function describeRecommendation(entry) {
     if (!entry || typeof entry !== "object") return String(entry);
@@ -4257,7 +4347,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderDrawerTask(task) {
     const created = parseTimestamp(task.created_at);
-    const tone = taskStatusTone(task.status);
     const stat = (label, value) => '<div class="actStat"><span class="actStatLabel">' + escapeHtml(label) + '</span><span class="actStatValue">' + value + '</span></div>';
     const notes = ['<code class="actMono" title="' + escapeHtml(task.task_id || "") + '">' + escapeHtml(String(task.task_id || "").slice(0, 8)) + '</code>'];
     if (Number(task.segment_count || 0) > 1) notes.push(escapeHtml(t("activity.drawerTaskSegment", { i: formatCount(Number(task.segment_index || 0) + 1), n: formatCount(task.segment_count) })));
@@ -4265,7 +4354,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (created) notes.push('<time datetime="' + escapeHtml(created.toISOString()) + '">' + escapeHtml(formatShortDate(created) + " · " + formatClock(created)) + '</time>');
     return '<li class="actPane actTask">' +
       '<div class="actStats">' +
-        stat(t("memory.drawerStatus"), '<span class="actStatusDot tone-' + tone + '" aria-hidden="true"></span><span class="actStatusWord tone-' + tone + '">' + escapeHtml(task.status || "—") + '</span>') +
+        stat(t("memory.drawerStatus"), statusChip(task.status || "—", taskStatusVariant(task.status))) +
         stat(t("memory.drawerEvents"), escapeHtml(formatCount(task.event_count))) +
         stat(t("memory.drawerEvidence"), escapeHtml(formatCount(task.evidence_count))) +
         stat(t("memory.drawerLlmCalls"), escapeHtml(formatCount(task.llm_calls))) +
@@ -4304,7 +4393,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
     const flags = Array.isArray(detail.duplicate_flags) ? detail.duplicate_flags : [];
     parts.push(drawerSection(t("activity.drawerDuplicates"), flags.length || null, flags.length
-      ? '<ul class="actFlags">' + flags.map((flag) => '<li class="actFlag"><span class="actStatus tone-' + taskStatusTone(flag.status) + '">' + escapeHtml(flag.status || "—") + '</span>' +
+      ? '<ul class="actFlags">' + flags.map((flag) => '<li class="actFlag">' + statusChip(flag.status || "—", taskStatusVariant(flag.status)) +
         '<span class="actFlagTask">' + escapeHtml(t("activity.drawerDuplicateTask", { id: String(flag.task_id || "").slice(0, 8) })) + '</span>' +
         (flag.reason ? '<span class="actFlagReason">' + escapeHtml(flag.reason) + '</span>' : '') + '</li>').join("") + '</ul>'
       : drawerEmpty(t("activity.drawerDuplicatesEmpty"))));
@@ -4316,7 +4405,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const skills = Array.isArray(review.matched_skill_titles) ? review.matched_skill_titles : [];
       const states = Array.isArray(review.recommendation_states) ? review.recommendation_states : [];
       reviewHtml = '<div class="actPane actReviewBox">' +
-        '<div class="actReviewHead"><span class="actStatus tone-' + (review.status === "open" ? "info" : taskStatusTone(review.status)) + '">' + escapeHtml(review.status || "—") + '</span>' +
+        '<div class="actReviewHead">' + statusChip(review.status || "—", review.status === "open" ? "info" : taskStatusVariant(review.status)) +
         (generated ? '<span class="actReviewTime">' + escapeHtml(t("activity.drawerReviewGenerated", { time: formatUiDate(generated, "dateTime") })) + '</span>' : '') + '</div>' +
         '<dl class="actReviewFields">' +
         '<dt>' + escapeHtml(t("activity.drawerReviewQuery")) + '</dt><dd>' + escapeHtml(review.query_text || "—") + '</dd>' +
@@ -6275,33 +6364,34 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const visible = query ? pipelineVisibleItems() : pipe.items;
     let notice = null;
     if (pipe.readsDisabled) {
-      notice = { tone: "", title: t("pipeline.readsDisabledTitle"), lead: t("pipeline.readsDisabledLead"), action: null };
+      notice = { tone: "", icon: "pause", title: t("pipeline.readsDisabledTitle"), lead: t("pipeline.readsDisabledLead"), action: null };
     } else if (!pipe.loaded && pipe.error) {
-      notice = { tone: " is-error", title: t("pipeline.errorTitle"), lead: pipe.error, action: ["retry", t("pipeline.retry")] };
+      notice = { tone: " is-error", icon: "warning", title: t("pipeline.errorTitle"), lead: pipe.error, action: ["retry", t("pipeline.retry")] };
     } else if (pipe.loaded && !pipe.stale && query && (!visible || !visible.length)) {
-      notice = { tone: "", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
+      const more = !!pipe.nextCursor;
+      notice = { tone: "", icon: "search", title: t("pipeline.noResultsTitle"), lead: t(more ? "pipeline.noResultsMore" : "pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")], keepMore: more };
     } else if (pipe.loaded && !pipe.stale && !pipe.items.length) {
       // Quiet weeks are common: offer a wider window before anything else.
       if (pipe.project || pipe.agent || pipe.state || pipe.flagged || pipe.fallbackFrom) {
-        notice = { tone: "", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
+        notice = { tone: "", icon: "search", title: t("pipeline.noResultsTitle"), lead: t("pipeline.noResultsLead"), action: ["clear", t("pipeline.clearFilters")] };
       } else if (pipe.range === "today") {
-        notice = { tone: "", title: t("pipeline.emptyTodayTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show7d")] };
+        notice = { tone: "", icon: "pipeline", title: t("pipeline.emptyTodayTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show7d")] };
       } else if (pipe.range === "7d") {
-        notice = { tone: "", title: t("pipeline.emptyWeekTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show30d")] };
+        notice = { tone: "", icon: "pipeline", title: t("pipeline.emptyWeekTitle"), lead: t("pipeline.emptyLead"), action: ["widen", t("pipeline.show30d")] };
       } else {
-        notice = { tone: "", title: t("pipeline.emptyRangeTitle"), lead: t("pipeline.emptyRangeLead"), action: pipe.range === "custom" ? ["clear", t("pipeline.show7d")] : null };
+        notice = { tone: "", icon: "pipeline", title: t("pipeline.emptyRangeTitle"), lead: t("pipeline.emptyRangeLead"), action: pipe.range === "custom" ? ["clear", t("pipeline.show7d")] : null };
       }
     }
     setHidden(els.pipelineNotice, !notice);
     if (notice) {
       setClass(els.pipelineNotice, "actNotice emptyState memNotice glassCard glassBlur" + notice.tone);
-      setText(els.pipelineNoticeTitle, notice.title);
-      setText(els.pipelineNoticeLead, notice.lead);
-      setHidden(els.pipelineNoticeAction, !notice.action);
-      setAttr(els.pipelineNoticeAction, "data-pipeline-action", notice.action ? notice.action[0] : null);
-      setText(els.pipelineNoticeAction, notice.action ? notice.action[1] : "");
+      applyEmptyMarkup(els.pipelineNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "pipelineNoticeAction",
+        actionAttr: "data-pipeline-action",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
-    return !!notice;
+    return notice;
   }
 
   function renderPipelineList() {
@@ -6314,13 +6404,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       pipe.groupNodes.clear();
       pipe.rowNodes.clear();
     }
-    const noticed = renderPipelineNotice();
+    const notice = renderPipelineNotice();
+    const noticed = !!notice;
     setHidden(list, noticed);
     setHidden(els.pipelineListHead, noticed);
     renderPipelinePauseHint(noticed);
     setAttr(list, "aria-busy", pipe.stale || !pipe.loaded ? "true" : "false");
     list.classList.toggle("is-stale", pipe.stale && pipe.items.length > 0);
-    setHidden(els.pipelineLoadMore, noticed || !pipe.nextCursor);
+    setHidden(els.pipelineLoadMore, !pipe.nextCursor || (noticed && !notice.keepMore));
     setText(els.pipelineLoadMore, t(pipe.moreSeq ? "pipeline.loadingMore" : "pipeline.loadMore"));
     setAttr(els.pipelineLoadMore, "aria-busy", pipe.moreSeq ? "true" : null);
     if (noticed) return;
@@ -7020,30 +7111,31 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const visible = query ? digestVisibleItems() : dig.items;
     let notice = null;
     if (dig.readsDisabled) {
-      notice = { tone: "", title: t("digests.readsDisabledTitle"), lead: t("digests.readsDisabledLead"), action: null };
+      notice = { tone: "", icon: "pause", title: t("digests.readsDisabledTitle"), lead: t("digests.readsDisabledLead"), action: null };
     } else if (!dig.loaded && dig.error) {
-      notice = { tone: " is-error", title: t("digests.errorTitle"), lead: dig.error, action: ["retry", t("digests.retry")] };
+      notice = { tone: " is-error", icon: "warning", title: t("digests.errorTitle"), lead: dig.error, action: ["retry", t("digests.retry")] };
     } else if (dig.loaded && !dig.stale && query && (!visible || !visible.length)) {
-      notice = { tone: "", title: t("digests.noResultsTitle"), lead: t("digests.noResultsLead"), action: ["clear", t("digests.clearFilters")] };
+      const more = !!dig.nextCursor;
+      notice = { tone: "", icon: "search", title: t("digests.noResultsTitle"), lead: t(more ? "digests.noResultsMore" : "digests.noResultsLead"), action: ["clear", t("digests.clearFilters")], keepMore: more };
     } else if (dig.loaded && !dig.stale && !dig.items.length) {
       if (isDigestFiltered()) {
-        notice = { tone: "", title: t("digests.noResultsTitle"), lead: t("digests.noResultsLead"), action: ["clear", t("digests.clearFilters")] };
+        notice = { tone: "", icon: "search", title: t("digests.noResultsTitle"), lead: t("digests.noResultsLead"), action: ["clear", t("digests.clearFilters")] };
       } else if (dig.range === "7d") {
-        notice = { tone: "", title: t("digests.emptyWeekTitle"), lead: t("digests.emptyLead"), action: ["widen", t("digests.show30d")] };
+        notice = { tone: "", icon: "digestDoc", title: t("digests.emptyWeekTitle"), lead: t("digests.emptyLead"), action: ["widen", t("digests.show30d")] };
       } else {
-        notice = { tone: "", title: t("digests.emptyRangeTitle"), lead: t("digests.emptyRangeLead"), action: ["clear", t("digests.show7d")] };
+        notice = { tone: "", icon: "digestDoc", title: t("digests.emptyRangeTitle"), lead: t("digests.emptyRangeLead"), action: ["clear", t("digests.show7d")] };
       }
     }
     setHidden(els.digNotice, !notice);
     if (notice) {
       setClass(els.digNotice, "actNotice emptyState memNotice digGlass glassCard glassBlur" + notice.tone);
-      setText(els.digNoticeTitle, notice.title);
-      setText(els.digNoticeLead, notice.lead);
-      setHidden(els.digNoticeAction, !notice.action);
-      setAttr(els.digNoticeAction, "data-digest-action", notice.action ? notice.action[0] : null);
-      setText(els.digNoticeAction, notice.action ? notice.action[1] : "");
+      applyEmptyMarkup(els.digNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "digNoticeAction",
+        actionAttr: "data-digest-action",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
-    return !!notice;
+    return notice;
   }
 
   function renderDigestList() {
@@ -7055,11 +7147,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       dig.groupNodes.clear();
       dig.rowNodes.clear();
     }
-    const noticed = renderDigestNotice();
+    const notice = renderDigestNotice();
+    const noticed = !!notice;
     setHidden(list, noticed);
     setAttr(list, "aria-busy", dig.stale || !dig.loaded ? "true" : "false");
     list.classList.toggle("is-stale", dig.stale && dig.items.length > 0);
-    setHidden(els.digLoadMore, noticed || !dig.nextCursor);
+    setHidden(els.digLoadMore, !dig.nextCursor || (noticed && !notice.keepMore));
     setText(els.digLoadMore, t(dig.moreSeq ? "digests.loadingMore" : "digests.loadMore"));
     setAttr(els.digLoadMore, "aria-busy", dig.moreSeq ? "true" : null);
     if (noticed) return;
@@ -8124,15 +8217,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(els.sklNotice, !notice);
     if (notice) {
       setClass(els.sklNotice, "actNotice emptyState memNotice sklNotice digGlass glassCard glassBlur" + notice.tone);
-      if (skl.signatures.noticeIcon !== notice.icon) {
-        skl.signatures.noticeIcon = notice.icon;
-        els.sklNoticeIcon.innerHTML = svgIcon(notice.icon, "placeholderGlyph");
-      }
-      setText(els.sklNoticeTitle, notice.title);
-      setText(els.sklNoticeLead, notice.lead);
-      setHidden(els.sklNoticeAction, !notice.action);
-      setAttr(els.sklNoticeAction, "data-skill-notice", notice.action ? notice.action[0] : null);
-      setText(els.sklNoticeAction, notice.action ? notice.action[1] : "");
+      applyEmptyMarkup(els.sklNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "sklNoticeAction",
+        actionAttr: "data-skill-notice",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
     return !!notice;
   }
@@ -8150,16 +8239,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(els.sklEmpty, !spec);
     if (!spec) return;
     setClass(els.sklEmpty, "sklEmpty emptyState" + (spec.quiet ? " is-quiet" : ""));
-    if (skl.signatures.emptyIcon !== spec.icon) {
-      skl.signatures.emptyIcon = spec.icon;
-      els.sklEmptyIcon.innerHTML = svgIcon(spec.icon, "sklEmptyGlyph");
-    }
-    setText(els.sklEmptyTitle, spec.title);
-    setHidden(els.sklEmptyLead, !spec.lead);
-    setText(els.sklEmptyLead, spec.lead);
-    setHidden(els.sklEmptyAction, !spec.action);
-    setAttr(els.sklEmptyAction, "data-skill-empty", spec.action ? spec.action[0] : null);
-    setText(els.sklEmptyAction, spec.action ? spec.action[1] : "");
+    applyEmptyMarkup(els.sklEmpty, renderEmptyState(svgIcon(spec.icon, "placeholderGlyph"), spec.title, spec.lead, spec.action ? spec.action[1] : "", {
+      actionId: "sklEmptyAction",
+      actionAttr: "data-skill-empty",
+      actionValue: spec.action ? spec.action[0] : "",
+    }));
   }
 
   function renderSkillList() {
@@ -9212,15 +9296,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(els.prjNotice, !notice);
     if (notice) {
       setClass(els.prjNotice, "actNotice emptyState memNotice digGlass glassCard glassBlur" + notice.tone);
-      if (prj.signatures.noticeIcon !== notice.icon) {
-        prj.signatures.noticeIcon = notice.icon;
-        els.prjNoticeIcon.innerHTML = svgIcon(notice.icon, "placeholderGlyph");
-      }
-      setText(els.prjNoticeTitle, notice.title);
-      setText(els.prjNoticeLead, notice.lead);
-      setHidden(els.prjNoticeAction, !notice.action);
-      setAttr(els.prjNoticeAction, "data-project-action", notice.action ? notice.action[0] : null);
-      setText(els.prjNoticeAction, notice.action ? notice.action[1] : "");
+      applyEmptyMarkup(els.prjNotice, renderEmptyState(svgIcon(notice.icon, "placeholderGlyph"), notice.title, notice.lead, notice.action ? notice.action[1] : "", {
+        actionId: "prjNoticeAction",
+        actionAttr: "data-project-action",
+        actionValue: notice.action ? notice.action[0] : "",
+      }));
     }
     return !!notice;
   }
@@ -11089,8 +11169,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setAttr(els.setLlmKeyMasked, "placeholder", loading ? t("settings.loading") : t("settings.llmKeyEmpty"));
     setHidden(els.setLlmKeyMasked, set.keyEditing);
     setHidden(els.setLlmKeyInput, !set.keyEditing);
-    setText(els.setLlmKeyChip, hasKey ? t("settings.llmKeySaved") : t("settings.llmKeyNotSet"));
-    setClass(els.setLlmKeyChip, "setChip " + (hasKey ? "is-ok" : local ? "is-muted" : "is-warn"));
+    const keyLabel = hasKey ? t("settings.llmKeySaved") : t("settings.llmKeyNotSet");
+    const keyVariant = hasKey ? "success" : local ? "neutral" : "warning";
+    const keyLegacy = hasKey ? "is-ok" : local ? "is-muted" : "is-warn";
+    setText(els.setLlmKeyChip, keyLabel);
+    applyChipMarkup(els.setLlmKeyChip, statusChip(keyLabel, keyVariant, "setChip " + keyLegacy));
     setHidden(els.setLlmKeyChip, !config || set.keyEditing);
     setText(els.setLlmReplaceKey, set.keyEditing ? t("settings.confirmCancel") : t(hasKey ? "settings.llmReplaceKey" : "settings.llmSetKey"));
     setAttr(els.setLlmReplaceKey, "aria-expanded", set.keyEditing ? "true" : "false");
@@ -11138,7 +11221,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           ? t("settings.llmFailedStatus", { status: String(result.status), error: error })
           : t("settings.llmFailed", { error: error || String(result.status || "") });
       setText(els.setLlmTestChip, label);
-      setClass(els.setLlmTestChip, "setChip setTestChip " + (result.ok ? "is-ok" : "is-err"));
+      applyChipMarkup(els.setLlmTestChip, statusChip(label, result.ok ? "success" : "danger", "setChip setTestChip " + (result.ok ? "is-ok" : "is-err")));
       setAttr(els.setLlmTestChip, "title", settingsRedacted(result.ok ? String(result.requestUrl || "") : error, settingsTypedKey()));
     }
     const testedAt = result ? parseTimestamp(result.testedAt) : null;
@@ -11304,8 +11387,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function getSettingsReleasePresentation(result) {
     switch (result && result.status) {
-      case "up_to_date": return { chip: t("settings.aboutUpToDate"), tone: "is-ok" };
-      case "update_available": return { chip: t("settings.aboutUpdate"), tone: "is-warn" };
+      case "up_to_date": return { chip: t("settings.aboutUpToDate"), tone: "is-ok", variant: "success" };
+      case "update_available": return { chip: t("settings.aboutUpdate"), tone: "is-warn", variant: "warning" };
       case "invalid_latest_tag": return { note: String(result.message || "") || t("settings.aboutInvalidTag") };
       case "network_error": return { note: String(result.message || "") || t("settings.aboutNetworkError") };
       default: return {};
@@ -11322,7 +11405,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.setLatest.classList.toggle("is-muted", !(result && result.latestVersion));
     setHidden(els.setReleaseChip, !view.chip || state.isCheckingRelease);
     setText(els.setReleaseChip, view.chip || "");
-    setClass(els.setReleaseChip, "setChip " + (view.tone || ""));
+    applyChipMarkup(els.setReleaseChip, statusChip(view.chip || "", view.variant || "neutral", "setChip " + (view.tone || "")));
     const checkedAt = result ? parseTimestamp(result.checkedAt) : null;
     let note = "";
     if (view.note) note = view.note;

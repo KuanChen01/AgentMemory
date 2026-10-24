@@ -98,6 +98,43 @@ test('statusChip covers the semantic variants', () => {
   }
 });
 
+test('Pipeline and Digests keep Load more reachable while a search has no loaded matches', () => {
+  for (const name of ['renderPipelineNotice', 'renderDigestNotice']) {
+    const source = uiClientFunction(name);
+    assert.match(source, /keepMore/);
+    assert.match(source, /nextCursor/);
+    assert.match(source, name.indexOf('Pipeline') >= 0 ? /pipeline\.noResultsMore/ : /digests\.noResultsMore/);
+  }
+  for (const name of ['renderPipelineList', 'renderDigestList']) {
+    const source = uiClientFunction(name);
+    assert.match(source, /keepMore/);
+    assert.match(source, /if \(noticed\) return/);
+    assert.doesNotMatch(source, /setHidden\(els\.\w+LoadMore, noticed \|\| !/);
+    assert.ok(source.indexOf('list.innerHTML = ""') < source.indexOf('if (noticed) return'));
+  }
+});
+
+test('Activity, Pipeline, Digests, Projects and Skills empty states use renderEmptyState', () => {
+  for (const name of ['renderActivityBoard', 'renderPipelineNotice', 'renderDigestNotice', 'renderProjectNotice', 'renderSkillEmpty']) {
+    assert.match(uiClientFunction(name), /renderEmptyState\(/, name);
+  }
+  assert.match(uiClientFunction('renderSkillNotice'), /renderEmptyState\(/);
+});
+
+test('Settings chips and the Activity drawer use statusChip', () => {
+  for (const name of ['renderSettingsLlm', 'renderSettingsLlmTest', 'renderSettingsAbout', 'renderDrawerTask', 'renderMemoryDrawerBody']) {
+    assert.match(uiClientFunction(name), /statusChip\(/, name);
+  }
+  const llm = uiClientFunction('renderSettingsLlm');
+  assert.match(llm, /is-ok/);
+  assert.match(llm, /is-warn/);
+  const testChip = uiClientFunction('renderSettingsLlmTest');
+  assert.match(testChip, /is-ok/);
+  assert.match(testChip, /is-err/);
+  const about = uiClientFunction('renderSettingsAbout');
+  assert.match(about, /is-ok|is-warn|view\.tone/);
+});
+
 test('opening Developer tools while the toggle is off turns the toggle on', () => {
   const activate = uiClientFunction('activateView');
   assert.match(activate, /setDevToolsEnabled\(true, true\)/);
