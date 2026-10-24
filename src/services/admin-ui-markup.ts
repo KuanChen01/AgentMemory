@@ -33,6 +33,11 @@ export const ADMIN_UI_ICONS: Record<string, string> = {
   external: '<path d="M13.5 4.5h6v6"/><path d="M19.5 4.5 11 13"/><path d="M17.5 14v4a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h4"/>',
   chevronLeft: '<path d="m14 7-5 5 5 5"/>',
   llm: '<path d="M11 3.5 12.9 8.6 18 10.5l-5.1 1.9L11 17.5l-1.9-5.1L4 10.5l5.1-1.9z"/><path d="m18 15 .8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>',
+  digestDoc: '<path d="M7 3.5h7.2l4.3 4.3v11.7a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z"/><path d="M14 3.5V8h4.5M9.2 12h5.6M9.2 15.5h5.6"/>',
+  moon: '<path d="M19.5 14.2A7.6 7.6 0 0 1 9.8 4.5a7.6 7.6 0 1 0 9.7 9.7z"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  layers: '<path d="m12 4 8.5 4.3L12 12.6 3.5 8.3z"/><path d="m3.5 12.2 8.5 4.3 8.5-4.3"/><path d="m3.5 16 8.5 4.3 8.5-4.3"/>',
+  minus: '<path d="M7.5 12h9"/>',
 };
 
 export function renderAdminIcon(name: string, className: string = 'icon'): string {
@@ -73,7 +78,6 @@ export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: stri
 ];
 
 const PLACEHOLDER_VIEWS: Array<{ id: string; icon: string; titleKey: string; title: string; leadKey: string; lead: string }> = [
-  { id: 'digestsView', icon: 'digests', titleKey: 'nav.digests', title: 'Digests & Reviews', leadKey: 'shell.digestsLead', lead: 'Daily digests per project, the digest scheduler and Vault review checkpoints.' },
   { id: 'projectsView', icon: 'projects', titleKey: 'nav.projects', title: 'Projects', leadKey: 'shell.projectsLead', lead: 'Every project with its startup context, state facts, digests and skills.' },
   { id: 'skillsView', icon: 'skills', titleKey: 'nav.skills', title: 'Skills', leadKey: 'shell.skillsLead', lead: 'Procedural skills, digest candidates and how often post-task reviews matched them.' },
 ];
@@ -668,6 +672,113 @@ function renderPipelineView(): string {
       </section>`;
 }
 
+// Time presets of the Digests toolbar; 7 days is the default. Each covers whole local days ending today, matched
+// against the day a digest covers (not the time it was written).
+export const ADMIN_UI_DIGEST_RANGES: Array<{ id: string; range: string; key: string; label: string }> = [
+  { id: 'digRange7d', range: '7d', key: 'digests.range7d', label: '7 days' },
+  { id: 'digRange30d', range: '30d', key: 'digests.range30d', label: '30 days' },
+  { id: 'digRange90d', range: '90d', key: 'digests.range90d', label: '90 days' },
+  { id: 'digRangeCustom', range: 'custom', key: 'digests.rangeCustom', label: 'Custom' },
+];
+
+// One stat of a status card: an icon, a quiet label and the value (and an optional second line).
+function renderDigestStat(id: string, icon: string, labelKey: string, label: string, sub: boolean = false): string {
+  return `
+              <div class="digStat" id="${id}">
+                ${renderAdminIcon(icon, 'digStatIcon')}
+                <span class="digStatText">
+                  <span class="digStatLabel" id="${id}Label" data-i18n="${labelKey}">${label}</span>
+                  <span class="digStatValue" id="${id}Value">—</span>${sub ? `
+                  <span class="digStatSub" id="${id}Sub"></span>` : ''}
+                </span>
+              </div>`;
+}
+
+// Digests & Reviews: the two status cards (nightly digest scheduler, Vault review), then the digests grouped by the
+// day they cover. The client fills #digList keyed by day and digest id; the detail drawer is the one Activity owns,
+// moved in on open, with a digest body of its own.
+function renderDigestsView(): string {
+  const segments = ADMIN_UI_DIGEST_RANGES.map((item) => `
+            <button class="actSegment" id="${item.id}" type="button" data-digest-range="${item.range}" aria-pressed="${item.range === '7d'}"${item.range === 'custom' ? ' aria-haspopup="dialog" aria-expanded="false" aria-controls="digCustomPopover"' : ''} data-i18n="${item.key}">${item.label}</button>`).join('');
+  const menu = (id: string, key: string, label: string) =>
+    `<div class="actPopover actMenu" id="${id}" role="listbox" data-i18n-aria-label="${key}" aria-label="${label}" hidden></div>`;
+  return `
+      <section id="digestsView" class="appView digestsView" aria-labelledby="pageTitle">
+        <div class="pipeLeadRow digLeadRow">
+          <p class="memLead pipeLead" id="digLead" data-i18n="digests.lead">Nightly project digests and Vault review activity across your workspace.</p>
+          <span class="memUpdated" id="digUpdated"></span>
+        </div>
+
+        <div class="memToolbar digToolbar digGlass glassSurface glassBlur" id="digToolbar" role="group" data-i18n-aria-label="digests.toolbarLabel" aria-label="Digest filters">
+          <div class="digFilters">${renderMemoryPopup('digProject', 'digests.project', 'Project')}${renderMemoryPopup('digAgent', 'digests.agent', 'Agent')}
+            <button class="digStatusChip" id="digStatusChip" type="button" hidden data-i18n-title="digests.failedRemove" title="Remove the Failed filter"><span class="digStatusChipDot" aria-hidden="true"></span><span data-i18n="digests.failedChip">Failed</span>${renderAdminIcon('close', 'digStatusChipIcon')}</button>
+          </div>
+          <div class="actSegmented memSegmented" id="digRangeControl" role="group" data-i18n-aria-label="digests.rangeLabel" aria-label="Time range">${segments}
+          </div>
+        </div>
+
+        <div class="digCards" id="digCards">
+          <section class="digCard digGlass glassCard glassBlur" id="digNightlyCard" aria-labelledby="digNightlyTitle">
+            <header class="digCardHead">
+              <span class="digCardIcon" aria-hidden="true">${renderAdminIcon('digestDoc', 'digCardGlyph')}</span>
+              <h2 class="digCardTitle" id="digNightlyTitle" data-i18n="digests.nightlyTitle">Nightly digest</h2>
+              <span class="digChip is-muted" id="digNightlyChip"><span class="digChipDot" aria-hidden="true"></span><span id="digNightlyChipText">—</span></span>
+            </header>
+            <div class="digStats">${renderDigestStat('digNextRun', 'moon', 'digests.nextRun', 'Next run')}${renderDigestStat('digLastRun', 'clock', 'digests.lastRun', 'Last run')}${renderDigestStat('digLastProjects', 'layers', 'digests.projectsLabel', 'Projects', true)}
+            </div>
+          </section>
+          <section class="digCard digGlass glassCard glassBlur" id="digVaultCard" aria-labelledby="digVaultTitle">
+            <header class="digCardHead">
+              <span class="digCardIcon is-vault" aria-hidden="true">${renderAdminIcon('memory', 'digCardGlyph')}</span>
+              <h2 class="digCardTitle" id="digVaultTitle" data-i18n="digests.vaultTitle">Vault review</h2>
+              <span class="digChip is-muted" id="digVaultChip"><span class="digChipDot" aria-hidden="true"></span><span id="digVaultChipText">—</span></span>
+            </header>
+            <div class="digStats digVaultStats">
+              <div class="digStat" id="digVaultLast">
+                <span class="digStatText">
+                  <span class="digStatLabel" data-i18n="digests.vaultLastCheckpoint">Last checkpoint</span>
+                  <span class="digStatValue" id="digVaultLastValue">—</span>
+                </span>
+              </div>
+              <div class="digDots" id="digVaultDots" role="img" data-i18n-aria-label="digests.vaultDotsLabel" aria-label="Vault review checkpoints over the last 14 days"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="memBoard digBoard" id="digBoard">
+          <div class="memList digList" id="digList" role="region" data-i18n-aria-label="digests.listLabel" aria-label="Digests by day" aria-busy="true"></div>
+          <div class="actNotice memNotice digGlass glassCard glassBlur" id="digNotice" role="status" hidden>
+            <div class="placeholderIcon" id="digNoticeIcon">${renderAdminIcon('digestDoc', 'placeholderGlyph')}</div>
+            <h2 class="actNoticeTitle" id="digNoticeTitle"></h2>
+            <p class="actNoticeLead" id="digNoticeLead"></p>
+            <div class="actNoticeActions">
+              <button class="bgButton is-primary" id="digNoticeAction" type="button" hidden></button>
+            </div>
+          </div>
+          <div class="memMoreRow">
+            <button class="memMore digGlass" id="digLoadMore" type="button" hidden data-i18n="digests.loadMore">Load more</button>
+          </div>
+        </div>
+
+        <!-- Popovers sit outside the blurred toolbar so their own blur sees the page. -->
+        ${menu('digProjectPopover', 'digests.projectMenu', 'Filter by project')}
+        ${menu('digAgentPopover', 'digests.agentMenu', 'Filter by agent')}
+        <section class="actPopover actCustom" id="digCustomPopover" role="dialog" aria-labelledby="digCustomTitle" hidden>
+          <h3 class="actCustomTitle" id="digCustomTitle" data-i18n="digests.customTitle">Custom range</h3>
+          <div class="actCustomFields">
+            <label class="actField"><span class="actFieldLabel" data-i18n="digests.customFrom">From</span><input class="actDateInput" id="digCustomFrom" type="date" /></label>
+            <label class="actField"><span class="actFieldLabel" data-i18n="digests.customTo">To</span><input class="actDateInput" id="digCustomTo" type="date" /></label>
+          </div>
+          <p class="actCustomHint" data-i18n="digests.customHint">Both days are included.</p>
+          <p class="actCustomError" id="digCustomError" role="alert" hidden></p>
+          <div class="actCustomActions">
+            <button class="bgButton" id="digCustomCancel" type="button" data-i18n="digests.customCancel">Cancel</button>
+            <button class="bgButton is-primary" id="digCustomApply" type="button" data-i18n="digests.customApply">Apply</button>
+          </div>
+        </section>
+      </section>`;
+}
+
 function renderPlaceholderViews(): string {
   return PLACEHOLDER_VIEWS.map((view) => `
       <section id="${view.id}" class="appView" aria-labelledby="pageTitle">
@@ -712,7 +823,7 @@ export function renderAdminWorkbenchMarkup(): string {
   return `
   <div class="appShell">${renderSidebar()}${renderBackgroundPopover()}
     <main class="mainArea" id="mainArea">
-      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderPlaceholderViews()}${renderSettingsView()}
+      <div class="mainInner">${renderTopBar()}${renderHomeView()}${renderActivityView()}${renderMemoryView()}${renderPipelineView()}${renderDigestsView()}${renderPlaceholderViews()}${renderSettingsView()}
 
       <section id="devToolsView" class="appView devToolsView" aria-labelledby="pageTitle">
     <p class="devToolsLead" data-i18n="devtools.lead">Legacy workbench panels, kept intact for debugging. Everyday status lives on Home.</p>

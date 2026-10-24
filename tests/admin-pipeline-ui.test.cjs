@@ -261,8 +261,9 @@ test('Pipeline rows and the task drawer escape hostile titles and errors', () =>
 
 test('Pipeline glass reuses the Activity and Memory tokens and blurs only inside the active view', () => {
   const css = uiHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
-  assert.match(css, /\.activityView,\s*\.memoryView,\s*\.pipelineView \{\s*position: relative;\s*--a-glass:/);
-  assert.match(css, /html\[data-glass="dark"\] \.activityView,\s*html\[data-glass="dark"\] \.memoryView,\s*html\[data-glass="dark"\] \.pipelineView \{/);
+  // Digests & Reviews joined the same token rules after Pipeline.
+  assert.match(css, /\.activityView,\s*\.memoryView,\s*\.pipelineView,\s*\.digestsView \{\s*position: relative;\s*--a-glass:/);
+  assert.match(css, /html\[data-glass="dark"\] \.activityView,\s*html\[data-glass="dark"\] \.memoryView,\s*html\[data-glass="dark"\] \.pipelineView,\s*html\[data-glass="dark"\] \.digestsView \{/);
   const tokens = css.slice(css.indexOf('/* ---------- Pipeline ---------- */'), css.indexOf('.pipeLeadRow {'));
   // Every rgba() stop of the new glass fills (light and dark) multiplies the Background opacity slider.
   const fills = [...tokens.matchAll(/(--p-(?:orb|stuck)-fill): ([^;]+);/g)];
@@ -473,6 +474,11 @@ function pipelineBehaviourPrelude() {
         seq: 0, busySeq: 0, moreSeq: 0, lastScrollAt: 0, openPopover: "",
         rowNodes: new Map(), groupNodes: new Map(), signatures: {},
       },
+      digests: {
+        items: [], days: [], stats: null, facets: null, vault: null, nextCursor: null, window: null, loaded: false, error: "",
+        readsDisabled: false, stale: false, seq: 0, busySeq: 0, moreSeq: 0, vaultSeq: 0, vaultAt: 0,
+        rowNodes: new Map(), groupNodes: new Map(),
+      },
     };
     const document = { hidden: false };
     const window = { scrolls: 0, scrollTo(x, y) { this.scrolls += 1; this.x = x; this.y = y; } };
@@ -517,6 +523,10 @@ function pipelineBehaviourPrelude() {
     ${uiClientFunction('applyReadPolicyToViews')}
     ${uiClientFunction('pipelineFacetValues')}
     function renderPipeline() {}
+    function renderDigests() {}
+    function loadDigests() {}
+    function loadDigestCards() {}
+    function openDigestDrawer() {}
     function renderMemory() {}
     function renderActivityEarlier() {}
     function renderMemoryDrawer() {}
