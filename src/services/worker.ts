@@ -62,6 +62,7 @@ import {
 import { getAdminPipeline } from './pipeline-query';
 import { getAdminDigestDetail, getAdminDigestList, getAdminVaultReviews } from './digest-query';
 import { getAdminProjectDetail, getAdminProjectList } from './project-query';
+import { getAdminSkillDetail, getAdminSkillsSummary } from './skill-query';
 import {
   DailyDigestSchedulerHandle,
   millisecondsUntilNextLocalDigestRun,
@@ -251,6 +252,10 @@ const ADMIN_VAULT_REVIEWS_DISABLED_FIELDS = ['generated_at', 'filters', 'checkpo
 const ADMIN_PROJECT_LIST_DISABLED_FIELDS = ['generated_at', 'filters', 'summary', 'items', 'next_cursor'] as const;
 
 const ADMIN_PROJECT_DETAIL_DISABLED_FIELDS = ['generated_at', 'project', 'startup_context', 'state_facts', 'state_facts_total', 'recent_digests', 'skills', 'days'] as const;
+
+const ADMIN_SKILLS_SUMMARY_DISABLED_FIELDS = ['generated_at', 'filters', 'summary', 'items', 'next_cursor'] as const;
+
+const ADMIN_SKILL_DETAIL_DISABLED_FIELDS = ['generated_at', 'skill', 'recent_matches', 'recent_feedback'] as const;
 
 function sendAdminReadsDisabled(res: Response, fields: readonly string[]) {
   const body: { [key: string]: unknown } = {
@@ -761,6 +766,64 @@ app.get('/admin/api/project-detail', adminOnlyGuard, async (req, res) => {
       return;
     }
     console.error('Error fetching admin project detail:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/skills-summary', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_SKILLS_SUMMARY_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = adminReadQuery(req, 'skills-summary');
+    const tz = adminGiven(readQuery('tz_offset_minutes'));
+    const limit = adminGiven(readQuery('limit'));
+    const cursor = adminGiven(readQuery('cursor'));
+    res.json(getAdminSkillsSummary(dbManager, {
+      status: adminGiven(readQuery('status')),
+      project: adminGiven(readQuery('project')),
+      days: adminStrictInteger('skills-summary', adminGiven(readQuery('days')), 'days'),
+      q: adminGiven(readQuery('q')),
+      sort: adminGiven(readQuery('sort')),
+      tzOffsetMinutes: adminStrictInteger('skills-summary', tz, 'tz_offset_minutes'),
+      limit: adminStrictInteger('skills-summary', limit, 'limit'),
+      cursor: cursor ?? null,
+    }));
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid skills-summary request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin skills summary:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/api/skill-detail', adminOnlyGuard, async (req, res) => {
+  try {
+    if (!(await isReadEnabled())) {
+      sendAdminReadsDisabled(res, ADMIN_SKILL_DETAIL_DISABLED_FIELDS);
+      return;
+    }
+    const readQuery = adminReadQuery(req, 'skill-detail');
+    const tz = adminGiven(readQuery('tz_offset_minutes'));
+    const detail = getAdminSkillDetail(dbManager, {
+      id: readQuery('id'),
+      days: adminStrictInteger('skill-detail', adminGiven(readQuery('days')), 'days'),
+      tzOffsetMinutes: adminStrictInteger('skill-detail', tz, 'tz_offset_minutes'),
+    });
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown skill ID' });
+      return;
+    }
+    res.json(detail);
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.startsWith('Invalid skill-detail request:')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error('Error fetching admin skill detail:', err);
     res.status(500).json({ error: err.message });
   }
 });
