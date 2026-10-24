@@ -333,12 +333,48 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       rowNodes: new Map(),
       signatures: {},
     },
+    // Skills: page 1 of skills-summary for one status segment. The summary ignores status and q, so it drives both
+    // the tiles and the segment counts. sort "" means the segment default (recent on Candidates, matches elsewhere).
+    // pending maps a skill id to the write in flight, promoted maps a candidate already promoted this session to its
+    // new draft id, notes an id to its inline note, confirm the open confirm popover.
+    skills: {
+      status: "candidate",
+      statusChosen: false,
+      q: "",
+      project: "",
+      sort: "",
+      days: 30,
+      items: [],
+      summary: null,
+      nextCursor: null,
+      key: "",
+      loaded: false,
+      loadedAt: 0,
+      error: "",
+      errorStatus: 0,
+      readsDisabled: false,
+      stale: false,
+      seq: 0,
+      busySeq: 0,
+      moreSeq: 0,
+      searchTimer: 0,
+      openPopover: "",
+      projects: [],
+      projectsAt: 0,
+      pending: {},
+      promoted: {},
+      notes: {},
+      confirm: null,
+      rowNodes: new Map(),
+      signatures: {},
+    },
     // The one detail drawer. host is the view that opened it; the drawer node moves into that view. id is the memory
     // on show; task is the Pipeline task it was opened from (task alone shows the task body, taskItem its last copy).
     // digest is the Digests row it was opened from (digestPayload its detail); a source memory opened from it keeps
     // digest set, so Back returns to the digest. project is the Projects row (project_key) it was opened from.
     drawer: { id: "", task: "", taskItem: null, digest: "", digestPayload: null, digestError: "", digestFactsOpen: false, digestSourcesOpen: false,
-      project: "", projectPayload: null, projectError: "", projectContextOpen: false, projectFactsOpen: false, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
+      project: "", projectPayload: null, projectError: "", projectContextOpen: false, projectFactsOpen: false,
+      skill: "", skillPayload: null, skillError: "", skillItem: null, skillRecord: { outcome: "success", notes: "" }, host: "", payload: null, error: "", missing: false, readsDisabled: false, seq: 0, returnFocus: null, summaryOpen: false, factsOpen: false, copied: false, signature: "" },
   };
 
   const els = {
@@ -690,6 +726,43 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     prjNoticeTitle: document.getElementById("prjNoticeTitle"),
     prjNoticeLead: document.getElementById("prjNoticeLead"),
     prjNoticeAction: document.getElementById("prjNoticeAction"),
+    skillsView: document.getElementById("skillsView"),
+    sklUpdated: document.getElementById("sklUpdated"),
+    sklToolbar: document.getElementById("sklToolbar"),
+    sklSearchInput: document.getElementById("sklSearchInput"),
+    sklSearchClear: document.getElementById("sklSearchClear"),
+    sklProjectButton: document.getElementById("sklProjectButton"),
+    sklProjectValue: document.getElementById("sklProjectValue"),
+    sklProjectPopover: document.getElementById("sklProjectPopover"),
+    sklSortButton: document.getElementById("sklSortButton"),
+    sklSortValue: document.getElementById("sklSortValue"),
+    sklSortPopover: document.getElementById("sklSortPopover"),
+    sklRangeButtons: Array.from(document.querySelectorAll("[data-skill-range]")),
+    sklStats: document.getElementById("sklStats"),
+    sklCard: document.getElementById("sklCard"),
+    sklSegButtons: Array.from(document.querySelectorAll("[data-skill-status]")),
+    sklBanner: document.getElementById("sklBanner"),
+    sklListHead: document.getElementById("sklListHead"),
+    sklColThird: document.getElementById("sklColThird"),
+    sklColFourth: document.getElementById("sklColFourth"),
+    sklList: document.getElementById("sklList"),
+    sklEmpty: document.getElementById("sklEmpty"),
+    sklEmptyIcon: document.getElementById("sklEmptyIcon"),
+    sklEmptyTitle: document.getElementById("sklEmptyTitle"),
+    sklEmptyLead: document.getElementById("sklEmptyLead"),
+    sklEmptyAction: document.getElementById("sklEmptyAction"),
+    sklFoot: document.getElementById("sklFoot"),
+    sklCount: document.getElementById("sklCount"),
+    sklLoadMore: document.getElementById("sklLoadMore"),
+    sklNotice: document.getElementById("sklNotice"),
+    sklNoticeIcon: document.getElementById("sklNoticeIcon"),
+    sklNoticeTitle: document.getElementById("sklNoticeTitle"),
+    sklNoticeLead: document.getElementById("sklNoticeLead"),
+    sklNoticeAction: document.getElementById("sklNoticeAction"),
+    sklConfirm: document.getElementById("sklConfirm"),
+    sklConfirmText: document.getElementById("sklConfirmText"),
+    sklConfirmGo: document.getElementById("sklConfirmGo"),
+    sklDrawerFoot: null,
   };
 
   // Background picker state. The popover lives outside the polled views, so a refresh never touches it.
@@ -1072,6 +1145,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.dailyDigestsCount.textContent = String(stats.dailyDigests || 0);
     renderPolicyCard("read", !!policy.readEnabled);
     renderPolicyCard("write", !!policy.writeEnabled);
+    renderSkillWriteState();
     els.statusText.textContent = state.isSavingPolicy
       ? t("status.policySaving", { summary: getPolicySummary(policy) })
       : getPolicySummary(policy);
@@ -3527,7 +3601,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   // Open with a memory (id), a Pipeline task body (task alone) or a digest body (digest alone).
   function isMemoryDrawerOpen() {
-    return !!(state.drawer.id || state.drawer.task || state.drawer.digest || state.drawer.project);
+    return !!(state.drawer.id || state.drawer.task || state.drawer.digest || state.drawer.project || state.drawer.skill);
   }
 
   // The drawer markup lives in Activity. It moves into the view that opens it, so its blur only runs inside the
@@ -3535,7 +3609,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // list only at 1440px and wider; below that they use the same modal sheet, scrim and focus handling as Activity.
   function memoryDrawerIsDocked(host) {
     const query = window.matchMedia ? window.matchMedia("(min-width: 1440px)") : null;
-    return (host === "memoryView" || host === "pipelineView" || host === "digestsView" || host === "projectsView") && !!(query && query.matches);
+    return (host === "memoryView" || host === "pipelineView" || host === "digestsView" || host === "projectsView" || host === "skillsView") && !!(query && query.matches);
   }
 
   function mountMemoryDrawer(host) {
@@ -3575,6 +3649,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     state.projects.rowNodes.forEach((entry, key) => {
       entry.node.classList.toggle("is-open", key === project);
       setAttr(entry.node, "aria-expanded", key === project ? "true" : "false");
+    });
+    const skill = state.drawer.host === "skillsView" ? state.drawer.skill : "";
+    state.skills.rowNodes.forEach((entry, key) => {
+      entry.node.classList.toggle("is-open", key === skill);
+      setAttr(entry.node, "aria-expanded", key === skill ? "true" : "false");
     });
   }
 
@@ -3698,6 +3777,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.project = "";
     drawer.projectPayload = null;
     drawer.projectError = "";
+    drawer.skill = "";
+    drawer.skillPayload = null;
+    drawer.skillError = "";
+    drawer.skillItem = null;
     drawer.payload = null;
     drawer.error = "";
     drawer.missing = false;
@@ -3705,6 +3788,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     drawer.copied = false;
     drawer.seq += 1;
     drawer.returnFocus = null;
+    setSkillConfirm(null);
     renderMemoryDrawer();
     markOpenMemory();
     drawer.host = "";
@@ -3721,20 +3805,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const pipeline = state.drawer.host === "pipelineView";
     const digests = state.drawer.host === "digestsView";
     const projects = state.drawer.host === "projectsView";
-    if (!memoryDrawerIsDocked(state.drawer.host) || !isMemoryDrawerOpen() || !(projects ? els.prjStats : digests ? els.digCards : pipeline ? els.pipelineFlowRow : els.memorySummary)) {
+    const skills = state.drawer.host === "skillsView";
+    if (!memoryDrawerIsDocked(state.drawer.host) || !isMemoryDrawerOpen() || !(skills ? els.sklStats : projects ? els.prjStats : digests ? els.digCards : pipeline ? els.pipelineFlowRow : els.memorySummary)) {
       if (drawerEl.style.top) drawerEl.style.top = "";
       return;
     }
-    // On Digests the docked sheet lines up with the first day card, under the two status cards; on Projects with
-    // the list card, under the summary tiles.
-    const anchor = projects
+    // On Digests the docked sheet lines up with the first day card, under the two status cards; on Projects and
+    // Skills with the list card, under the summary tiles.
+    const anchor = skills
+      ? (els.sklStats.hidden ? els.sklToolbar : els.sklStats)
+      : projects
       ? (els.prjStats.hidden ? els.prjToolbar : els.prjStats)
       : digests
       ? (els.digCards.hidden ? els.digToolbar : els.digCards)
       : pipeline
         ? (els.pipelineFlowRow.hidden ? els.pipelineToolbar : els.pipelineFlowRow)
         : (els.memorySummary.hidden ? els.memoryToolbar : els.memorySummary);
-    const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + (digests || projects ? 16 : 10))) + "px";
+    const next = Math.round(Math.max(16, anchor.getBoundingClientRect().bottom + (digests || projects || skills ? 16 : 10))) + "px";
     if (drawerEl.style.top !== next) drawerEl.style.top = next;
   }
 
@@ -3751,12 +3838,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // A project copies its display name and key, never its path.
   function copyMemoryId() {
     const drawer = state.drawer;
-    const id = drawer.id || drawer.task || drawer.digest || drawer.project;
+    // A skill copies its name and id, never its path.
+    const skill = drawer.host === "skillsView" && drawer.skill ? skillDrawerItem() : null;
+    const id = skill ? drawer.skill : drawer.id || drawer.task || drawer.digest || drawer.project;
     if (!id || !navigator.clipboard) return;
-    const project = !drawer.id && !drawer.task && !drawer.digest ? projectDrawerItem() : null;
-    const text = project ? String(project.display_name || "") + " · " + id : id;
+    const project = !skill && !drawer.id && !drawer.task && !drawer.digest ? projectDrawerItem() : null;
+    const text = skill ? String(skill.name || "").trim() + " · " + id : project ? String(project.display_name || "") + " · " + id : id;
     navigator.clipboard.writeText(text).then(() => {
-      if ((drawer.id || drawer.task || drawer.digest || drawer.project) !== id) return;
+      if ((skill ? drawer.skill : drawer.id || drawer.task || drawer.digest || drawer.project) !== id) return;
       drawer.copied = true;
       renderMemoryDrawerCopy();
       window.setTimeout(() => {
@@ -3769,7 +3858,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function renderMemoryDrawerCopy() {
     const button = els.memoryDrawerCopy;
     if (!button) return;
-    const label = t(state.drawer.copied ? "memory.drawerCopied" : !state.drawer.id && state.drawer.project ? "projects.drawerCopy" : !state.drawer.id && state.drawer.digest ? "digests.drawerCopyId" : state.drawer.id || !state.drawer.task ? "memory.drawerCopyId" : "pipeline.drawerCopyId");
+    const label = t(state.drawer.copied ? "memory.drawerCopied" : state.drawer.host === "skillsView" && state.drawer.skill ? "skills.drawerCopy" : !state.drawer.id && state.drawer.project ? "projects.drawerCopy" : !state.drawer.id && state.drawer.digest ? "digests.drawerCopyId" : state.drawer.id || !state.drawer.task ? "memory.drawerCopyId" : "pipeline.drawerCopyId");
     setAttr(button, "title", label);
     setAttr(button, "aria-label", label);
     button.classList.toggle("is-done", !!state.drawer.copied);
@@ -3994,10 +4083,15 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const drawer = state.drawer;
     const open = isMemoryDrawerOpen();
     // A digest without a source memory on show renders the digest body; a Pipeline task the task body.
-    const digestMode = open && !drawer.id && !!drawer.digest;
-    const projectMode = open && !drawer.id && !drawer.digest && !!drawer.project;
-    const taskMode = open && !drawer.id && !drawer.digest && !drawer.project;
+    // A skill opened from Skills renders the skill body and its action bar.
+    const skillMode = open && drawer.host === "skillsView" && !!drawer.skill;
+    const digestMode = open && !skillMode && !drawer.id && !!drawer.digest;
+    const projectMode = open && !skillMode && !drawer.id && !drawer.digest && !!drawer.project;
+    const taskMode = open && !skillMode && !drawer.id && !drawer.digest && !drawer.project;
     setHidden(drawerEl, !open);
+    if (els.skillsView) els.skillsView.classList.toggle("is-drawer-open", open && drawer.host === "skillsView");
+    drawerEl.classList.toggle("is-skill", skillMode);
+    if (els.sklDrawerFoot) setHidden(els.sklDrawerFoot, !skillMode);
     setHidden(els.memoryDrawerCopy, !!drawer.readsDisabled);
     // Activity's sheet is always modal over the scrim. Memory and Pipeline hide the scrim only while docked (1440px
     // and wider). is-drawer-open stays on for them so the wide-viewport CSS can reserve list space; that reserve is
@@ -4016,7 +4110,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const digestItem = drawer.digest ? findDigestItem(drawer.digest) : null;
     const signature = [state.locale, drawer.id, drawer.task, drawer.host, drawer.error, drawer.readsDisabled, JSON.stringify(drawer.payload), drawer.payload ? "" : JSON.stringify(card), drawer.task ? JSON.stringify(drawer.taskItem) : "",
       drawer.digest, drawer.digestError, drawer.digestFactsOpen, drawer.digestSourcesOpen, digestMode ? JSON.stringify(drawer.digestPayload) + JSON.stringify(digestItem) : "",
-      drawer.project, drawer.projectError, drawer.projectContextOpen, drawer.projectFactsOpen, projectMode ? JSON.stringify(drawer.projectPayload) + JSON.stringify(projectDrawerItem()) : ""].join("|");
+      drawer.project, drawer.projectError, drawer.projectContextOpen, drawer.projectFactsOpen, projectMode ? JSON.stringify(drawer.projectPayload) + JSON.stringify(projectDrawerItem()) : "",
+      drawer.skill, drawer.skillError, skillMode ? skillDrawerSignature() : ""].join("|");
     if (drawer.signature === signature) return;
     drawer.signature = signature;
     renderMemoryDrawerCopy();
@@ -4025,6 +4120,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       els.activityDrawerSub.innerHTML = "";
       els.activityDrawerBody.innerHTML = "";
       setText(els.activityDrawerTitle, "");
+      return;
+    }
+    if (skillMode) {
+      renderSkillDrawer();
       return;
     }
     if (digestMode) {
@@ -4199,7 +4298,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (memoryDrawerDockQuery && memoryDrawerDockQuery.addEventListener) {
       memoryDrawerDockQuery.addEventListener("change", () => {
         // Projects docks like Digests.
-        if (isMemoryDrawerOpen() && state.drawer.host === "projectsView") {
+        if (isMemoryDrawerOpen() && (state.drawer.host === "projectsView" || state.drawer.host === "skillsView")) {
           redockMemoryDrawer();
           return;
         }
@@ -7168,6 +7267,1225 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }, { passive: true });
   }
 
+  // ---------- Skills ----------
+
+  const SKILL_PAGE = 50;
+  const SKILL_RANGES = [7, 30, 90];
+  const SKILL_STATUSES = ["candidate", "active", "disabled", "retired"];
+  const SKILL_SORTS = [["recent", "skills.sortRecent"], ["matches", "skills.sortMatches"], ["name", "skills.sortName"]];
+  const SKILL_OUTCOMES = [["success", "skills.outcomeSuccess"], ["failure", "skills.outcomeFailure"], ["rejected", "skills.outcomeRejected"], ["skipped", "skills.outcomeSkipped"]];
+  // Status writes: the stored status each action sends and the note it leaves on the row and in the drawer.
+  const SKILL_STATUS_WRITES = { enable: ["enabled", "skills.noteEnabled"], reenable: ["enabled", "skills.noteEnabled"], disable: ["disabled", "skills.noteDisabled"], retire: ["retired", "skills.noteRetired"] };
+  const SKILL_NOUNS = { candidate: "Candidate", active: "Active", disabled: "Disabled", retired: "Retired" };
+  const SKILL_LIST_REFRESH_MS = 2 * 60 * 1000;
+  const SKILL_SEARCH_DEBOUNCE_MS = 250;
+  const SKILL_SEGMENT_STORAGE_KEY = "agentmemory.admin.skillsSegment";
+  const SKILL_SKELETON_ROW = '<div class="memRow sklRow is-skeleton" aria-hidden="true"><span class="sklIcon"></span><span class="prjMain"><span class="actSkel is-mid"></span><span class="actSkel is-short"></span></span></div>';
+
+  function findSkillItem(id) {
+    return state.skills.items.find((item) => String(item.id) === id) || null;
+  }
+
+  // The skill on show in the drawer: the detail once it arrives, else the list row, else the copy taken on open
+  // (a promoted candidate's id disappears from the list, so its last copy keeps the header).
+  function skillDrawerItem() {
+    const drawer = state.drawer;
+    if (!drawer.skill) return null;
+    if (drawer.skillPayload && drawer.skillPayload.skill) return drawer.skillPayload.skill;
+    return findSkillItem(drawer.skill) || drawer.skillItem;
+  }
+
+  // pending: a digest candidate not promoted yet; draft: promoted (stored draft) but not enabled, so not matching.
+  function skillVariant(item) {
+    if (!item || item.kind === "digest_candidate") return "pending";
+    if (item.status === "active" || item.status === "disabled" || item.status === "retired") return item.status;
+    return "draft";
+  }
+
+  function skillSort() {
+    const skl = state.skills;
+    return skl.sort || (skl.status === "candidate" ? "recent" : "matches");
+  }
+
+  function skillsKey() {
+    const skl = state.skills;
+    return JSON.stringify([skl.q.trim().toLowerCase(), skl.project, skl.status, skillSort(), skl.days]);
+  }
+
+  function skillsUrl(cursor) {
+    const skl = state.skills;
+    const params = new URLSearchParams({
+      status: skl.status,
+      days: String(skl.days),
+      sort: skillSort(),
+      limit: String(SKILL_PAGE),
+      tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+    });
+    if (skl.project) params.set("project", skl.project);
+    const q = skl.q.trim();
+    if (q) params.set("q", q);
+    if (cursor) params.set("cursor", cursor);
+    return "/admin/api/skills-summary?" + params.toString();
+  }
+
+  function skillWritesOff() {
+    return !getDisplayedPolicy().writeEnabled;
+  }
+
+  function readSkillSegment() {
+    try {
+      const value = window.sessionStorage.getItem(SKILL_SEGMENT_STORAGE_KEY);
+      return SKILL_STATUSES.indexOf(value) >= 0 ? value : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function writeSkillSegment(value) {
+    try {
+      window.sessionStorage.setItem(SKILL_SEGMENT_STORAGE_KEY, value);
+    } catch (_error) {
+      // Session storage is optional.
+    }
+  }
+
+  // mode: "reset" loads page 1 of the current segment and filters, "more" appends the page after next_cursor. Only
+  // the newest request may write state; a 400 on a cursor means it went stale, so page 1 loads again.
+  async function loadSkills(mode) {
+    const skl = state.skills;
+    const key = skillsKey();
+    if (skl.readsDisabled || key !== skl.key) mode = "reset";
+    if (mode === "more" && (!skl.nextCursor || skl.moreSeq)) return;
+    const seq = skl.seq + 1;
+    skl.seq = seq;
+    const cursor = mode === "more" ? skl.nextCursor : null;
+    if (mode === "reset") {
+      skl.key = key;
+      skl.error = "";
+      skl.errorStatus = 0;
+      skl.stale = true;
+      skl.busySeq = seq;
+      skl.moreSeq = 0;
+      skl.nextCursor = null;
+    } else {
+      skl.moreSeq = seq;
+    }
+    renderSkills();
+    try {
+      const payload = await fetchJson(skillsUrl(cursor));
+      if (seq !== skl.seq) return;
+      if (payload.disabled || payload.status === "reads_disabled") {
+        applyReadPolicyToViews({ readEnabled: false });
+        return;
+      }
+      skl.readsDisabled = false;
+      const incoming = Array.isArray(payload.items) ? payload.items.filter((item) => item && item.id !== null && item.id !== undefined) : [];
+      if (mode === "more") {
+        const seen = new Set(skl.items.map((item) => String(item.id)));
+        skl.items = skl.items.concat(incoming.filter((item) => !seen.has(String(item.id))));
+      } else {
+        skl.items = incoming;
+        skl.summary = payload.summary || null;
+      }
+      skl.nextCursor = payload.next_cursor || null;
+      skl.loaded = true;
+      skl.loadedAt = Date.now();
+      skl.error = "";
+      skl.errorStatus = 0;
+      // First visit without a remembered segment: Candidates while nothing is active, otherwise Active.
+      if (mode === "reset" && !skl.statusChosen) {
+        skl.statusChosen = true;
+        if (skl.summary && Number(skl.summary.active || 0) > 0 && skl.status !== "active") {
+          skl.status = "active";
+          skl.items = [];
+          void loadSkills("reset");
+          return;
+        }
+      }
+    } catch (error) {
+      if (seq !== skl.seq) return;
+      if (mode === "more" && error && error.status === 400 && /cursor/i.test(String(error.message || ""))) {
+        skl.moreSeq = 0;
+        void loadSkills("reset");
+        return;
+      }
+      if (mode === "reset") {
+        skl.items = [];
+        skl.summary = null;
+        skl.loaded = false;
+        skl.errorStatus = error instanceof SyntaxError ? 404 : (error && error.status) || 0;
+        skl.error = (error && error.message) || t("skills.errorTitle");
+      }
+    } finally {
+      if (skl.busySeq === seq) skl.busySeq = 0;
+      if (skl.moreSeq === seq) skl.moreSeq = 0;
+      if (seq === skl.seq) {
+        skl.stale = false;
+        renderSkills();
+      }
+    }
+  }
+
+  // Project picker options: key and display name only.
+  async function loadSkillProjects() {
+    const skl = state.skills;
+    skl.projectsAt = Date.now();
+    try {
+      const payload = await fetchJson("/admin/api/project-list?limit=200");
+      if (payload.disabled || payload.status === "reads_disabled") return;
+      skl.projects = (Array.isArray(payload.items) ? payload.items : []).filter((item) => item && item.project_key)
+        .map((item) => ({ key: String(item.project_key), name: String(item.display_name || item.project_key) }));
+      renderSkills();
+    } catch (_error) {
+      skl.projectsAt = 0;
+    }
+  }
+
+  function setSkillFilters(patch) {
+    const skl = state.skills;
+    skl.banner = "";
+    const daysChanged = Object.prototype.hasOwnProperty.call(patch, "days") && Number(patch.days) !== skl.days;
+    const openId = state.drawer.host === "skillsView" ? state.drawer.skill : "";
+    Object.assign(skl, patch);
+    void loadSkills("reset");
+    if (daysChanged && openId) void openSkillDrawer(openId, null);
+  }
+
+  // A segment the user picks is remembered for the session. The list clears to skeleton rows so the previous
+  // segment's rows never sit under the new column set.
+  function setSkillStatus(status) {
+    const skl = state.skills;
+    if (SKILL_STATUSES.indexOf(status) < 0) return;
+    skl.statusChosen = true;
+    writeSkillSegment(status);
+    if (status === skl.status) return;
+    skl.items = [];
+    skl.nextCursor = null;
+    setSkillFilters({ status });
+  }
+
+  function applySkillSearch(value) {
+    const skl = state.skills;
+    window.clearTimeout(skl.searchTimer);
+    const q = String(value || "").slice(0, 200);
+    if (q.trim() === skl.q.trim()) {
+      skl.q = q;
+      return;
+    }
+    setSkillFilters({ q });
+  }
+
+  function skillPlural(key, count) {
+    return t(Number(count) === 1 ? key + "One" : key, { n: formatCount(count) });
+  }
+
+  function skillSegmentTotal(status) {
+    const summary = state.skills.summary;
+    if (!summary) return null;
+    return Number((status === "candidate" ? summary.candidates : summary[status]) || 0);
+  }
+
+  // "last matched 2h ago"; relative words that open a sentence in English drop their capital mid-phrase.
+  function skillMatchedAgo(value) {
+    const ago = projectAgo(value);
+    return state.locale === "en" && /^(Just|Yesterday)/.test(ago) ? ago.charAt(0).toLowerCase() + ago.slice(1) : ago;
+  }
+
+  // "Oct 23 digest", "Manual", or "Digest removed" once the digest row is gone.
+  function skillSource(item) {
+    if (item.source === "manual") return { text: t("skills.sourceManual"), drawer: t("skills.drawerFromManual"), removed: false };
+    const day = item.source_digest && item.source_digest.covered_day ? parseLocalDay(item.source_digest.covered_day) : null;
+    if (day) return { text: t("skills.sourceDigest", { day: formatShortDate(day) }), drawer: t("skills.drawerFrom", { day: formatShortDate(day) }), removed: false };
+    return { text: t("skills.sourceRemoved"), drawer: t("skills.drawerFromRemoved"), removed: true };
+  }
+
+  // Sparkle for candidates and drafts, a star once enabled. Always the family's blue, or neutral when not matching.
+  function renderSkillIcon(item, className) {
+    const variant = skillVariant(item);
+    return '<span class="' + className + ' is-' + variant + '" aria-hidden="true">' + svgIcon(variant === "pending" || variant === "draft" ? "sparkle" : "star", "sklIconGlyph") + '</span>';
+  }
+
+  function renderSkillChip(variant) {
+    const chips = { pending: ["is-warn", "skills.chipCandidate"], draft: ["is-draft", "skills.chipDraft"], active: ["is-ok", "skills.chipActive"], disabled: ["is-muted", "skills.chipDisabled"], retired: ["is-muted", "skills.chipRetired"] };
+    const chip = chips[variant] || chips.pending;
+    return '<span class="digChip sklChip ' + chip[0] + '"><span class="digChipDot" aria-hidden="true"></span>' + escapeHtml(t(chip[1])) + '</span>';
+  }
+
+  function skillWritePending() {
+    const pending = state.skills.pending || {};
+    return Object.keys(pending).some((key) => pending[key]);
+  }
+
+  // One write button. While writes are off, or any write is in flight, it stays visible but inert.
+  function renderSkillActionButton(id, action, tone, labelKey) {
+    const skl = state.skills;
+    const busy = skl.pending[id] === action;
+    const off = skillWritesOff();
+    const promoted = action === "promote" && !!(skl.promoted || {})[id];
+    const inert = off || skillWritePending() || promoted;
+    const label = busy ? t("skills.actionWorking") : t(labelKey || "skills.action" + action.charAt(0).toUpperCase() + action.slice(1));
+    return '<button class="sklAction ' + tone + '" type="button" data-skill-action="' + action + '" data-skill-target="' + escapeHtml(id) + '"' +
+      (busy ? ' aria-busy="true"' : '') + (inert ? ' aria-disabled="true"' : '') + (off ? ' title="' + escapeHtml(t("skills.writesOffTitle")) + '"' : '') + '>' + escapeHtml(label) + '</button>';
+  }
+
+  // The row's one action: Promote, Enable (a draft or a disabled skill), Re-enable, or a quiet Disable for active.
+  function renderSkillRowAction(item) {
+    const variant = skillVariant(item);
+    const id = String(item.id);
+    const action = variant === "pending" ? "promote" : variant === "retired" ? "reenable" : variant === "active" ? "disable" : "enable";
+    return '<span class="sklActions">' + renderSkillActionButton(id, action, variant === "active" ? "is-quiet" : "is-outline") + '</span>';
+  }
+
+  // Fourteen hairline bars for an active row; a day without matches keeps a dot-high stub.
+  function renderSkillSpark(days) {
+    const list = Array.isArray(days) ? days.slice(-14) : [];
+    const max = list.reduce((top, day) => Math.max(top, Number(day && day.matches || 0)), 0);
+    return '<span class="sklSpark' + (max ? '' : ' is-empty') + '" role="img" aria-label="' + escapeHtml(t("skills.sparkLabel")) + '">' + list.map((day) => {
+      const count = Number(day && day.matches || 0);
+      const height = count > 0 && max > 0 ? Math.max(22, Math.round((count / max) * 100)) : 0;
+      return '<span class="sklSparkBar' + (count ? '' : ' is-zero') + '"' + (height ? ' style="height: ' + height + '%"' : '') + '></span>';
+    }).join("") + '</span>';
+  }
+
+  function renderSkillVotes(item, className) {
+    const up = Number(item.feedback_up || 0);
+    const down = Number(item.feedback_down || 0);
+    return '<span class="' + className + '" title="' + escapeHtml(t("skills.feedbackTitle", { up: formatCount(up), down: formatCount(down) })) + '">' +
+      '<span class="sklVote' + (up ? '' : ' is-zero') + '">' + svgIcon("thumbUp", "sklVoteIcon") + '<span>' + escapeHtml(formatCount(up)) + '</span></span>' +
+      '<span class="sklVote' + (down ? '' : ' is-zero') + '">' + svgIcon("thumbDown", "sklVoteIcon") + '<span>' + escapeHtml(formatCount(down)) + '</span></span></span>';
+  }
+
+  // mode "source" (Candidates: source and steps) or "matches" (Active, Disabled, Retired: matches and feedback).
+  function renderSkillRowBody(item, mode) {
+    const variant = skillVariant(item);
+    const note = state.skills.notes[String(item.id)];
+    const name = String(item.name || "").trim() || "—";
+    const summary = String(item.summary || "").trim();
+    const project = String(item.display_name || "").trim();
+    const sub = note
+      ? '<span class="sklRowNote is-' + note.tone + '">' + escapeHtml(note.text) + '</span>'
+      : summary ? '<span class="sklSummary" title="' + escapeHtml(summary) + '">' + escapeHtml(summary) + '</span>' : '';
+    let html = renderSkillIcon(item, "sklIcon") +
+      '<span class="prjMain sklMain"><span class="sklNameLine"><span class="prjName sklName" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</span>' +
+        (variant === "draft" ? renderSkillChip("draft") : '') + '</span>' + sub + '</span>' +
+      '<span class="sklProject">' + (project ? '<span class="prjChip sklProjectChip" title="' + escapeHtml(project) + '"><span class="prjChipName">' + escapeHtml(project) + '</span></span>' : '<span class="prjDash">—</span>') + '</span>';
+    if (mode === "matches") {
+      const matches = Number(item.match_count_in_range || 0);
+      const last = parseTimestamp(item.last_matched_at);
+      html += '<span class="sklMatches"><span class="sklMatchLine"><span class="sklMatchNum' + (matches ? '' : ' is-zero') + '">' + escapeHtml(formatCount(matches)) + '</span>' + renderSkillSpark(item.days) + '</span>' +
+        '<span class="sklMatchWhen">' + escapeHtml(last ? t("skills.lastMatched", { time: skillMatchedAgo(item.last_matched_at) }) : t("skills.neverMatched")) + '</span></span>' +
+        renderSkillVotes(item, "sklFeedback");
+    } else {
+      const source = skillSource(item);
+      const steps = Number(item.steps_count || 0);
+      html += '<span class="sklSource' + (source.removed ? ' is-removed' : '') + '"' + (source.removed ? ' title="' + escapeHtml(t("skills.sourceRemovedTitle")) + '"' : '') + '>' + escapeHtml(source.text) + '</span>' +
+        '<span class="sklSteps' + (steps ? '' : ' is-zero') + '" title="' + escapeHtml(t("skills.stepsTitle", { n: formatCount(steps) })) + '">' + escapeHtml(formatCount(steps)) + '</span>';
+    }
+    return html + renderSkillRowAction(item);
+  }
+
+  // Keyed reconcile, as on Projects: one node per skill id, rewritten only when what it shows changes.
+  function syncSkillRows(container, items, mode) {
+    const skl = state.skills;
+    const nodes = skl.rowNodes;
+    const open = state.drawer.host === "skillsView" ? state.drawer.skill : "";
+    const off = skillWritesOff();
+    let cursor = container.firstElementChild;
+    items.forEach((item) => {
+      const id = String(item.id);
+      let entry = nodes.get(id);
+      if (!entry) {
+        const node = document.createElement("article");
+        node.setAttribute("data-skill-id", id);
+        node.setAttribute("tabindex", "0");
+        node.setAttribute("aria-haspopup", "dialog");
+        entry = { node, signature: "" };
+        nodes.set(id, entry);
+      }
+      setClass(entry.node, "memRow sklRow is-" + skillVariant(item) + (open === id ? " is-open" : ""));
+      setAttr(entry.node, "aria-expanded", open === id ? "true" : "false");
+      const signature = [state.locale, skl.days, mode, off, skillWritePending(), skl.pending[id] || "", JSON.stringify(skl.notes[id] || null), JSON.stringify(item)].join("|");
+      if (entry.signature !== signature) {
+        entry.signature = signature;
+        entry.node.innerHTML = renderSkillRowBody(item, mode);
+      }
+      if (entry.node === cursor) {
+        cursor = cursor.nextElementSibling;
+      } else {
+        container.insertBefore(entry.node, cursor);
+      }
+    });
+    while (cursor) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+    const visible = new Set(items.map((item) => String(item.id)));
+    nodes.forEach((_entry, id) => {
+      if (!visible.has(id)) nodes.delete(id);
+    });
+  }
+
+  // Board-level states replace the card: reads off, a failed or missing route, and a workspace with nothing at all.
+  function renderSkillNotice() {
+    const skl = state.skills;
+    const summary = skl.summary;
+    const nothing = !!summary && skl.loaded && !skl.stale && !skl.items.length && !skl.q.trim() &&
+      ["active", "candidates", "disabled", "retired"].every((field) => !Number(summary[field] || 0));
+    let notice = null;
+    if (skl.readsDisabled) {
+      notice = { tone: "", icon: "pause", title: t("skills.readsDisabledTitle"), lead: t("skills.readsDisabledLead"), action: null };
+    } else if (!skl.loaded && skl.error) {
+      notice = skl.errorStatus === 404
+        ? { tone: "", icon: "sparkle", title: t("skills.unavailableTitle"), lead: t("skills.unavailableLead"), action: ["retry", t("skills.retry")] }
+        : { tone: " is-error", icon: "warning", title: t("skills.errorTitle"), lead: t("skills.errorLead"), action: ["retry", t("skills.retry")] };
+    } else if (nothing) {
+      notice = { tone: " is-quiet", icon: "sparkle", title: t("skills.emptyAllTitle"), lead: t("skills.emptyAllLead"), action: null };
+    }
+    setHidden(els.sklNotice, !notice);
+    if (notice) {
+      setClass(els.sklNotice, "actNotice memNotice sklNotice digGlass glassCard glassBlur" + notice.tone);
+      if (skl.signatures.noticeIcon !== notice.icon) {
+        skl.signatures.noticeIcon = notice.icon;
+        els.sklNoticeIcon.innerHTML = svgIcon(notice.icon, "placeholderGlyph");
+      }
+      setText(els.sklNoticeTitle, notice.title);
+      setText(els.sklNoticeLead, notice.lead);
+      setHidden(els.sklNoticeAction, !notice.action);
+      setAttr(els.sklNoticeAction, "data-skill-notice", notice.action ? notice.action[0] : null);
+      setText(els.sklNoticeAction, notice.action ? notice.action[1] : "");
+    }
+    return !!notice;
+  }
+
+  // An empty segment inside the card. Active gets a real invitation; Disabled, Retired and Candidates one quiet line.
+  function renderSkillEmpty(show) {
+    const skl = state.skills;
+    let spec = null;
+    if (show) {
+      const q = skl.q.trim();
+      if (q) spec = { icon: "search", title: t("skills.noMatchTitle", { q }), lead: t("skills.noMatchLead"), action: ["clear", t("skills.clearSearch")], quiet: false };
+      else if (skl.status === "active") spec = { icon: "star", title: t("skills.emptyActiveTitle"), lead: t("skills.emptyActiveLead"), action: ["candidates", t("skills.emptyActiveAction")], quiet: false };
+      else spec = { icon: skl.status === "candidate" ? "sparkle" : "minus", title: t(skl.status === "candidate" ? "skills.emptyCandidates" : skl.status === "disabled" ? "skills.emptyDisabled" : "skills.emptyRetired"), lead: "", action: null, quiet: true };
+    }
+    setHidden(els.sklEmpty, !spec);
+    if (!spec) return;
+    setClass(els.sklEmpty, "sklEmpty" + (spec.quiet ? " is-quiet" : ""));
+    if (skl.signatures.emptyIcon !== spec.icon) {
+      skl.signatures.emptyIcon = spec.icon;
+      els.sklEmptyIcon.innerHTML = svgIcon(spec.icon, "sklEmptyGlyph");
+    }
+    setText(els.sklEmptyTitle, spec.title);
+    setHidden(els.sklEmptyLead, !spec.lead);
+    setText(els.sklEmptyLead, spec.lead);
+    setHidden(els.sklEmptyAction, !spec.action);
+    setAttr(els.sklEmptyAction, "data-skill-empty", spec.action ? spec.action[0] : null);
+    setText(els.sklEmptyAction, spec.action ? spec.action[1] : "");
+  }
+
+  function renderSkillList() {
+    const skl = state.skills;
+    const list = els.sklList;
+    if (skl.readsDisabled && list.firstChild && !list.querySelector(".is-skeleton")) {
+      list.innerHTML = "";
+      skl.rowNodes.clear();
+    }
+    const noticed = renderSkillNotice();
+    setHidden(els.sklCard, noticed);
+    const mode = skl.status === "candidate" ? "source" : "matches";
+    setAttr(els.sklCard, "data-skill-mode", mode);
+    const third = mode === "source" ? "skills.colSource" : "skills.colMatches";
+    const fourth = mode === "source" ? "skills.colSteps" : "skills.colFeedback";
+    setAttr(els.sklColThird, "data-i18n", third);
+    setText(els.sklColThird, t(third));
+    setAttr(els.sklColFourth, "data-i18n", fourth);
+    setText(els.sklColFourth, t(fourth));
+    setAttr(list, "aria-busy", skl.stale || !skl.loaded ? "true" : "false");
+    list.classList.toggle("is-stale", skl.stale && skl.items.length > 0);
+    const empty = !noticed && skl.loaded && !skl.stale && !skl.items.length;
+    renderSkillEmpty(empty);
+    setHidden(els.sklListHead, empty);
+    setHidden(list, empty);
+    const total = skillSegmentTotal(skl.status);
+    const noun = SKILL_NOUNS[skl.status] || "Candidate";
+    const count = skl.items.length;
+    const countText = !count ? ""
+      : !skl.nextCursor ? skillPlural("skills.count" + noun, count)
+        : skl.q.trim() || total === null ? t("skills.countLoaded", { n: formatCount(count) })
+          : t("skills.countOf" + noun, { n: formatCount(count), total: formatCount(total) });
+    setHidden(els.sklFoot, noticed || empty || !count);
+    setText(els.sklCount, countText);
+    setHidden(els.sklLoadMore, noticed || !skl.nextCursor);
+    setText(els.sklLoadMore, t(skl.moreSeq ? "skills.loadingMore" : "skills.loadMore"));
+    setAttr(els.sklLoadMore, "aria-busy", skl.moreSeq ? "true" : null);
+    if (noticed) return;
+    if (empty) {
+      if (list.firstChild) list.innerHTML = "";
+      skl.rowNodes.clear();
+      return;
+    }
+    if (!count) {
+      if (!list.querySelector(".is-skeleton")) {
+        list.innerHTML = SKILL_SKELETON_ROW + SKILL_SKELETON_ROW + SKILL_SKELETON_ROW;
+        skl.rowNodes.clear();
+      }
+      return;
+    }
+    list.querySelectorAll(".is-skeleton").forEach((node) => node.remove());
+    syncSkillRows(list, skl.items, mode);
+  }
+
+  // Tiles: Active, Candidates, Matches and Hit rate, all from the summary (it ignores status and q). Zeros stay calm;
+  // a workspace with no active skill says how to start, and a null hit rate reads "--" with why.
+  function renderSkillStats() {
+    const skl = state.skills;
+    setHidden(els.sklStats, !!skl.readsDisabled || (!skl.loaded && !!skl.error));
+    const summary = skl.loaded ? skl.summary || {} : null;
+    const tile = (id, value) => {
+      const valueEl = document.getElementById(id + "Value");
+      setText(valueEl, value === null ? "—" : formatCount(value));
+      if (valueEl) valueEl.classList.toggle("is-zero", !value);
+    };
+    const sub = (id, text) => {
+      const el = document.getElementById(id + "Sub");
+      setHidden(el, !text);
+      setText(el, text || "");
+    };
+    const active = summary ? Number(summary.active || 0) : null;
+    tile("sklStatActive", active);
+    sub("sklStatActive", active === 0 ? t("skills.statActiveNote") : "");
+    tile("sklStatCandidates", summary ? Number(summary.candidates || 0) : null);
+    setText(document.getElementById("sklStatMatchesLabel"), t("skills.statMatches", { n: formatCount(skl.days) }));
+    tile("sklStatMatches", summary ? Number(summary.matches_in_range || 0) : null);
+    const rate = summary && summary.hit_rate !== null && summary.hit_rate !== undefined && isFinite(Number(summary.hit_rate)) ? Number(summary.hit_rate) : null;
+    const rateEl = document.getElementById("sklStatHitRateValue");
+    setText(rateEl, !summary ? "—" : rate === null ? "--" : Math.round(rate * 100) + "%");
+    if (rateEl) rateEl.classList.toggle("is-zero", !rate);
+    sub("sklStatHitRate", !summary ? "" : rate === null ? t("skills.statHitRateNone", { n: formatCount(skl.days) })
+      : t("skills.statHitRateOf", { hits: formatCount(summary.reviews_with_match_in_range || 0), n: formatCount(summary.reviews_in_range || 0) }));
+  }
+
+  function renderSkillSegments() {
+    const skl = state.skills;
+    els.sklSegButtons.forEach((button) => {
+      const status = button.getAttribute("data-skill-status");
+      setAttr(button, "aria-pressed", status === skl.status ? "true" : "false");
+      const total = skl.loaded ? skillSegmentTotal(status) : null;
+      const countEl = document.getElementById(button.id + "Count");
+      setText(countEl, total === null ? "—" : formatCount(total));
+      if (countEl) countEl.classList.toggle("is-zero", !total);
+    });
+  }
+
+  function skillProjectName(key) {
+    const match = state.skills.projects.find((entry) => entry.key === key);
+    return match ? match.name : key;
+  }
+
+  function renderSkillToolbar() {
+    const skl = state.skills;
+    els.sklRangeButtons.forEach((button) => {
+      setAttr(button, "aria-pressed", Number(button.getAttribute("data-skill-range")) === skl.days ? "true" : "false");
+    });
+    const sort = SKILL_SORTS.find((entry) => entry[0] === skillSort()) || SKILL_SORTS[0];
+    setAttr(els.sklSortValue, "data-i18n", sort[1]);
+    setText(els.sklSortValue, t(sort[1]));
+    if (skl.project) els.sklProjectValue.removeAttribute("data-i18n");
+    else setAttr(els.sklProjectValue, "data-i18n", "skills.projectAll");
+    setText(els.sklProjectValue, skl.project ? skillProjectName(skl.project) : t("skills.projectAll"));
+    if (els.sklProjectButton) els.sklProjectButton.classList.toggle("is-filtered", !!skl.project);
+    if (els.sklSearchInput && document.activeElement !== els.sklSearchInput && els.sklSearchInput.value !== skl.q) els.sklSearchInput.value = skl.q;
+    setHidden(els.sklSearchClear, !(els.sklSearchInput && els.sklSearchInput.value));
+    setText(els.sklUpdated, skl.loaded && skl.loadedAt ? t("skills.updated", { time: formatClock(new Date(skl.loadedAt)) }) : "");
+  }
+
+  function renderSkillMenus() {
+    const skl = state.skills;
+    const sortSignature = [state.locale, skillSort()].join("|");
+    if (els.sklSortPopover && skl.signatures.sortMenu !== sortSignature) {
+      skl.signatures.sortMenu = sortSignature;
+      els.sklSortPopover.innerHTML = SKILL_SORTS.map((entry) => '<button class="actOption" type="button" role="option" tabindex="-1" data-skill-sort="' + entry[0] + '" aria-selected="' + (entry[0] === skillSort()) + '">' +
+        svgIcon("check", "actOptionCheck") + '<span class="actOptionName">' + escapeHtml(t(entry[1])) + '</span></button>').join("");
+    }
+    const projectSignature = [state.locale, skl.project, JSON.stringify(skl.projects)].join("|");
+    if (els.sklProjectPopover && skl.signatures.projectMenu !== projectSignature) {
+      skl.signatures.projectMenu = projectSignature;
+      const options = [{ key: "", name: t("skills.projectAll") }].concat(skl.projects);
+      els.sklProjectPopover.innerHTML = options.map((entry) => '<button class="actOption" type="button" role="option" tabindex="-1" data-skill-project="' + escapeHtml(entry.key) + '" aria-selected="' + (entry.key === skl.project) + '">' +
+        svgIcon("check", "actOptionCheck") + '<span class="actOptionName">' + escapeHtml(entry.name) + '</span></button>').join("");
+    }
+    const parts = getSkillPopoverParts(skl.openPopover);
+    if (parts) placeViewPopover(els.skillsView, parts[0], parts[1]);
+  }
+
+  function getSkillPopoverParts(name) {
+    if (name === "sort") return [els.sklSortPopover, els.sklSortButton];
+    if (name === "project") return [els.sklProjectPopover, els.sklProjectButton];
+    return null;
+  }
+
+  function setSkillPopover(name) {
+    if (!els.skillsView) return;
+    const skl = state.skills;
+    skl.openPopover = getSkillPopoverParts(name) ? name : "";
+    ["sort", "project"].forEach((key) => {
+      const parts = getSkillPopoverParts(key);
+      const open = key === skl.openPopover;
+      setHidden(parts[0], !open);
+      setAttr(parts[1], "aria-expanded", open ? "true" : "false");
+      if (open) placeViewPopover(els.skillsView, parts[0], parts[1]);
+    });
+  }
+
+  // The small confirm under (or, near the bottom of the window, above) a Disable or Retire button.
+  function setSkillConfirm(confirm, anchor) {
+    const skl = state.skills;
+    skl.confirm = confirm || null;
+    if (!els.sklConfirm) return;
+    setHidden(els.sklConfirm, !skl.confirm);
+    if (!skl.confirm) return;
+    const retire = skl.confirm.action === "retire";
+    setText(els.sklConfirmText, t(retire ? "skills.confirmRetire" : "skills.confirmDisable"));
+    setText(els.sklConfirmGo, t(retire ? "skills.actionRetire" : "skills.actionDisable"));
+    if (anchor) {
+      const view = els.skillsView.getBoundingClientRect();
+      const rect = anchor.getBoundingClientRect();
+      const width = els.sklConfirm.offsetWidth;
+      const height = els.sklConfirm.offsetHeight;
+      const left = Math.max(8, Math.min(rect.left - view.left, view.width - width - 8));
+      const below = rect.bottom + 8 + height <= window.innerHeight - 8;
+      els.sklConfirm.style.left = Math.round(left) + "px";
+      els.sklConfirm.style.top = Math.round((below ? rect.bottom + 8 : rect.top - 8 - height) - view.top) + "px";
+    }
+    els.sklConfirmGo.focus();
+  }
+
+  function renderSkillBanner() {
+    const text = state.skills.banner || "";
+    setHidden(els.sklBanner, !text);
+    setText(els.sklBanner, text);
+  }
+
+  function renderSkills() {
+    if (!els.skillsView) return;
+    renderSkillBanner();
+    renderSkillToolbar();
+    renderSkillStats();
+    renderSkillSegments();
+    renderSkillList();
+    renderSkillMenus();
+    if (state.drawer.host === "skillsView") renderMemoryDrawer();
+    placeMemoryDrawer();
+  }
+
+  // Re-renders the write buttons when the topbar Write switch flips.
+  function renderSkillWriteState() {
+    const off = skillWritesOff();
+    if (state.skills.writesOff === off) return;
+    state.skills.writesOff = off;
+    if (state.activeView === "skillsView") renderSkills();
+  }
+
+  function setSkillNote(id, tone, text) {
+    if (id) state.skills.notes[id] = { tone, text };
+  }
+
+  // Writes off is HTTP 200 {success:false, disabled:true, message}: show that message, change nothing.
+  // Any other success:false is a calm error. True means the caller must not refresh.
+  function skillWriteRejected(id, payload) {
+    if (payload && payload.success === false && payload.disabled) {
+      setSkillNote(id, "info", String(payload.message || t("skills.writesOffTitle")));
+      return true;
+    }
+    if (payload && payload.success === false) {
+      setSkillNote(id, "error", t("skills.noteError", { message: String(payload.message || payload.error || "") }));
+      return true;
+    }
+    return false;
+  }
+
+  // After a successful write, keep the in-flight pending flag until this refresh returns so a second click cannot
+  // reuse the old row. forceOpen is a row Promote: the new draft may land past page one, so the drawer must open
+  // on that id (or the candidate id, for the detail 404 fallback) for the note and Enable to stay visible.
+  async function refreshSkillAfterWrite(previousId, nextId, forceOpen) {
+    const drawer = state.drawer;
+    const reopen = forceOpen || (drawer.host === "skillsView" && drawer.skill);
+    const openId = (forceOpen || drawer.skill === previousId) ? nextId : drawer.skill;
+    if (reopen) void openSkillDrawer(openId, null);
+    await loadSkills("reset");
+  }
+
+  // Promote, Enable, Re-enable, Disable or Retire. Promote creates a draft (a new id; the candidate id disappears),
+  // so the note asks for the separate Enable. Writes off answers 200 with disabled: a calm note, nothing changes.
+  async function runSkillAction(id, action) {
+    const skl = state.skills;
+    const drawer = state.drawer;
+    const item = (drawer.host === "skillsView" && drawer.skill === id ? skillDrawerItem() : null) || findSkillItem(id);
+    if (action === "promote" && (skl.promoted || {})[id]) return;
+    if (!item || skl.pending[id] || skillWritePending()) return;
+    if (skillWritesOff()) {
+      setSkillNote(id, "info", t("skills.writesOffTitle"));
+      renderSkills();
+      return;
+    }
+    let url = "";
+    let body = null;
+    if (action === "promote") {
+      const ref = item.candidate_ref || {};
+      url = "/admin/api/skills/promote-candidate";
+      body = { project_path: item.project_path, local_date: ref.local_date, candidate_index: ref.candidate_index };
+    } else if (SKILL_STATUS_WRITES[action]) {
+      url = "/admin/api/skills/status";
+      body = { skill_id: id, status: SKILL_STATUS_WRITES[action][0] };
+    } else {
+      return;
+    }
+    const fromRow = action === "promote" && !(drawer.host === "skillsView" && drawer.skill === id);
+    skl.pending[id] = action;
+    delete skl.notes[id];
+    renderSkills();
+    try {
+      const payload = await fetchJson(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (skillWriteRejected(id, payload)) return;
+      const nextId = action === "promote" && payload && payload.skill && payload.skill.id !== undefined && payload.skill.id !== null ? String(payload.skill.id) : id;
+      if (action === "promote") {
+        if (!skl.promoted) skl.promoted = {};
+        skl.promoted[id] = nextId;
+        const index = skl.items.findIndex((entry) => String(entry.id) === id);
+        if (index >= 0 && nextId !== id) {
+          skl.items[index] = Object.assign({}, item, {
+            id: nextId,
+            kind: "skill",
+            stored_status: "draft",
+            status: "candidate",
+            candidate_ref: null,
+          });
+        }
+      }
+      setSkillNote(nextId, "ok", t(action === "promote" ? "skills.notePromoted" : SKILL_STATUS_WRITES[action][1]));
+      await refreshSkillAfterWrite(id, nextId, fromRow);
+    } catch (error) {
+      if (action === "promote" && error && error.status === 404) {
+        if (!skl.promoted) skl.promoted = {};
+        if (!skl.promoted[id]) skl.promoted[id] = id;
+        setSkillNote(id, "info", t("skills.noteGone"));
+        void loadSkills("reset");
+      } else {
+        setSkillNote(id, "error", t("skills.noteError", { message: (error && error.message) || "" }));
+      }
+    } finally {
+      delete skl.pending[id];
+      renderSkills();
+    }
+  }
+
+  // Active skills only: outcome plus an optional note, sent with the project path from the in-memory item.
+  async function recordSkillFeedback(id) {
+    const skl = state.skills;
+    const drawer = state.drawer;
+    const item = skillDrawerItem();
+    if (!item || String(item.id) !== id || skillVariant(item) !== "active" || skl.pending[id] || skillWritePending()) return;
+    if (skillWritesOff()) {
+      setSkillNote(id, "info", t("skills.writesOffTitle"));
+      renderSkills();
+      return;
+    }
+    const record = drawer.skillRecord;
+    const body = { skill_id: id, project_path: item.project_path, outcome: record.outcome };
+    if (record.notes.trim()) body.notes = record.notes.trim().slice(0, 500);
+    skl.pending[id] = "feedback";
+    renderSkills();
+    try {
+      const payload = await fetchJson("/admin/api/skills/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (skillWriteRejected(id, payload)) return;
+      record.notes = "";
+      setSkillNote(id, "ok", t("skills.noteFeedback"));
+      await refreshSkillAfterWrite(id, id);
+    } catch (error) {
+      setSkillNote(id, "error", t("skills.noteError", { message: (error && error.message) || "" }));
+    } finally {
+      delete skl.pending[id];
+      renderSkills();
+    }
+  }
+
+  // The action bar lives in its own node under the drawer body, so it stays put while the body scrolls.
+  function ensureSkillDrawerFoot() {
+    if (els.sklDrawerFoot || !els.activityDrawer) return;
+    const foot = document.createElement("div");
+    foot.className = "sklDrawerFoot";
+    foot.id = "sklDrawerFoot";
+    foot.hidden = true;
+    els.activityDrawer.appendChild(foot);
+    els.sklDrawerFoot = foot;
+  }
+
+  async function openSkillDrawer(id, trigger) {
+    const drawer = state.drawer;
+    const wasOpen = isMemoryDrawerOpen();
+    const listed = findSkillItem(id);
+    if (drawer.skill !== id) drawer.skillRecord = { outcome: "success", notes: "" };
+    // Keep a snapshot only for this same id. A different id must not reuse the previous skill.
+    drawer.skillItem = listed || (drawer.skill === id ? drawer.skillItem : null);
+    drawer.skill = id;
+    state.skills.banner = "";
+    drawer.skillPayload = null;
+    drawer.skillError = "";
+    drawer.id = "";
+    drawer.task = "";
+    drawer.taskItem = null;
+    drawer.digest = "";
+    drawer.digestPayload = null;
+    drawer.digestError = "";
+    drawer.project = "";
+    drawer.projectPayload = null;
+    drawer.projectError = "";
+    drawer.host = "skillsView";
+    drawer.payload = null;
+    drawer.error = "";
+    drawer.missing = false;
+    drawer.readsDisabled = !!state.skills.readsDisabled;
+    drawer.copied = false;
+    if (!wasOpen || trigger) drawer.returnFocus = trigger || document.activeElement;
+    const seq = drawer.seq + 1;
+    drawer.seq = seq;
+    setSkillPopover("");
+    setSkillConfirm(null);
+    ensureSkillDrawerFoot();
+    mountMemoryDrawer("skillsView");
+    renderMemoryDrawer();
+    markOpenMemory();
+    placeMemoryDrawer();
+    if (!memoryDrawerIsDocked("skillsView") && els.activityDrawerClose) els.activityDrawerClose.focus();
+    if (drawer.readsDisabled) return;
+    try {
+      const params = new URLSearchParams({ id, days: String(state.skills.days), tz_offset_minutes: String(-new Date().getTimezoneOffset()) });
+      const payload = await fetchJson("/admin/api/skill-detail?" + params.toString());
+      if (seq !== drawer.seq) return;
+      if (payload.disabled || payload.status === "reads_disabled") {
+        applyReadPolicyToViews({ readEnabled: false });
+        return;
+      }
+      if (payload && payload.skill) drawer.skillPayload = payload;
+      else drawer.skillError = "error";
+    } catch (error) {
+      if (seq !== drawer.seq) return;
+      if (error && error.status === 404) {
+        const still = findSkillItem(drawer.skill);
+        const snap = drawer.skillItem && String(drawer.skillItem.id) === drawer.skill ? drawer.skillItem : null;
+        if (still || snap) {
+          // The candidate id disappears after a promote. Show the list copy and refresh; do not crash.
+          drawer.skillItem = still || snap;
+          drawer.skillError = "missing";
+          void loadSkills("reset");
+        } else {
+          state.skills.banner = t("skills.notFound");
+          closeMemoryDrawer(false);
+          void loadSkills("reset");
+        }
+      } else {
+        drawer.skillError = "error";
+      }
+    } finally {
+      if (seq === drawer.seq) {
+        markOpenMemory();
+        renderMemoryDrawer();
+      }
+    }
+  }
+
+  function skillDrawerSignature() {
+    const drawer = state.drawer;
+    const item = skillDrawerItem();
+    const id = item ? String(item.id) : drawer.skill;
+    return JSON.stringify([drawer.skillPayload, drawer.skillPayload ? null : item, state.skills.notes[id] || null, state.skills.pending[id] || "", skillWritePending(), skillWritesOff(), drawer.skillRecord.outcome, state.skills.days]);
+  }
+
+  function skillSection(title, extra, inner, className) {
+    return '<section class="actSection prjSection sklSection' + (className || "") + '"><h3 class="prjSectionTitle"><span class="prjSectionName">' + escapeHtml(title) + '</span>' + (extra || "") + '</h3>' + inner + '</section>';
+  }
+
+  function skillQuiet(text) {
+    return '<p class="sklText is-quiet">' + escapeHtml(text) + '</p>';
+  }
+
+  // Fourteen bars, oldest first. All zero, they lie flat and faint, with a line on why.
+  function renderSkillBars(days, enabledOnce) {
+    const list = Array.isArray(days) ? days.slice(-14) : [];
+    const max = list.reduce((top, day) => Math.max(top, Number(day && day.matches || 0)), 0);
+    const label = (day) => {
+      const date = parseLocalDay(day && day.date);
+      return date ? formatShortDate(date) : String(day && day.date || "");
+    };
+    const bars = list.map((day) => {
+      const count = Number(day && day.matches || 0);
+      const height = count > 0 && max > 0 ? Math.max(14, Math.round((count / max) * 100)) : 0;
+      return '<span class="prjBar' + (count > 0 ? '' : ' is-zero') + '" title="' + escapeHtml(t("skills.drawerDayTip", { day: label(day), n: formatCount(count) })) + '">' +
+        '<span class="prjBarFill"' + (height ? ' style="height: ' + height + '%"' : '') + '></span></span>';
+    }).join("");
+    const ends = list.length ? '<div class="prjBarDays" aria-hidden="true"><span>' + escapeHtml(label(list[0])) + '</span><span>' + escapeHtml(label(list[list.length - 1])) + '</span></div>' : '';
+    return '<div class="prjBars sklBars' + (max ? '' : ' is-empty') + '" role="img" aria-label="' + escapeHtml(t("skills.drawerBarsLabel")) + '">' + bars + '</div>' + ends +
+      (max ? '' : '<p class="sklText is-quiet">' + escapeHtml(t(enabledOnce ? "skills.drawerNoMatches" : "skills.drawerNoMatchesCandidate")) + '</p>');
+  }
+
+  function skillStepText(step) {
+    if (typeof step === "string") return step;
+    if (step && typeof step === "object") return String(step.text || step.title || step.command || JSON.stringify(step));
+    return String(step === null || step === undefined ? "" : step);
+  }
+
+  function renderSkillFeedbackForm(id) {
+    const record = state.drawer.skillRecord;
+    const off = skillWritesOff() || skillWritePending();
+    const outcomes = SKILL_OUTCOMES.map((entry) => '<button class="sklOutcome" type="button" data-skill-outcome="' + entry[0] + '" aria-pressed="' + (entry[0] === record.outcome) + '"' + (off ? ' aria-disabled="true"' : '') + '>' + escapeHtml(t(entry[1])) + '</button>').join("");
+    return '<div class="sklRecord"><p class="sklRecordTitle">' + escapeHtml(t("skills.drawerRecord")) + '</p>' +
+      '<div class="sklOutcomes" role="group" aria-label="' + escapeHtml(t("skills.drawerOutcome")) + '">' + outcomes + '</div>' +
+      '<div class="sklRecordRow"><input class="sklNoteInput" type="text" maxlength="500" data-skill-note="true" aria-label="' + escapeHtml(t("skills.drawerNote")) + '" placeholder="' + escapeHtml(t("skills.drawerNotePlaceholder")) + '" value="' + escapeHtml(record.notes) + '"' + (off ? ' disabled' : '') + ' />' +
+      renderSkillActionButton(id, "feedback", "is-outline", "skills.drawerRecordButton") + '</div></div>';
+  }
+
+  function renderSkillDrawerBody(payload) {
+    const skill = payload.skill || {};
+    const variant = skillVariant(skill);
+    const enabledOnce = variant === "active" || variant === "disabled" || variant === "retired";
+    const id = String(skill.id);
+    const parts = [];
+
+    const summary = String(skill.summary || "").trim();
+    const confidence = skill.confidence === null || skill.confidence === undefined || !isFinite(Number(skill.confidence)) ? ""
+      : '<p class="sklConfidence">' + escapeHtml(t("skills.drawerConfidence", { n: Number(skill.confidence).toFixed(2) })) + '</p>';
+    parts.push(skillSection(t("skills.drawerSummary"), "", (summary ? '<p class="sklText">' + escapeHtml(summary) + '</p>' : skillQuiet(t("skills.drawerNoSummary"))) + confidence));
+
+    // The list copy has no trigger or steps; those sections only show with the detail.
+    if (Object.prototype.hasOwnProperty.call(skill, "trigger")) {
+      const trigger = String(skill.trigger || "").trim();
+      parts.push(skillSection(t("skills.drawerTrigger"), "", trigger ? '<p class="sklText">' + escapeHtml(trigger) + '</p>' : skillQuiet(t("skills.drawerNoTrigger"))));
+    }
+    if (Array.isArray(skill.steps)) {
+      const steps = skill.steps.map(skillStepText).filter((text) => text.trim());
+      parts.push(skillSection(t("skills.drawerSteps"), steps.length ? '<span class="prjSectionCount">' + escapeHtml(t("skills.drawerStepsCount", { n: formatCount(steps.length) })) + '</span>' : '',
+        steps.length ? '<ol class="sklStepList">' + steps.map((text) => '<li>' + escapeHtml(text) + '</li>').join("") + '</ol>' : skillQuiet(t("skills.drawerNoSteps"))));
+    }
+
+    parts.push(skillSection(t("skills.drawerMatches"), '<span class="prjSectionSub">· ' + escapeHtml(t("skills.drawerLast14")) + '</span>', renderSkillBars(skill.days, enabledOnce), " is-bars"));
+
+    const matches = Array.isArray(payload.recent_matches) ? payload.recent_matches.filter((match) => match && typeof match === "object") : [];
+    parts.push(skillSection(t("skills.drawerRecent"), "", matches.length
+      ? '<ul class="sklMatchList prjWell">' + matches.map((match) => {
+        const at = parseTimestamp(match.at);
+        const agent = String(match.agent_id || "").trim();
+        return '<li class="sklMatchRow"><time class="sklMatchAt"' + (at ? ' datetime="' + escapeHtml(at.toISOString()) + '" title="' + escapeHtml(at.toLocaleString(state.locale)) + '"' : '') + '>' + escapeHtml(at ? projectAgo(match.at) : "—") + '</time>' +
+          '<span class="sklMatchTask" title="' + escapeHtml(String(match.task || "")) + '">' + escapeHtml(String(match.task || "").trim() || "—") + '</span>' +
+          (agent ? '<span class="prjChip sklAgentChip" title="' + escapeHtml(agent) + '"><span class="prjChipName">' + escapeHtml(agent) + '</span></span>' : '') + '</li>';
+      }).join("") + '</ul>'
+      : skillQuiet(t("skills.drawerRecentNone"))));
+
+    const up = Number(skill.feedback_up || 0);
+    const down = Number(skill.feedback_down || 0);
+    const chips = '<span class="sklFeedChips"><span class="sklFeedChip' + (up ? ' is-up' : '') + '">' + escapeHtml(t("skills.feedbackUp", { n: formatCount(up) })) + '</span>' +
+      '<span class="sklFeedChip' + (down ? ' is-down' : '') + '">' + escapeHtml(t("skills.feedbackDown", { n: formatCount(down) })) + '</span></span>';
+    let feedbackHtml = "";
+    if (!enabledOnce) {
+      feedbackHtml = "";
+    } else {
+      const feedback = Array.isArray(payload.recent_feedback) ? payload.recent_feedback.filter((entry) => entry && typeof entry === "object") : [];
+      const outcomeKey = (outcome) => (SKILL_OUTCOMES.find((entry) => entry[0] === outcome) || [outcome, ""])[1];
+      feedbackHtml = (variant === "active" ? renderSkillFeedbackForm(id) : "") + (feedback.length
+        ? '<ul class="sklFeedList prjWell">' + feedback.map((entry) => {
+          const at = parseTimestamp(entry.at);
+          const text = [String(entry.task || "").trim(), String(entry.notes || "").trim()].filter(Boolean).join(" · ");
+          const key = outcomeKey(entry.outcome);
+          return '<li class="sklFeedRow"><span class="sklOutcomeTag is-' + escapeHtml(String(entry.outcome || "")) + '">' + escapeHtml(key ? t(key) : String(entry.outcome || "—")) + '</span>' +
+            '<span class="sklFeedText" title="' + escapeHtml(text) + '">' + escapeHtml(text || "—") + '</span>' +
+            '<time class="sklMatchAt">' + escapeHtml(at ? projectAgo(entry.at) : "") + '</time></li>';
+        }).join("") + '</ul>'
+        : skillQuiet(t("skills.drawerFeedbackNone")));
+    }
+    parts.push('<section class="actSection prjSection sklSection is-feedback"><h3 class="prjSectionTitle sklFeedHead"><span class="prjSectionName">' + escapeHtml(t("skills.drawerFeedback")) + '</span>' + chips +
+      (enabledOnce ? '' : '<span class="sklLocked">' + escapeHtml(t("skills.drawerFeedbackLocked")) + '</span>') + '</h3>' + feedbackHtml + '</section>');
+    return parts.join("");
+  }
+
+  // Action bar: Promote for a candidate, Enable for a draft, Disable and Retire (each confirmed) for an active skill,
+  // Enable and Retire for a disabled one, Re-enable for a retired one; always the dev panel link.
+  function renderSkillDrawerFoot(item) {
+    const devLink = '<button class="sklDevLink" type="button" data-nav-target="devToolsView" data-dev-panel="proceduralSkillsPanel" data-requires-dev-tools="true">' + escapeHtml(t("skills.drawerOpenDev")) + svgIcon("external", "sklDevLinkIcon") + '</button>';
+    if (!item || state.drawer.readsDisabled) return '<div class="sklFootBar is-bare">' + devLink + '</div>';
+    const variant = skillVariant(item);
+    const id = String(item.id);
+    const note = state.skills.notes[id] || (skillWritesOff() ? { tone: "info", text: t("skills.writesOffTitle") } : null);
+    const actions = variant === "pending" ? renderSkillActionButton(id, "promote", "is-primary is-wide")
+      : variant === "draft" ? renderSkillActionButton(id, "enable", "is-primary is-wide")
+        : variant === "active" ? renderSkillActionButton(id, "disable", "is-secondary") + renderSkillActionButton(id, "retire", "is-secondary")
+          : variant === "disabled" ? renderSkillActionButton(id, "enable", "is-primary") + renderSkillActionButton(id, "retire", "is-secondary")
+            : renderSkillActionButton(id, "reenable", "is-primary is-wide");
+    return (note ? '<p class="sklFootNote is-' + note.tone + '" role="status">' + escapeHtml(note.text) + '</p>' : '') +
+      '<div class="sklFootBar"><div class="sklFootActions">' + actions + '</div>' + devLink + '</div>';
+  }
+
+  // Skill body of the shared drawer. Until the detail arrives, the list row supplies the header and the body.
+  function renderSkillDrawer() {
+    const drawer = state.drawer;
+    const item = skillDrawerItem();
+    els.activityDrawerSub.innerHTML = "";
+    if (item) {
+      const variant = skillVariant(item);
+      const name = String(item.name || "").trim() || "—";
+      const project = String(item.display_name || "").trim();
+      const source = skillSource(item);
+      els.activityDrawerMeta.innerHTML = renderSkillIcon(item, "sklDrawerIcon") +
+        '<span class="sklDrawerHeading" aria-hidden="true"><span class="sklDrawerTitleLine"><span class="sklDrawerName" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</span>' + renderSkillChip(variant) + '</span>' +
+        '<span class="sklDrawerSub">' + [project, source.drawer].filter(Boolean).map((part) => '<span>' + escapeHtml(part) + '</span>').join('<span class="prjSep">·</span>') + '</span></span>';
+      setText(els.activityDrawerTitle, name);
+    } else {
+      els.activityDrawerMeta.innerHTML = "";
+      setText(els.activityDrawerTitle, drawer.readsDisabled ? t("skills.readsDisabledTitle") : drawer.skillError === "missing" ? t("skills.drawerMissing") : drawer.skillError ? t("skills.drawerError") : t("skills.drawerLoading"));
+    }
+    setAttr(els.activityDrawerTitle, "title", "");
+    const skeleton = '<div class="actDrawerSkeleton" aria-hidden="true"><span class="is-long"></span><span class="is-long"></span><span class="is-mid"></span><span class="is-short"></span></div>' +
+      '<p class="visuallyHidden">' + escapeHtml(t("skills.drawerLoading")) + '</p>';
+    if (drawer.readsDisabled) {
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState"><p>' + escapeHtml(t("skills.drawerReadsDisabled")) + '</p></div>';
+    } else if (drawer.skillPayload) {
+      els.activityDrawerBody.innerHTML = renderSkillDrawerBody(drawer.skillPayload);
+    } else if (drawer.skillError === "missing" && item) {
+      els.activityDrawerBody.innerHTML = '<p class="sklStale">' + escapeHtml(t("skills.drawerStale")) + '</p>' + renderSkillDrawerBody({ skill: item, recent_matches: [], recent_feedback: [] });
+    } else if (drawer.skillError) {
+      const missing = drawer.skillError === "missing";
+      els.activityDrawerBody.innerHTML = '<div class="actDrawerState' + (missing ? '' : ' is-error') + '"><p>' + escapeHtml(t(missing ? "skills.drawerMissing" : "skills.drawerError")) + '</p>' +
+        (missing ? '' : '<button class="bgButton" type="button" data-skill-open="' + escapeHtml(drawer.skill) + '">' + escapeHtml(t("skills.retry")) + '</button>') + '</div>';
+    } else {
+      els.activityDrawerBody.innerHTML = skeleton;
+    }
+    if (els.sklDrawerFoot) els.sklDrawerFoot.innerHTML = renderSkillDrawerFoot(item);
+  }
+
+  // Opening the view reloads page 1 after a quiet spell, or when the last attempt failed. The first visit of a
+  // session restores the segment picked earlier in it.
+  function showSkillsView() {
+    const skl = state.skills;
+    if (!skl.statusChosen) {
+      const saved = readSkillSegment();
+      if (saved) {
+        skl.status = saved;
+        skl.statusChosen = true;
+      }
+    }
+    if (Date.now() - skl.projectsAt > SKILL_LIST_REFRESH_MS) void loadSkillProjects();
+    if (!skl.loaded || skl.key !== skillsKey() || Date.now() - skl.loadedAt > SKILL_LIST_REFRESH_MS) void loadSkills("reset");
+    else renderSkills();
+  }
+
+  // Match a project option the legacy panel already lists, plus status and a candidate day. The path is only
+  // compared with those option values; it is never written into the page.
+  function presetProceduralFromSkill(item) {
+    if (!item) return;
+    const select = els.proceduralProjectSelect;
+    const path = typeof item.project_path === "string" ? item.project_path : "";
+    const hadProject = select ? select.value : "";
+    if (select && path && Array.from(select.options).some((option) => option.value === path) && select.value !== path) {
+      select.value = path;
+    }
+    const stored = String(item.stored_status || "");
+    if (els.proceduralStatusFilter && ["enabled", "draft", "disabled", "retired"].indexOf(stored) >= 0) {
+      els.proceduralStatusFilter.value = stored;
+    }
+    const day = item.candidate_ref && item.candidate_ref.local_date ? String(item.candidate_ref.local_date) : "";
+    if (els.proceduralLocalDateInput) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) els.proceduralLocalDateInput.value = day;
+      else if (select && select.value !== hadProject) els.proceduralLocalDateInput.value = "";
+    }
+    if (item.kind === "skill" && item.id !== undefined && item.id !== null) state.selectedProceduralSkillId = String(item.id);
+    if (select && select.value && state.devToolsLoaded) void loadProceduralWorkspaceData();
+  }
+
+  function handleSkillAction(button) {
+    const id = button.getAttribute("data-skill-target");
+    const action = button.getAttribute("data-skill-action");
+    if (!id || button.getAttribute("aria-disabled") === "true") return;
+    if (action === "disable" || action === "retire") {
+      setSkillConfirm({ id, action }, button);
+      return;
+    }
+    if (action === "feedback") {
+      void recordSkillFeedback(id);
+      return;
+    }
+    void runSkillAction(id, action);
+  }
+
+  function bindSkillEvents() {
+    if (!els.skillsView) return;
+    els.skillsView.addEventListener("click", (event) => {
+      // The shared drawer and its scrim handle their own clicks (see bindMemoryDrawerEvents and below).
+      if (els.activityDrawer.contains(event.target) || event.target === els.activityDrawerScrim) return;
+      if (event.target.closest("#sklConfirmCancel")) {
+        setSkillConfirm(null);
+        return;
+      }
+      if (event.target.closest("#sklConfirmGo")) {
+        const confirm = state.skills.confirm;
+        setSkillConfirm(null);
+        if (confirm) void runSkillAction(confirm.id, confirm.action);
+        return;
+      }
+      const actionButton = event.target.closest("[data-skill-action]");
+      if (actionButton) {
+        handleSkillAction(actionButton);
+        return;
+      }
+      const row = event.target.closest(".sklRow[data-skill-id]");
+      if (row) {
+        const id = row.getAttribute("data-skill-id");
+        if (state.drawer.host === "skillsView" && state.drawer.skill === id) closeMemoryDrawer(false);
+        else void openSkillDrawer(id, row);
+        return;
+      }
+      const segment = event.target.closest("[data-skill-status]");
+      if (segment) {
+        setSkillStatus(segment.getAttribute("data-skill-status"));
+        return;
+      }
+      const range = event.target.closest("[data-skill-range]");
+      if (range) {
+        const days = Number(range.getAttribute("data-skill-range"));
+        setSkillPopover("");
+        if (SKILL_RANGES.indexOf(days) >= 0 && days !== state.skills.days) setSkillFilters({ days });
+        return;
+      }
+      const popup = event.target.closest("#sklSortButton, #sklProjectButton");
+      if (popup) {
+        const name = popup.id === "sklSortButton" ? "sort" : "project";
+        const open = state.skills.openPopover !== name;
+        setSkillPopover(open ? name : "");
+        if (open) {
+          const parts = getSkillPopoverParts(name);
+          const target = parts[0].querySelector('[aria-selected="true"]') || parts[0].querySelector(".actOption");
+          if (target) target.focus();
+        }
+        return;
+      }
+      const sortOption = event.target.closest("[data-skill-sort]");
+      if (sortOption) {
+        setSkillPopover("");
+        els.sklSortButton.focus();
+        const sort = sortOption.getAttribute("data-skill-sort");
+        if (sort !== skillSort()) setSkillFilters({ sort });
+        return;
+      }
+      const projectOption = event.target.closest("[data-skill-project]");
+      if (projectOption) {
+        setSkillPopover("");
+        els.sklProjectButton.focus();
+        const project = projectOption.getAttribute("data-skill-project") || "";
+        if (project !== state.skills.project) setSkillFilters({ project });
+        return;
+      }
+      if (event.target.closest("#sklSearchClear")) {
+        els.sklSearchInput.value = "";
+        applySkillSearch("");
+        renderSkillToolbar();
+        els.sklSearchInput.focus();
+        return;
+      }
+      if (event.target.closest("#sklLoadMore")) {
+        void loadSkills("more");
+        return;
+      }
+      const empty = event.target.closest("[data-skill-empty]");
+      if (empty) {
+        if (empty.getAttribute("data-skill-empty") === "candidates") setSkillStatus("candidate");
+        else {
+          els.sklSearchInput.value = "";
+          applySkillSearch("");
+        }
+        return;
+      }
+      if (event.target.closest("[data-skill-notice]")) void loadSkills("reset");
+    });
+
+    // Drawer controls while it shows a skill. The listener sits on the drawer node, so it follows it between views.
+    els.activityDrawer.addEventListener("click", (event) => {
+      if (state.drawer.host !== "skillsView" || !state.drawer.skill) return;
+      const devLink = event.target.closest(".sklDevLink");
+      if (devLink) presetProceduralFromSkill(skillDrawerItem());
+      const actionButton = event.target.closest("[data-skill-action]");
+      if (actionButton) {
+        handleSkillAction(actionButton);
+        return;
+      }
+      const outcome = event.target.closest("[data-skill-outcome]");
+      if (outcome) {
+        state.drawer.skillRecord.outcome = outcome.getAttribute("data-skill-outcome");
+        renderMemoryDrawer();
+        return;
+      }
+      const retry = event.target.closest("[data-skill-open]");
+      if (retry) void openSkillDrawer(retry.getAttribute("data-skill-open"), null);
+    });
+    els.activityDrawer.addEventListener("input", (event) => {
+      if (state.drawer.host === "skillsView" && event.target.matches("[data-skill-note]")) state.drawer.skillRecord.notes = event.target.value;
+    });
+
+    els.sklSearchInput.addEventListener("input", () => {
+      const skl = state.skills;
+      setHidden(els.sklSearchClear, !els.sklSearchInput.value);
+      window.clearTimeout(skl.searchTimer);
+      skl.searchTimer = window.setTimeout(() => applySkillSearch(els.sklSearchInput.value), SKILL_SEARCH_DEBOUNCE_MS);
+    });
+
+    els.skillsView.addEventListener("keydown", (event) => {
+      if (state.skills.confirm && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSkillConfirm(null);
+        return;
+      }
+      if (els.activityDrawer.contains(event.target)) return;
+      if ((event.key === "Enter" || event.key === " ") && event.target.matches(".sklRow[data-skill-id]")) {
+        event.preventDefault();
+        event.target.click();
+        return;
+      }
+      if (event.key === "Enter" && event.target === els.sklSearchInput) {
+        applySkillSearch(els.sklSearchInput.value);
+        return;
+      }
+      const parts = getSkillPopoverParts(state.skills.openPopover);
+      if (!parts) return;
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        setSkillPopover("");
+        parts[1].focus();
+        return;
+      }
+      const options = Array.from(parts[0].querySelectorAll(".actOption"));
+      const index = options.indexOf(document.activeElement);
+      const next = event.key === "ArrowDown" ? Math.min(options.length - 1, index + 1) : event.key === "ArrowUp" ? Math.max(0, index - 1) : -1;
+      if (next >= 0 && options[next]) {
+        event.preventDefault();
+        options[next].focus();
+      }
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      if (state.skills.confirm && !els.sklConfirm.contains(event.target)) setSkillConfirm(null);
+      const parts = getSkillPopoverParts(state.skills.openPopover);
+      if (!parts || parts[0].contains(event.target) || parts[1].contains(event.target)) return;
+      setSkillPopover("");
+    });
+    window.addEventListener("resize", () => {
+      if (state.skills.openPopover) setSkillPopover("");
+      if (state.skills.confirm) setSkillConfirm(null);
+    });
+    window.addEventListener("scroll", () => {
+      if (state.activeView === "skillsView") scheduleMemoryDrawerPlace();
+    }, { passive: true });
+  }
+
   // ---------- Projects ----------
 
   const PROJECT_PAGE = 50;
@@ -8474,14 +9792,17 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     const pipe = state.pipeline;
     const dig = state.digests;
     const prj = state.projects;
+    // Skills state is optional so trimmed-down harnesses of this function keep working.
+    const skl = state.skills || { readsDisabled: true, items: [], nextCursor: null, summary: null, rowNodes: new Map(), seq: 0 };
     const early = state.activity.earlier;
     const drawer = state.drawer;
     if (policy.readEnabled) {
-      if (!mem.readsDisabled && !pipe.readsDisabled && !dig.readsDisabled && !prj.readsDisabled && !early.readsDisabled && !drawer.readsDisabled) return;
+      if (!mem.readsDisabled && !pipe.readsDisabled && !dig.readsDisabled && !prj.readsDisabled && !(state.skills && skl.readsDisabled) && !early.readsDisabled && !drawer.readsDisabled) return;
       mem.readsDisabled = false;
       pipe.readsDisabled = false;
       dig.readsDisabled = false;
       prj.readsDisabled = false;
+      skl.readsDisabled = false;
       early.readsDisabled = false;
       early.message = "";
       early.payload = null;
@@ -8492,6 +9813,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       const refreshDrawer = !!drawer.id && drawer.readsDisabled;
       const refreshDigest = !drawer.id && !!drawer.digest && drawer.readsDisabled;
       const refreshProject = !drawer.id && !drawer.digest && !!drawer.project && drawer.readsDisabled;
+      const refreshSkill = drawer.host === "skillsView" && !!drawer.skill && drawer.readsDisabled;
       drawer.readsDisabled = false;
       if (state.activeView === "memoryView") void loadMemories("reset");
       if (state.activeView === "pipelineView") void loadPipeline("reset");
@@ -8500,8 +9822,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         void loadDigestCards(true);
       }
       if (state.activeView === "projectsView") void loadProjects("reset");
+      if (state.activeView === "skillsView") void loadSkills("reset");
       if (state.activeView === "activityView") void loadActivityEarlier(true);
-      if (refreshProject) void openProjectDrawer(drawer.project, null);
+      if (refreshSkill) void openSkillDrawer(drawer.skill, null);
+      else if (refreshProject) void openProjectDrawer(drawer.project, null);
       else if (refreshDigest) void openDigestDrawer(drawer.digest, null);
       else if (refreshDrawer) void openMemoryDrawer(drawer.id, null, drawer.host);
       // A task body comes back with the reloaded list.
@@ -8511,6 +9835,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && pipe.readsDisabled && pipe.items.length === 0 && !pipe.nextCursor && !drawer.taskItem &&
       dig.readsDisabled && dig.items.length === 0 && !dig.nextCursor && !dig.vault && !dig.lastRun && !drawer.digestPayload &&
       prj.readsDisabled && prj.items.length === 0 && !prj.nextCursor && !prj.summary && !drawer.projectPayload &&
+      skl.readsDisabled && skl.items.length === 0 && !skl.nextCursor && !skl.summary && !drawer.skillPayload &&
       !drawer.payload && (!isMemoryDrawerOpen() || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
     mem.items = [];
     mem.days = [];
@@ -8577,6 +9902,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     prj.moreSeq = 0;
     prj.seq += 1;
     if (els.prjList) els.prjList.innerHTML = "";
+    skl.items = [];
+    skl.summary = null;
+    skl.nextCursor = null;
+    skl.loaded = false;
+    skl.error = "";
+    skl.errorStatus = 0;
+    skl.stale = false;
+    skl.readsDisabled = true;
+    skl.rowNodes.clear();
+    skl.busySeq = 0;
+    skl.moreSeq = 0;
+    skl.seq += 1;
+    if (els.sklList) els.sklList.innerHTML = "";
+    if (state.skills) {
+      drawer.skillPayload = null;
+      drawer.skillError = "";
+    }
     drawer.payload = null;
     drawer.taskItem = null;
     drawer.digestPayload = null;
@@ -8600,6 +9942,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderPipeline();
     renderDigests();
     renderProjects();
+    if (state.skills) renderSkills();
     renderActivityEarlier();
     if (isMemoryDrawerOpen()) renderMemoryDrawer();
   }
@@ -8695,7 +10038,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // It shows while the user has not picked a preset or image and the tone is Auto; any explicit choice wins everywhere.
   function usesActivityBackdrop() {
     const settings = bg.settings;
-    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView" || state.activeView === "projectsView") && !!settings && !settings.pinned &&
+    return (state.activeView === "activityView" || state.activeView === "memoryView" || state.activeView === "pipelineView" || state.activeView === "digestsView" || state.activeView === "projectsView" || state.activeView === "skillsView") && !!settings && !settings.pinned &&
       settings.preset === bg.api.defaults.preset && settings.tone === "auto";
   }
 
@@ -9067,6 +10410,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       showProjectsView();
     } else if (state.projects.openPopover) {
       setProjectPopover(false);
+    }
+    if (nextView === "skillsView") {
+      showSkillsView();
+    } else {
+      if (state.skills.openPopover) setSkillPopover("");
+      if (state.skills.confirm) setSkillConfirm(null);
     }
     if (isMemoryDrawerOpen() && state.drawer.host !== nextView) closeMemoryDrawer(false);
     if (nextView === "devToolsView") {
@@ -9561,6 +10910,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bindPipelineEvents();
     bindDigestEvents();
     bindProjectEvents();
+    bindSkillEvents();
     bindMemoryDrawerEvents();
     activateView("homeView");
     try {

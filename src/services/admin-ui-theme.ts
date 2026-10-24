@@ -2638,6 +2638,7 @@ ${WALLPAPER_CSS}
   /* Activity tokens. Light glass is milky white with a faint periwinkle shadow; dark glass is deep navy with a
      cool rim. The shell's own tokens (--text, --shell-hover, ...) still drive ink, so a user background keeps
      working; these only shape Activity's surfaces. Memory and Pipeline share them. */
+  .skillsView,
   .projectsView,
   .activityView,
   .memoryView,
@@ -2700,6 +2701,7 @@ ${WALLPAPER_CSS}
     --proj-none: #a3a9b6;
   }
 
+  html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .activityView,
   html[data-glass="dark"] .memoryView,
@@ -3696,6 +3698,7 @@ ${WALLPAPER_CSS}
   /* Memory detail drawer: a tall glass sheet from the right. Inside the view, so its blur only runs on Activity.
      A transform animation that keeps filling would make the view the containing block of the fixed drawer and
      scrim, so Activity's entry animation does not fill forwards (its end state is transform: none anyway). */
+  .skillsView.is-active,
   .projectsView.is-active,
   .activityView.is-active,
   .memoryView.is-active,
@@ -4437,6 +4440,7 @@ ${WALLPAPER_CSS}
 
   /* ---------- Memory detail drawer (shared by Activity and Memory) ---------- */
 
+  .skillsView,
   .projectsView,
   .activityView,
   .memoryView,
@@ -4449,6 +4453,7 @@ ${WALLPAPER_CSS}
     --a-concept-ring: rgba(10, 132, 255, 0.20);
   }
 
+  html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .activityView,
   html[data-glass="dark"] .memoryView,
@@ -4738,6 +4743,7 @@ ${WALLPAPER_CSS}
 
   /* ---------- Memory ---------- */
 
+  .skillsView,
   .projectsView,
   .memoryView,
   .pipelineView,
@@ -4768,6 +4774,7 @@ ${WALLPAPER_CSS}
     --m-dot-4: #f2697a;
   }
 
+  html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .memoryView,
   html[data-glass="dark"] .pipelineView,
@@ -6864,6 +6871,7 @@ ${WALLPAPER_CSS}
      catch-light where it reaches the bottom. --d-edge gives the slab its thickness: a crisp top bevel, a softer
      left one, a soft inner refraction glow and a thin reflection along the bottom edge. --d-sheen is the specular
      wash on the face. Fills multiply --glass-scale like the other views. */
+  .skillsView,
   .projectsView,
   .digestsView {
     --d-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.58 * var(--glass-scale))), rgba(248, 250, 255, calc(0.38 * var(--glass-scale))));
@@ -6910,6 +6918,7 @@ ${WALLPAPER_CSS}
     --d-accent: #2f7cf6;
   }
 
+  html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .digestsView {
     --d-glass: linear-gradient(180deg, rgba(32, 44, 92, calc(0.52 * var(--glass-scale))), rgba(12, 18, 46, calc(0.48 * var(--glass-scale))));
@@ -6959,7 +6968,8 @@ ${WALLPAPER_CSS}
   }
 
   .digestsView .digGlass,
-  .projectsView .digGlass {
+  .projectsView .digGlass,
+  .skillsView .digGlass {
     position: relative;
     isolation: isolate;
     border: 1px solid transparent;
@@ -6968,7 +6978,8 @@ ${WALLPAPER_CSS}
   }
 
   .digestsView .digGlass::before,
-  .projectsView .digGlass::before {
+  .projectsView .digGlass::before,
+  .skillsView .digGlass::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -6981,7 +6992,9 @@ ${WALLPAPER_CSS}
   .digestsView .digGlass::after,
   .digestsView .actDrawer::after,
   .projectsView .digGlass::after,
-  .projectsView .actDrawer::after {
+  .projectsView .actDrawer::after,
+  .skillsView .digGlass::after,
+  .skillsView .actDrawer::after {
     content: "";
     position: absolute;
     inset: -1px;
@@ -7509,12 +7522,14 @@ ${WALLPAPER_CSS}
 
   /* Digest body of the shared drawer. */
   .digestsView .actDrawer,
-  .projectsView .actDrawer {
+  .projectsView .actDrawer,
+  .skillsView .actDrawer {
     box-shadow: var(--d-drawer-shadow);
   }
 
   .digestsView .actDrawer::before,
-  .projectsView .actDrawer::before {
+  .projectsView .actDrawer::before,
+  .skillsView .actDrawer::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -7923,7 +7938,8 @@ ${WALLPAPER_CSS}
 
   /* A sibling of Digests: the same glass material (--d-* tokens, .digGlass), toolbar, chips and drawer. Folder
      tiles share one calm blue tint; nothing here is colour-coded per project. */
-  .projectsView {
+  .projectsView,
+  .skillsView {
     --prj-cols: 42px minmax(0, 1fr) 96px 120px 84px 84px;
     --prj-tile: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 7%, rgba(255, 255, 255, 0.96)), color-mix(in srgb, var(--d-accent) 15%, rgba(242, 245, 255, 0.74)));
     --prj-tile-on: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 14%, rgba(255, 255, 255, 0.96)), color-mix(in srgb, var(--d-accent) 26%, rgba(236, 242, 255, 0.80)));
@@ -7932,7 +7948,8 @@ ${WALLPAPER_CSS}
     --prj-bar-zero: rgba(150, 160, 200, 0.20);
   }
 
-  html[data-glass="dark"] .projectsView {
+  html[data-glass="dark"] .projectsView,
+  html[data-glass="dark"] .skillsView {
     --prj-tile: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 22%, rgba(64, 80, 140, 0.62)), color-mix(in srgb, var(--d-accent) 12%, rgba(26, 36, 80, 0.58)));
     --prj-tile-on: linear-gradient(180deg, color-mix(in srgb, var(--d-accent) 38%, rgba(64, 86, 160, 0.70)), color-mix(in srgb, var(--d-accent) 22%, rgba(30, 44, 100, 0.64)));
     --prj-bar: linear-gradient(180deg, #74b4ff, #2f7cff);
@@ -8752,5 +8769,1055 @@ ${WALLPAPER_CSS}
     height: 17px;
     flex: 0 0 17px;
     color: var(--text-3);
+  }
+
+  /* ---------- Skills ---------- */
+
+  /* A sibling of Projects: the same toolbar, tiles, list card, chips and drawer. Icons stay in the family's blue,
+     or neutral once a skill stops matching; only the status chips carry a tone. */
+  .skillsView {
+    --skl-cols: 48px minmax(0, 1fr) 132px 124px 56px 112px;
+    --skl-ink: #1f6fe8;
+    --skl-outline: color-mix(in srgb, var(--d-accent) 62%, transparent);
+    --skl-button: rgba(255, 255, 255, calc(0.72 * var(--glass-scale)));
+    --skl-primary: linear-gradient(180deg, #3a8bff, #1f6ff0);
+    --skl-primary-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 6px 16px -8px rgba(31, 111, 240, 0.80);
+    --skl-ring: 0 0 0 1.5px color-mix(in srgb, var(--d-accent) 58%, transparent), 0 8px 22px -14px rgba(47, 124, 246, 0.55);
+  }
+
+  html[data-glass="dark"] .skillsView {
+    --skl-ink: #8cc2ff;
+    --skl-outline: color-mix(in srgb, var(--d-accent) 55%, transparent);
+    --skl-button: rgba(255, 255, 255, 0.07);
+    --skl-primary: linear-gradient(180deg, #3d8dff, #2365e6);
+    --skl-primary-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 0 18px -6px rgba(60, 140, 255, 0.70);
+    --skl-ring: 0 0 0 1.5px color-mix(in srgb, var(--d-accent) 60%, transparent), 0 0 22px -10px rgba(60, 140, 255, 0.60);
+  }
+
+  .skillsView .sklCard[data-skill-mode="matches"] {
+    --skl-cols: 48px minmax(0, 1fr) 132px 172px 96px 112px;
+  }
+
+  .policyBanner:not([hidden]) ~ .skillsView .pipeLeadRow {
+    margin-top: 0;
+  }
+
+  /* Tile sub-lines carry the quiet "why" (no active skill yet, no reviews in the range). */
+  .sklStats .prjStatSub {
+    margin-top: 1px;
+    font-size: 12px;
+    line-height: 1.3;
+    white-space: normal;
+  }
+
+  .sklStats .prjStatSub[hidden] {
+    display: none;
+  }
+
+  .sklCard {
+    padding: 14px 10px 8px;
+  }
+
+  .sklCardTop {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 6px 4px;
+  }
+
+  .sklSegments .sklSeg {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 38px;
+    padding: 0 22px;
+    font-size: 14.5px;
+    font-weight: 500;
+  }
+
+  .sklSegCount {
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sklSeg[aria-pressed="true"] .sklSegCount {
+    color: var(--text);
+  }
+
+  .sklSeg:not([aria-pressed="true"]) .sklSegName {
+    color: var(--text-2);
+  }
+
+  .sklBanner {
+    margin: 8px 6px 2px;
+    padding: 9px 14px;
+    border-radius: 12px;
+    background: var(--a-concept-fill);
+    color: var(--a-concept-ink);
+    font-size: 13.5px;
+  }
+
+  .sklBanner[hidden],
+  .sklHead[hidden],
+  .sklList[hidden],
+  .sklFoot[hidden],
+  .sklEmpty[hidden],
+  .sklDrawerFoot[hidden] {
+    display: none;
+  }
+
+  .sklHead,
+  .skillsView .sklRow {
+    grid-template-columns: var(--skl-cols);
+  }
+
+  .sklHead {
+    padding: 16px 16px 10px;
+  }
+
+  .skillsView .sklRow {
+    display: grid;
+    align-items: center;
+    column-gap: 14px;
+    min-height: 76px;
+    padding: 10px 14px;
+    border-radius: 16px;
+  }
+
+  .skillsView .sklRow + .sklRow {
+    box-shadow: none;
+  }
+
+  .sklRow + .sklRow::before {
+    content: "";
+    position: absolute;
+    top: -0.5px;
+    right: 14px;
+    left: 14px;
+    height: 1px;
+    background: var(--d-row-line);
+    pointer-events: none;
+  }
+
+  .sklRow.is-open::before,
+  .sklRow.is-open + .sklRow::before,
+  .sklRow:hover::before,
+  .sklRow:hover + .sklRow::before {
+    opacity: 0;
+  }
+
+  .skillsView .sklRow.is-open {
+    box-shadow: var(--skl-ring);
+  }
+
+  .sklIcon,
+  .sklDrawerIcon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 13px;
+    background: var(--prj-tile);
+    box-shadow: var(--d-tile-shadow);
+    color: var(--d-accent);
+  }
+
+  .sklRow.is-open .sklIcon {
+    background: var(--prj-tile-on);
+  }
+
+  .sklIcon.is-disabled,
+  .sklIcon.is-retired,
+  .sklDrawerIcon.is-disabled,
+  .sklDrawerIcon.is-retired {
+    background: var(--d-tile);
+    color: var(--d-muted-dot);
+  }
+
+  .sklIconGlyph {
+    width: 24px;
+    height: 24px;
+  }
+
+  .sklMain {
+    gap: 3px;
+  }
+
+  .sklNameLine {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .sklName {
+    min-width: 0;
+    flex: 1 1 auto;
+    font-size: 16px;
+  }
+
+  .sklSummary,
+  .sklRowNote {
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sklRowNote.is-ok {
+    color: var(--skl-ink);
+    font-weight: 500;
+  }
+
+  .sklRowNote.is-error {
+    color: var(--d-err-ink);
+  }
+
+  .sklProject {
+    display: flex;
+    min-width: 0;
+  }
+
+  .sklProjectChip {
+    padding: 3px 11px;
+    font-size: 13.5px;
+  }
+
+  .sklSource {
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 14.5px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sklSource.is-removed {
+    color: var(--text-3);
+    font-style: italic;
+  }
+
+  .sklSteps {
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sklSteps.is-zero {
+    color: var(--text-3);
+  }
+
+  .sklActions {
+    display: flex;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  /* Buttons: outline for the row's next step, quiet for Disable, a solid blue for the drawer's primary action. */
+  .sklAction {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 14.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 160ms var(--ease-out), box-shadow 160ms var(--ease-out), opacity 160ms var(--ease-out);
+  }
+
+  .sklAction:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.32);
+  }
+
+  .sklAction.is-outline {
+    border-color: var(--skl-outline);
+    background: var(--skl-button);
+    color: var(--skl-ink);
+  }
+
+  .sklAction.is-outline:hover {
+    background: color-mix(in srgb, var(--d-accent) 10%, var(--skl-button));
+  }
+
+  .sklAction.is-quiet {
+    border-color: var(--a-line);
+    color: var(--text-2);
+  }
+
+  .sklAction.is-quiet:hover,
+  .sklAction.is-secondary:hover {
+    background: var(--shell-hover);
+  }
+
+  .sklAction.is-secondary {
+    min-height: 40px;
+    padding: 0 18px;
+    border-color: var(--a-line);
+    background: var(--skl-button);
+    color: var(--text);
+  }
+
+  .sklAction.is-primary {
+    min-height: 40px;
+    padding: 0 22px;
+    background: var(--skl-primary);
+    box-shadow: var(--skl-primary-shadow);
+    color: #ffffff;
+    font-weight: 600;
+  }
+
+  .sklAction.is-primary:hover {
+    filter: brightness(1.05);
+  }
+
+  .sklAction.is-wide {
+    flex: 1 1 auto;
+    min-height: 44px;
+    border-radius: 12px;
+    font-size: 16px;
+  }
+
+  .sklAction[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  .sklAction[aria-busy="true"] {
+    opacity: 0.7;
+    cursor: progress;
+  }
+
+  /* Status chips: Candidate amber, Draft amber outline, Active green, Disabled and Retired grey. No dot. */
+  .sklChip {
+    flex: 0 0 auto;
+    min-height: 22px;
+    padding: 0 10px;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  .sklChip .digChipDot {
+    display: none;
+  }
+
+  .sklChip.is-draft {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--d-warn-dot) 70%, transparent);
+    color: var(--d-warn-ink);
+  }
+
+  .sklChip.is-muted {
+    background: var(--d-muted-fill);
+    color: var(--d-muted-ink);
+  }
+
+  /* Active rows: the count, a hairline sparkline of 14 days and when it last matched. */
+  .sklMatches {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .sklMatchLine {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .sklMatchNum {
+    min-width: 1.6em;
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sklMatchNum.is-zero {
+    color: var(--text-3);
+  }
+
+  .sklSpark {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 18px;
+  }
+
+  .sklSparkBar {
+    width: 4px;
+    min-height: 3px;
+    border-radius: 2px;
+    background: var(--prj-bar);
+  }
+
+  .sklSparkBar.is-zero {
+    height: 3px;
+    background: var(--prj-bar-zero);
+  }
+
+  .sklMatchWhen {
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sklFeedback {
+    display: flex;
+    gap: 12px;
+  }
+
+  .sklVote {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sklVote.is-zero {
+    color: var(--text-3);
+  }
+
+  .sklVoteIcon {
+    width: 15px;
+    height: 15px;
+    color: var(--text-2);
+  }
+
+  /* Retired rows step back; their Re-enable stays at full strength. */
+  .sklRow.is-retired .sklMain,
+  .sklRow.is-retired .sklProject,
+  .sklRow.is-retired .sklMatches,
+  .sklRow.is-retired .sklFeedback {
+    opacity: 0.58;
+  }
+
+  .sklRow.is-disabled .sklName {
+    color: var(--text-2);
+  }
+
+  .sklRow.is-skeleton .sklIcon {
+    background: var(--prj-bar-zero);
+    box-shadow: none;
+  }
+
+  .sklRow.is-skeleton .actSkel.is-mid { width: 38%; }
+  .sklRow.is-skeleton .actSkel.is-short { width: 22%; }
+
+  /* An empty segment inside the card: a real invitation for Active, one quiet line for the others. */
+  .sklEmpty {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    padding: 46px 24px 50px;
+    text-align: center;
+  }
+
+  .sklEmptyIcon {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    margin-bottom: 8px;
+    border-radius: 17px;
+    background: var(--prj-tile);
+    box-shadow: var(--d-tile-shadow);
+    color: var(--d-accent);
+  }
+
+  .sklEmptyGlyph {
+    width: 28px;
+    height: 28px;
+  }
+
+  .sklEmptyTitle {
+    margin: 0;
+    color: var(--text);
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .sklEmptyLead {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 14.5px;
+  }
+
+  .sklEmptyLead[hidden],
+  .sklEmpty .sklAction[hidden] {
+    display: none;
+  }
+
+  .sklEmpty .sklAction {
+    margin-top: 12px;
+  }
+
+  .sklEmpty.is-quiet {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    padding: 30px 24px 34px;
+  }
+
+  .sklEmpty.is-quiet .sklEmptyIcon {
+    width: 34px;
+    height: 34px;
+    margin: 0;
+    border-radius: 11px;
+    background: var(--d-tile);
+    color: var(--d-muted-dot);
+  }
+
+  .sklEmpty.is-quiet .sklEmptyGlyph {
+    width: 18px;
+    height: 18px;
+  }
+
+  .sklEmpty.is-quiet .sklEmptyTitle {
+    color: var(--text-2);
+    font-size: 14.5px;
+    font-weight: 500;
+  }
+
+  .sklFoot {
+    flex-direction: column;
+    gap: 4px;
+    min-height: 64px;
+    padding: 10px 0 6px;
+  }
+
+  .sklMore {
+    padding: 2px 10px;
+    border: 0;
+    background: none;
+    color: var(--skl-ink);
+    font: inherit;
+    font-size: 14.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .sklMore:hover {
+    text-decoration: underline;
+  }
+
+  .sklMore[hidden] {
+    display: none;
+  }
+
+  .sklMore[aria-busy="true"] {
+    color: var(--text-2);
+    cursor: progress;
+  }
+
+  /* Confirm for Disable and Retire: a small glass card under (or above) its button, over the drawer too. */
+  .sklConfirm {
+    z-index: 60;
+    width: 300px;
+    padding: 14px 16px;
+  }
+
+  .sklConfirmText {
+    margin: 0 0 12px;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .sklConfirmActions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .sklConfirmActions .sklAction {
+    min-height: 34px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+
+  /* Docked beside the list (1440px and wider): the toolbar and tiles stay full width, the list steps aside. */
+  @media (min-width: 1440px) {
+    .skillsView.is-drawer-open .prjBoard {
+      margin-right: calc(min(456px, calc(100vw - 32px)) + 16px);
+    }
+
+    .skillsView.is-drawer-open .sklCard {
+      --skl-cols: 40px minmax(0, 1fr) 96px 84px 40px 90px;
+      padding-right: 6px;
+      padding-left: 6px;
+    }
+
+    .skillsView.is-drawer-open .sklCard[data-skill-mode="matches"] {
+      --skl-cols: 40px minmax(0, 1fr) 96px 100px 66px 90px;
+    }
+
+    .skillsView.is-drawer-open .sklHead,
+    .skillsView.is-drawer-open .sklRow {
+      column-gap: 6px;
+    }
+
+    .skillsView.is-drawer-open .sklRow {
+      padding: 10px 8px;
+    }
+
+    .skillsView.is-drawer-open .sklIcon {
+      width: 40px;
+      height: 40px;
+    }
+
+    .skillsView.is-drawer-open .sklName {
+      font-size: 15.5px;
+    }
+
+    .skillsView.is-drawer-open .sklSummary,
+    .skillsView.is-drawer-open .sklRowNote {
+      font-size: 13.5px;
+    }
+
+    .skillsView.is-drawer-open .sklProjectChip {
+      max-width: 100%;
+      padding-right: 8px;
+      padding-left: 8px;
+    }
+
+    .skillsView.is-drawer-open .sklSource {
+      font-size: 13.5px;
+    }
+
+    .skillsView.is-drawer-open .sklSpark {
+      gap: 1px;
+    }
+
+    .skillsView.is-drawer-open .sklSparkBar {
+      width: 3px;
+    }
+
+    .skillsView.is-drawer-open .sklMatchLine {
+      gap: 6px;
+    }
+
+    .skillsView.is-drawer-open .sklFeedback {
+      gap: 8px;
+    }
+
+    .skillsView.is-drawer-open .sklAction.is-outline,
+    .skillsView.is-drawer-open .sklAction.is-quiet {
+      padding: 0 10px;
+      font-size: 14px;
+    }
+  }
+
+  @media (max-width: 1180px) {
+    .skillsView .sklCard,
+    .skillsView .sklCard[data-skill-mode="matches"] {
+      --skl-cols: 44px minmax(0, 1fr) 112px 108px 44px 100px;
+    }
+  }
+
+  /* Skill body of the shared drawer. */
+  .actDrawer.is-skill .actDrawerTitle {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .actDrawer.is-skill .actDrawerMeta {
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 14px;
+    padding-top: 0;
+  }
+
+  .sklDrawerIcon {
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 14px;
+    background: var(--prj-tile-on);
+  }
+
+  .sklDrawerIcon .sklIconGlyph {
+    width: 24px;
+    height: 24px;
+  }
+
+  .sklDrawerHeading {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .sklDrawerTitleLine {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .sklDrawerName {
+    display: -webkit-box;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .sklDrawerTitleLine .sklChip {
+    align-self: flex-start;
+    margin-top: 1px;
+  }
+
+  .sklDrawerSub {
+    display: flex;
+    gap: 7px;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .actDrawer.is-skill .actDrawerBody {
+    margin-top: 16px;
+  }
+
+  .skillsView .actSection.sklSection {
+    margin-top: 18px;
+  }
+
+  .skillsView .actSection.sklSection:first-child {
+    margin-top: 0;
+  }
+
+  .sklSection .prjSectionTitle {
+    margin-bottom: 6px;
+  }
+
+  .sklText {
+    margin: 0;
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .sklText.is-quiet {
+    color: var(--text-2);
+    font-size: 14px;
+  }
+
+  .sklConfidence {
+    margin: 3px 0 0;
+    color: var(--text-2);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sklStepList {
+    margin: 0;
+    padding: 10px 14px 10px 42px;
+    border-radius: 12px;
+    background: var(--d-well);
+    box-shadow: var(--d-well-edge);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 13.5px;
+    line-height: 1.7;
+    overflow-wrap: anywhere;
+  }
+
+  .sklStepList li::marker {
+    color: var(--text-2);
+  }
+
+  /* Zero matches: fourteen flat, faint tiles rather than a blank strip. */
+  .prjBars.sklBars.is-empty {
+    height: 28px;
+  }
+
+  .sklBars.is-empty .prjBar.is-zero .prjBarFill {
+    height: 100%;
+    border-radius: 7px;
+  }
+
+  .sklBars + .prjBarDays + .sklText {
+    margin-top: 6px;
+  }
+
+  .sklMatchList,
+  .sklFeedList {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    margin: 0;
+    padding: 4px 12px;
+  }
+
+  .sklMatchRow,
+  .sklFeedRow {
+    display: grid;
+    grid-template-columns: 4.6em minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 34px;
+    font-size: 13.5px;
+  }
+
+  .sklFeedRow {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .sklMatchRow + .sklMatchRow,
+  .sklFeedRow + .sklFeedRow {
+    box-shadow: 0 -1px 0 var(--d-row-line);
+  }
+
+  .sklMatchAt {
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .sklMatchTask,
+  .sklFeedText {
+    overflow: hidden;
+    color: var(--text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sklAgentChip {
+    max-width: 130px;
+    font-size: 12px;
+  }
+
+  .sklFeedHead {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .sklFeedChips {
+    display: inline-flex;
+    gap: 6px;
+    margin-left: 8px;
+  }
+
+  .sklFeedChip {
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sklFeedChip.is-up,
+  .sklFeedChip.is-down {
+    color: var(--text);
+  }
+
+  .sklLocked {
+    margin-left: auto;
+    color: var(--text-2);
+    font-size: 13.5px;
+    font-style: italic;
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+
+  .sklOutcomeTag {
+    padding: 1px 9px;
+    border-radius: 999px;
+    background: var(--d-muted-fill);
+    color: var(--d-muted-ink);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .sklOutcomeTag.is-success { background: var(--d-ok-fill); color: var(--d-ok-ink); }
+  .sklOutcomeTag.is-failure { background: var(--d-err-fill); color: var(--d-err-ink); }
+  .sklOutcomeTag.is-rejected { background: var(--d-warn-fill); color: var(--d-warn-ink); }
+
+  .sklRecord {
+    margin: 4px 0 10px;
+    padding: 12px;
+    border-radius: 14px;
+    background: var(--d-well);
+    box-shadow: var(--d-well-edge);
+  }
+
+  .sklRecordTitle {
+    margin: 0 0 8px;
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+
+  .sklOutcomes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .sklOutcome {
+    min-height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--a-line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+  }
+
+  .sklOutcome[aria-pressed="true"] {
+    border-color: var(--skl-outline);
+    background: color-mix(in srgb, var(--d-accent) 12%, transparent);
+    color: var(--skl-ink);
+    font-weight: 600;
+  }
+
+  .sklRecordRow {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .sklNoteInput {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--a-line);
+    border-radius: 10px;
+    background: var(--skl-button);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+  }
+
+  .sklNoteInput:focus {
+    outline: none;
+    border-color: var(--skl-outline);
+    box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.18);
+  }
+
+  .sklStale {
+    margin: 0 0 14px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  /* The action bar: a glass slab under the scrolling body. */
+  .sklDrawerFoot {
+    flex: 0 0 auto;
+    margin: 8px 14px 14px 0;
+    padding: 12px;
+    border-radius: 20px;
+    background: var(--d-well);
+    box-shadow: var(--d-well-edge);
+  }
+
+  .sklFootNote {
+    margin: 0 0 10px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--a-tag-fill);
+    color: var(--text-2);
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+
+  .sklFootNote.is-ok {
+    background: var(--a-concept-fill);
+    color: var(--a-concept-ink);
+    font-weight: 500;
+  }
+
+  .sklFootNote.is-error {
+    background: var(--d-err-fill);
+    color: var(--d-err-ink);
+  }
+
+  .sklFootBar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .sklFootBar.is-bare {
+    justify-content: flex-end;
+  }
+
+  .sklFootActions {
+    display: flex;
+    flex: 1 1 auto;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .sklFootActions .sklAction.is-wide {
+    max-width: 280px;
+  }
+
+  .sklDevLink {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: var(--skl-ink);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .sklDevLink:hover {
+    background: var(--shell-hover);
+  }
+
+  .sklDevLinkIcon {
+    width: 15px;
+    height: 15px;
   }
 `;

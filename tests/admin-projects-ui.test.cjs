@@ -59,9 +59,10 @@ test('Projects view replaces the placeholder and follows Digests directly', () =
   assert.doesNotMatch(view, /placeholderCard|shell\.comingSoon/);
   const sections = [...uiHtml.matchAll(/<section id="([^"]+)"/g)].map((match) => match[1]);
   assert.equal(sections[sections.indexOf('digestsView') + 1], 'projectsView');
-  // Skills stays a placeholder.
+  // Skills follows Projects directly and is a real page, not a placeholder.
+  assert.equal(sections[sections.indexOf('projectsView') + 1], 'skillsView');
   const skillsAt = uiHtml.indexOf('<section id="skillsView"');
-  assert.match(uiHtml.slice(skillsAt, uiHtml.indexOf('</section>', skillsAt)), /placeholderCard/);
+  assert.doesNotMatch(uiHtml.slice(skillsAt, uiHtml.indexOf('<section id="', skillsAt + 1)), /placeholderCard|shell\.comingSoon/);
   assert.deepEqual(
     ADMIN_UI_NAV_ITEMS.map((item) => [item.id, item.target, item.key]).find((row) => row[0] === 'navProjects'),
     ['navProjects', 'projectsView', 'nav.projects'],
