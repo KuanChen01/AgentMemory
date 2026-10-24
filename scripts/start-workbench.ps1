@@ -9,6 +9,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# When stdout is piped or redirected (CI, Node child_process, log files) emit UTF-8 instead of the
+# console OEM code page (e.g. 936 on zh-CN Windows), so callers can decode the Chinese status lines.
+# Interactive console windows keep their default encoding.
+if ([Console]::IsOutputRedirected) {
+  try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+}
+
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 Set-Location $RepoRoot
 
