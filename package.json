@@ -1,6 +1,6 @@
 {
   "name": "agentmemory",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "Universal Agent Memory (UAM) system for coding assistants",
   "main": "dist/index.js",
   "bin": {
