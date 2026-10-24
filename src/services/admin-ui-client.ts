@@ -380,7 +380,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     // Settings: its own copies of llm-config and digest-scheduler (the legacy panels keep theirs). llmError and
     // digestError hold a failed load; llmSaveError and digestSaveError are inline write failures; llmTest is the
     // last test result; keyEditing shows the empty Replace-key input; confirm is "read" or "write" while the
-    // switch-off confirm is open. policyError is the calm note after a switch save fails.
+    // switch-off confirm is open. policyError is the calm note after a switch save fails. llmLoadSeq and
+    // digestLoadSeq identify the newest load; a save bumps them so an older GET cannot restore the form.
     settings: {
       llm: null,
       llmLoading: false,
@@ -392,12 +393,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       llmTest: null,
       llmTesting: false,
       keyEditing: false,
+      llmLoadSeq: 0,
       digest: null,
       digestLoading: false,
       digestSaving: false,
       digestError: "",
       digestSaveError: "",
       digestFormKey: "",
+      digestLoadSeq: 0,
       policyError: "",
       loadedAt: 0,
       confirm: "",
@@ -10670,24 +10673,29 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   function showSettingsView() {
     const set = state.settings;
     renderSettings();
-    if (!set.llmLoading) void loadSettingsLlm();
-    if (!set.digestLoading) void loadSettingsDigest();
+    if (!set.llmLoading && !set.llmSaving) void loadSettingsLlm();
+    if (!set.digestLoading && !set.digestSaving) void loadSettingsDigest();
     window.requestAnimationFrame(syncSettingsSection);
   }
 
   async function loadSettingsLlm(options) {
     const set = state.settings;
     const quiet = !!(options && options.quiet);
+    const seq = (set.llmLoadSeq || 0) + 1;
+    set.llmLoadSeq = seq;
     set.llmLoading = true;
     if (!quiet) renderSettingsLlm();
     try {
       const payload = await fetchJson("/admin/api/llm-config");
+      if (seq !== set.llmLoadSeq) return;
       set.llm = payload.config || null;
       set.llmError = "";
       set.loadedAt = Date.now();
     } catch (error) {
+      if (seq !== set.llmLoadSeq) return;
       if (!quiet) set.llmError = settingsRedacted(error.message || String(error), settingsTypedKey());
     } finally {
+      if (seq !== set.llmLoadSeq) return;
       set.llmLoading = false;
       renderSettingsLlm();
       renderSettingsUpdated();
@@ -10696,15 +10704,21 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   async function loadSettingsDigest() {
     const set = state.settings;
+    const seq = (set.digestLoadSeq || 0) + 1;
+    set.digestLoadSeq = seq;
     set.digestLoading = true;
     renderSettingsDigest();
     try {
-      set.digest = await fetchJson("/admin/api/digest-scheduler");
+      const payload = await fetchJson("/admin/api/digest-scheduler");
+      if (seq !== set.digestLoadSeq) return;
+      set.digest = payload;
       set.digestError = "";
       set.loadedAt = Date.now();
     } catch (error) {
+      if (seq !== set.digestLoadSeq) return;
       set.digestError = error.message || String(error);
     } finally {
+      if (seq !== set.digestLoadSeq) return;
       set.digestLoading = false;
       renderSettingsDigest();
       renderSettingsUpdated();
@@ -10712,10 +10726,11 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   }
 
   // Drop a typed key out of any server text before it can reach the DOM, a title, or an error.
+  // Any nonempty key is redacted, including one shorter than 8 characters.
   function settingsRedacted(text, secret) {
     let raw = String(text || "");
     const key = String(secret || "").trim();
-    if (key.length >= 8 && raw.indexOf(key) >= 0) raw = raw.split(key).join("••••");
+    if (key && raw.indexOf(key) >= 0) raw = raw.split(key).join("••••");
     return raw;
   }
 
@@ -10767,7 +10782,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   async function saveSettingsLlm() {
     const set = state.settings;
-    if (set.llmSaving || !set.llm) return;
+    if (set.llmSaving || set.llmTesting || !set.llm) return;
     const body = settingsLlmPayload();
     const problem = settingsLlmProblem(body);
     set.llmSaved = false;
@@ -10777,6 +10792,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
     const secret = body.apiKey || settingsTypedKey();
+    // Drop GETs already in flight. The bump after the POST drops a load that started while the save was running.
+    set.llmLoadSeq = (set.llmLoadSeq || 0) + 1;
+    set.llmLoading = false;
     set.llmSaving = true;
     set.llmSaveError = "";
     renderSettingsLlm();
@@ -10786,7 +10804,12 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      set.llmLoadSeq = (set.llmLoadSeq || 0) + 1;
+      set.llmLoading = false;
       set.llm = payload.config || set.llm;
+      // Same snapshot the Developer tools panel stores when it loads llm-config.
+      state.llmConfig = payload.config || null;
+      renderLlmConfig();
       set.llmFormKey = "";
       set.keyEditing = false;
       els.setLlmKeyInput.value = "";
@@ -10807,9 +10830,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   // A real outbound call: the form's endpoint and model, the saved key unless a new one was typed.
   async function runSettingsLlmTest() {
     const set = state.settings;
-    if (set.llmTesting || !set.llm) return;
+    if (set.llmTesting || set.llmSaving || !set.llm) return;
     set.llmTesting = true;
-    renderSettingsLlmTest();
+    renderSettingsLlm();
     const typed = settingsTypedKey();
     const body = {
       apiUrl: els.setLlmApiUrl.value.trim(),
@@ -10832,7 +10855,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       }, typed);
     } finally {
       set.llmTesting = false;
-      renderSettingsLlmTest();
+      renderSettingsLlm();
     }
   }
 
@@ -11007,6 +11030,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       renderSettingsDigest();
       return;
     }
+    set.digestLoadSeq = (set.digestLoadSeq || 0) + 1;
+    set.digestLoading = false;
     set.digestSaving = true;
     set.digestSaveError = "";
     renderSettingsDigest();
@@ -11016,6 +11041,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      set.digestLoadSeq = (set.digestLoadSeq || 0) + 1;
+      set.digestLoading = false;
       set.digest = payload;
       set.digestFormKey = "";
       set.digestError = "";

@@ -291,8 +291,16 @@ function renderOverview() {
 }
 function applyReadPolicyToViews(policy) { applied.push(JSON.parse(JSON.stringify(policy))); }
 function setRawStatusLine(name, element, message, variant) { statuses.push({ name, message, variant }); }
+function syncSettingsSection() {}
+function renderLlmConfig() {
+  state.llmConfigRendered = state.llmConfig;
+  if (!state.llmConfig || !els.llmApiUrlInput) return;
+  els.llmApiUrlInput.value = state.llmConfig.apiUrl || "";
+  els.llmModelInput.value = state.llmConfig.model || "";
+  els.llmHeadersInput.value = state.llmConfig.headers || "";
+}
 ${[
-  'setText', 'setAttr', 'setHidden', 'setClass', 'parseTimestamp', 'formatClock', 'formatShortDate', 'formatDuration', 'formatSettingsStamp', 'syncSelect', 'getSettingsTimeZones', 'settingsZonesAvailable', 'renderSettings', 'renderSettingsLlm', 'renderSettingsLlmTest', 'renderSettingsDigest', 'renderSettingsDayOptions', 'renderSettingsAbout', 'getSettingsReleasePresentation', 'settingsRedacted', 'settingsTypedKey', 'settingsHttpUrl', 'settingsLlmPayload', 'settingsLlmProblem', 'settingsLlmTestView', 'saveSettingsLlm', 'loadSettingsLlm', 'runSettingsLlmTest', 'settingsDigestPayload', 'settingsDigestProblem', 'saveSettingsDigest', 'renderSettingsUpdated', 'savePolicy', 'onPolicyToggleClick', 'onPolicyToggleChange', 'confirmSettingsSwitchOff', 'cancelSettingsConfirm', 'setSettingsConfirm', 'commitPolicySave', 'policyToggleKind', 'policyToggleKey', 'savedPolicyEnabled', 'getDisplayedPolicy', 'renderPolicyCard', 'renderPolicyNote', 'getPolicyMeta', 'bindSettingsEvents',
+  'setText', 'setAttr', 'setHidden', 'setClass', 'parseTimestamp', 'formatClock', 'formatShortDate', 'formatDuration', 'formatSettingsStamp', 'syncSelect', 'getSettingsTimeZones', 'settingsZonesAvailable', 'renderSettings', 'renderSettingsLlm', 'renderSettingsLlmTest', 'renderSettingsDigest', 'renderSettingsDayOptions', 'renderSettingsAbout', 'getSettingsReleasePresentation', 'settingsRedacted', 'settingsTypedKey', 'settingsHttpUrl', 'settingsLlmPayload', 'settingsLlmProblem', 'settingsLlmTestView', 'saveSettingsLlm', 'loadSettingsLlm', 'loadSettingsDigest', 'showSettingsView', 'runSettingsLlmTest', 'settingsDigestPayload', 'settingsDigestProblem', 'saveSettingsDigest', 'renderSettingsUpdated', 'savePolicy', 'onPolicyToggleClick', 'onPolicyToggleChange', 'confirmSettingsSwitchOff', 'cancelSettingsConfirm', 'setSettingsConfirm', 'commitPolicySave', 'policyToggleKind', 'policyToggleKey', 'savedPolicyEnabled', 'getDisplayedPolicy', 'renderPolicyCard', 'renderPolicyNote', 'getPolicyMeta', 'bindSettingsEvents',
 ].map((name) => uiClientFunction(name)).join('\n')}
 bindSettingsEvents();
 `;
@@ -799,4 +807,162 @@ test('reads off leaves Settings usable, and a locale switch re-renders the page 
   assert.equal(h.elements.setDigestLookback.options[0].textContent, '1 天');
   assert.equal(h.elements.setDigestLookback.options[1].textContent, '2 天');
   assert.equal(h.elements.setDigestNext.textContent, zh['settings.digestOff']);
+});
+
+test('a settings GET that finishes after a save does not restore the old LLM or digest card', async () => {
+  const h = settingsHarness();
+  h.state.settings.llm = llmConfig({ apiUrl: 'https://old.example/v1', model: 'old-model', headers: 'old-header' });
+  h.state.settings.digest = digestState();
+  h.state.settings.llmFormKey = '';
+  h.state.settings.digestFormKey = '';
+  h.run('renderSettings()');
+  assert.equal(h.elements.setLlmApiUrl.value, 'https://old.example/v1');
+  assert.equal(h.elements.setDigestTime.value, '02:30');
+  assert.equal(h.elements.setLlmSave.disabled, false);
+  assert.equal(h.elements.setDigestSave.disabled, false);
+
+  h.run('showSettingsView()');
+  const llmGet = h.posts.find((entry) => entry.url === '/admin/api/llm-config' && entry.method === 'GET');
+  const digestGet = h.posts.find((entry) => entry.url === '/admin/api/digest-scheduler' && entry.method === 'GET');
+  assert.ok(llmGet && digestGet);
+  assert.equal(h.elements.setLlmSave.disabled, false);
+  assert.equal(h.elements.setDigestSave.disabled, false);
+
+  h.elements.setLlmApiUrl.value = 'https://new.example/v1';
+  h.elements.setLlmModel.value = 'new-model';
+  h.elements.setLlmHeaders.value = 'x-new';
+  h.elements.setDigestTime.value = '04:45';
+  const llmSave = h.run('saveSettingsLlm()');
+  const digestSave = h.run('saveSettingsDigest()');
+  const llmPost = h.posts.find((entry) => entry.url === '/admin/api/llm-config' && entry.method === 'POST');
+  const digestPost = h.posts.find((entry) => entry.url === '/admin/api/digest-scheduler' && entry.method === 'POST');
+  const savedLlm = llmConfig({ apiUrl: 'https://new.example/v1', model: 'new-model', headers: 'x-new' });
+  delete savedLlm.apiKey;
+  llmPost.resolve({ success: true, config: savedLlm });
+  digestPost.resolve(digestState({ schedule_time: '04:45', updatedAt: '2026-10-24T04:45:00Z' }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  llmGet.resolve({ config: llmConfig({ apiUrl: 'https://old.example/v1', model: 'old-model', headers: 'old-header' }) });
+  digestGet.resolve(digestState());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.settings.llm.apiUrl, 'https://new.example/v1');
+  assert.equal(h.state.settings.llm.model, 'new-model');
+  assert.equal(h.state.settings.llm.headers, 'x-new');
+  assert.equal(h.elements.setLlmApiUrl.value, 'https://new.example/v1');
+  assert.equal(h.elements.setLlmModel.value, 'new-model');
+  assert.equal(h.elements.setLlmHeaders.value, 'x-new');
+  assert.equal(h.state.settings.digest.config.schedule_time, '04:45');
+  assert.equal(h.elements.setDigestTime.value, '04:45');
+
+  const quiet = h.posts.filter((entry) => entry.url === '/admin/api/llm-config' && entry.method === 'GET' && entry !== llmGet);
+  assert.equal(quiet.length, 1);
+  quiet[0].resolve({ config: savedLlm });
+  await llmSave;
+  await digestSave;
+  assert.equal(h.elements.setLlmApiUrl.value, 'https://new.example/v1');
+  assert.equal(h.elements.setLlmModel.value, 'new-model');
+  assert.equal(h.elements.setDigestTime.value, '04:45');
+  assert.equal(JSON.stringify(h.state.settings.llm).includes(SECRET), false);
+});
+
+test('a locale switch during a connection test re-enables the LLM form, and save and test do not overlap', async () => {
+  const h = settingsHarness();
+  h.state.settings.llm = llmConfig();
+  h.run('renderSettingsLlm()');
+  h.elements.setLlmApiUrl.value = 'https://api.example.com/v1';
+  h.elements.setLlmModel.value = 'demo-model';
+  const pending = h.run('runSettingsLlmTest()');
+  assert.equal(h.elements.setLlmApiUrl.disabled, true);
+  assert.equal(h.elements.setLlmSave.disabled, true);
+  assert.equal(h.elements.setLlmTest.disabled, true);
+  const postsDuringTest = h.posts.length;
+  await h.run('saveSettingsLlm()');
+  assert.equal(h.posts.length, postsDuringTest);
+  assert.equal(h.posts.some((entry) => entry.url === '/admin/api/llm-config'), false);
+
+  h.state.locale = 'zh-CN';
+  h.run('renderSettings()');
+  assert.equal(h.elements.setLlmApiUrl.disabled, true);
+  assert.equal(h.elements.setLlmModel.disabled, true);
+  assert.equal(h.elements.setLlmHeaders.disabled, true);
+  assert.equal(h.elements.setLlmDisableJson.disabled, true);
+  assert.equal(h.elements.setLlmSave.disabled, true);
+  h.posts[0].resolve({ ok: true, latencyMs: 10, testedAt: new Date().toISOString(), requestUrl: 'https://api.example.com/v1' });
+  await pending;
+  assert.equal(h.elements.setLlmApiUrl.disabled, false);
+  assert.equal(h.elements.setLlmModel.disabled, false);
+  assert.equal(h.elements.setLlmHeaders.disabled, false);
+  assert.equal(h.elements.setLlmDisableJson.disabled, false);
+  assert.equal(h.elements.setLlmSave.disabled, false);
+  assert.equal(h.elements.setLlmTest.disabled, false);
+
+  h.state.locale = 'en';
+  h.posts.length = 0;
+  const savePending = h.run('saveSettingsLlm()');
+  assert.equal(h.elements.setLlmTest.disabled, true);
+  const blocked = h.run('runSettingsLlmTest()');
+  await blocked;
+  assert.equal(h.posts.some((entry) => entry.url === '/admin/api/llm-test'), false);
+  h.posts[0].resolve({ success: true, config: llmConfig() });
+  await new Promise((resolve) => setImmediate(resolve));
+  h.posts[1].resolve({ config: llmConfig() });
+  await savePending;
+  assert.equal(h.elements.setLlmSave.disabled, false);
+  assert.equal(h.elements.setLlmTest.disabled, false);
+});
+
+test('Test connection redacts a typed key shorter than 8 characters', async () => {
+  const h = settingsHarness();
+  const shortKey = 'k7';
+  assert.equal(shortKey.length < 8, true);
+  h.state.settings.llm = llmConfig();
+  h.run('renderSettingsLlm()');
+  h.elements.setLlmApiUrl.value = 'https://api.example.com/v1';
+  h.elements.setLlmModel.value = 'demo-model';
+  h.state.settings.keyEditing = true;
+  h.elements.setLlmKeyInput.value = `  ${shortKey}  `;
+  const pending = h.run('runSettingsLlmTest()');
+  assert.equal(plain(h.posts[0].body).apiKey, shortKey);
+  h.posts[0].resolve({
+    ok: false,
+    error: `401 invalid ${shortKey}`,
+    status: 401,
+    requestUrl: `https://api.example.com/${shortKey}`,
+    testedAt: new Date().toISOString(),
+  });
+  await pending;
+  assert.equal(h.elements.setLlmTestChip.textContent.includes(shortKey), false);
+  assert.match(h.elements.setLlmTestChip.textContent, /••••/);
+  assert.equal(h.elements.setLlmTestChip.attrs.title.includes(shortKey), false);
+  assert.match(h.elements.setLlmTestChip.attrs.title, /••••/);
+  assert.equal(domSurface(h.elements, false).includes(shortKey), false);
+  assert.equal(h.elements.setLlmSave.disabled, false);
+});
+
+test('a successful Settings LLM save updates the legacy dev-tools llmConfig', async () => {
+  const h = settingsHarness();
+  h.state.llmConfig = llmConfig({ apiUrl: 'https://old.example/v1', model: 'old-model', headers: 'x-old' });
+  h.state.settings.llm = llmConfig({ apiUrl: 'https://old.example/v1', model: 'old-model', headers: 'x-old' });
+  h.run('els.llmApiUrlInput = { value: "https://old.example/v1" }; els.llmModelInput = { value: "old-model" }; els.llmHeadersInput = { value: "x-old" };');
+  h.run('renderSettingsLlm()');
+  h.elements.setLlmApiUrl.value = 'https://new.example/v1';
+  h.elements.setLlmModel.value = 'new-model';
+  h.elements.setLlmHeaders.value = 'x-new';
+  const pending = h.run('saveSettingsLlm()');
+  const saved = llmConfig({ apiUrl: 'https://new.example/v1', model: 'new-model', headers: 'x-new' });
+  delete saved.apiKey;
+  h.posts[0].resolve({ success: true, config: saved });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.state.llmConfig.apiUrl, 'https://new.example/v1');
+  assert.equal(h.state.llmConfig.model, 'new-model');
+  assert.equal(h.state.llmConfig.headers, 'x-new');
+  assert.equal(JSON.stringify(h.state.llmConfig).includes(SECRET), false);
+  assert.equal(h.context.els.llmApiUrlInput.value, 'https://new.example/v1');
+  assert.equal(h.context.els.llmModelInput.value, 'new-model');
+  assert.equal(h.context.els.llmHeadersInput.value, 'x-new');
+  assert.equal(h.state.llmConfigRendered.apiUrl, 'https://new.example/v1');
+  h.posts[1].resolve({ config: saved });
+  await pending;
+  assert.equal(h.context.els.llmApiUrlInput.value, 'https://new.example/v1');
+  assert.equal(h.elements.setLlmNote.textContent, en['settings.llmSaved']);
 });
