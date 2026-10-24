@@ -32,6 +32,7 @@ Upgrade note: back up the AgentMemory DB, then run `npm ci && npm run build` and
 - `agentmem install --claude-capture` / `--no-claude-capture` choose whether the Claude Code `PostToolUse` capture hook is installed. With neither flag, the installer keeps the current choice: an existing managed setup without the hook stays without it, and a fresh install enables capture as before.
 
 ### Changed
+- Admin panel consistency pass: every page shares one header (title, subtitle, Updated stamp), one segmented date-range control, a left-hand search field, locale-aware dates, a shared empty state and status chips. zh-CN copy is fully translated, the dark-mode sidebar uses the glass style, and the Developer tools toggle is the single switch for the dev pages.
 - `agentmem install --strict` now fails when the Claude Code MCP server lacks `AGENTMEM_AGENT_ID=claudecode`. Re-run `agentmem install` after upgrading.
 
 ### Fixed
