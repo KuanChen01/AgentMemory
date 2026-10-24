@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { DatabaseManager } from './db';
-import { sanitizeText } from './pipeline-query';
+import { isSensitiveFactKey, sanitizeText } from './pipeline-query';
 import { orchestrateMemoryRead } from './memory-orchestrator';
 import { renderCompactProjectContextView } from './context-view';
 import { buildAdminSkillItems } from './skill-query';
@@ -697,7 +697,7 @@ function currentStateFacts(db: DatabaseManager, projectPath: string) {
       entity_type: row.entity_type ?? null,
       entity_key: sanitizeText(row.entity_key),
       fact_key: row.fact_key ?? null,
-      value: clipSanitize(row.value_json, 200),
+      value: isSensitiveFactKey(row.fact_key) ? '<redacted>' : clipSanitize(row.value_json, 200),
       effective_at: normalizeTimestamp(row.effective_at),
       updated_at: normalizeTimestamp(row.recorded_at),
     })),

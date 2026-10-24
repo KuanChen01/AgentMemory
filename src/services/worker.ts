@@ -517,10 +517,19 @@ app.get('/admin/api/overview', adminOnlyGuard, async (_req, res) => {
 
 app.get('/admin/api/home-summary', adminOnlyGuard, async (req, res) => {
   try {
-    res.json(await dbManager.getAdminHomeSummary({
+    const summary: any = await dbManager.getAdminHomeSummary({
       tzOffsetMinutes: Number(req.query.tz_offset_minutes || 0),
       days: Number(req.query.days || 30),
-    }));
+    });
+    if (!(await isReadEnabled())) {
+      // Reads off: keep the counts that drive the health ring, drop memory content and project paths.
+      summary.reads_disabled = true;
+      summary.recent = [];
+      summary.today.projects = [];
+      summary.digests.failed_recent = summary.digests.failed_recent.map((row: any) => ({ ...row, project_path: null }));
+      if (summary.digests.latest) summary.digests.latest = { ...summary.digests.latest, project_path: null };
+    }
+    res.json(summary);
   } catch (err: any) {
     console.error('Error fetching admin home summary:', err);
     res.status(500).json({ error: err.message });
