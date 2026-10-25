@@ -19,6 +19,29 @@ if ([Console]::IsOutputRedirected) {
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 Set-Location $RepoRoot
 
+# Keep this file pure ASCII. Windows PowerShell 5.1 decodes BOM-less scripts with the ANSI code page
+# (e.g. 936/GBK on zh-CN Windows), which corrupts raw UTF-8 Chinese text and breaks parsing.
+# Chinese UI text is therefore stored as \uXXXX escapes and decoded at runtime.
+function ConvertFrom-EscapedText([string]$Escaped) {
+  return [regex]::Unescape($Escaped)
+}
+
+$Text = @{
+  StatusTitle = ConvertFrom-EscapedText 'AgentMemory Workbench \u72B6\u6001'
+  OpenedAdmin = ConvertFrom-EscapedText '\u5DF2\u6253\u5F00 /admin\u3002'
+  NotRunningNotOpened = ConvertFrom-EscapedText '\u5F53\u524D\u672A\u542F\u52A8\uFF0C\u672A\u6253\u5F00 /admin\u3002'
+  AlreadyStopped = ConvertFrom-EscapedText '\u5F53\u524D\u5DF2\u505C\u6B62\u3002'
+  Stopped = ConvertFrom-EscapedText '\u5DF2\u505C\u6B62 workbench\u3002'
+  RunningOpenedAdmin = ConvertFrom-EscapedText '\u5F53\u524D\u5DF2\u542F\u52A8\uFF0C\u5DF2\u6253\u5F00 /admin\u3002'
+  AlreadyRunning = ConvertFrom-EscapedText '\u5F53\u524D\u5DF2\u542F\u52A8\u3002'
+  Started = ConvertFrom-EscapedText '\u5DF2\u542F\u52A8 workbench\u3002'
+  Restarted = ConvertFrom-EscapedText '\u5DF2\u91CD\u542F workbench\u3002'
+  FreshStarted = ConvertFrom-EscapedText '\u5F53\u524D\u672A\u542F\u52A8\uFF0C\u5DF2\u6309 fresh start \u542F\u52A8 workbench\u3002'
+  ChooseAction = ConvertFrom-EscapedText '\u8BF7\u9009\u62E9\u64CD\u4F5C'
+  Exited = ConvertFrom-EscapedText '\u5DF2\u9000\u51FA\u3002'
+  InvalidChoice = ConvertFrom-EscapedText '\u65E0\u6548\u8F93\u5165\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9\u3002'
+}
+
 function Get-WorkbenchUrls([int]$TargetPort) {
   $baseUrl = "http://127.0.0.1:$TargetPort"
   return [PSCustomObject]@{
@@ -66,12 +89,16 @@ function Get-WorkbenchStatus([int]$TargetPort) {
   $errorText = $null
 
   try {
-    $response = Invoke-WebRequest -Uri $urls.OverviewUrl -TimeoutSec 2
+    # -UseBasicParsing avoids the Internet Explorer engine dependency in Windows PowerShell 5.1
+    # (it is accepted and ignored by PowerShell 7).
+    $response = Invoke-WebRequest -Uri $urls.OverviewUrl -TimeoutSec 2 -UseBasicParsing
     $httpStatus = [int]$response.StatusCode
     $payload = $null
     if ($response.Content) {
       try {
-        $payload = $response.Content | ConvertFrom-Json -Depth 8
+        # No -Depth: ConvertFrom-Json only gained it in PowerShell 6.2, and on 5.1 the unknown
+        # parameter would make every running worker look INACTIVE.
+        $payload = $response.Content | ConvertFrom-Json
       } catch {
         $payload = $null
       }
@@ -99,7 +126,7 @@ function Get-WorkbenchStatus([int]$TargetPort) {
 
 function Write-WorkbenchStatus([object]$Status, [string]$Message = $null) {
   Write-Host ""
-  Write-Host "AgentMemory Workbench 状态"
+  Write-Host $Text.StatusTitle
   Write-Host "State : $($Status.State)"
   Write-Host "Port  : $($Status.Port)"
   Write-Host "Admin : $($Status.AdminUrl)"
@@ -192,22 +219,22 @@ function Invoke-WorkbenchAction(
   if ($ResolvedAction -eq 'open-admin') {
     if ($currentStatus.State -eq 'ACTIVE') {
       Invoke-WorkbenchBrowserOpen $currentStatus.AdminUrl
-      Write-WorkbenchStatus $currentStatus "已打开 /admin。"
+      Write-WorkbenchStatus $currentStatus $Text.OpenedAdmin
     } else {
-      Write-WorkbenchStatus $currentStatus "当前未启动，未打开 /admin。"
+      Write-WorkbenchStatus $currentStatus $Text.NotRunningNotOpened
     }
     return
   }
 
   if ($ResolvedAction -eq 'stop') {
     if ($currentStatus.State -eq 'INACTIVE') {
-      Write-WorkbenchStatus $currentStatus "当前已停止。"
+      Write-WorkbenchStatus $currentStatus $Text.AlreadyStopped
       return
     }
 
     Invoke-WorkbenchStop $TargetPort
     $stoppedStatus = Wait-WorkbenchInactive $TargetPort
-    Write-WorkbenchStatus $stoppedStatus "已停止 workbench。"
+    Write-WorkbenchStatus $stoppedStatus $Text.Stopped
     return
   }
 
@@ -215,9 +242,9 @@ function Invoke-WorkbenchAction(
     if ($currentStatus.State -eq 'ACTIVE') {
       if ($AllowOpenOnReuse -and (-not $DisableBrowserOpen)) {
         Invoke-WorkbenchBrowserOpen $currentStatus.AdminUrl
-        Write-WorkbenchStatus $currentStatus "当前已启动，已打开 /admin。"
+        Write-WorkbenchStatus $currentStatus $Text.RunningOpenedAdmin
       } else {
-        Write-WorkbenchStatus $currentStatus "当前已启动。"
+        Write-WorkbenchStatus $currentStatus $Text.AlreadyRunning
       }
       return
     }
@@ -225,7 +252,7 @@ function Invoke-WorkbenchAction(
     Invoke-WorkbenchBuild
     Invoke-WorkbenchStart $TargetPort (-not $DisableBrowserOpen)
     $startedStatus = Get-WorkbenchStatus $TargetPort
-    Write-WorkbenchStatus $startedStatus "已启动 workbench。"
+    Write-WorkbenchStatus $startedStatus $Text.Started
     return
   }
 
@@ -240,9 +267,9 @@ function Invoke-WorkbenchAction(
     Invoke-WorkbenchStart $TargetPort (-not $DisableBrowserOpen)
     $restartedStatus = Get-WorkbenchStatus $TargetPort
     if ($currentStatus.State -eq 'ACTIVE') {
-      Write-WorkbenchStatus $restartedStatus "已重启 workbench。"
+      Write-WorkbenchStatus $restartedStatus $Text.Restarted
     } else {
-      Write-WorkbenchStatus $restartedStatus "当前未启动，已按 fresh start 启动 workbench。"
+      Write-WorkbenchStatus $restartedStatus $Text.FreshStarted
     }
     return
   }
@@ -261,7 +288,7 @@ function Show-WorkbenchMenu([int]$TargetPort) {
     Write-Host "[5] Open Admin"
     Write-Host "[6] Exit"
 
-    $choice = Read-Host "请选择操作"
+    $choice = Read-Host $Text.ChooseAction
     switch ($choice) {
       '1' {
         Invoke-WorkbenchAction 'start' $TargetPort $false $false
@@ -284,11 +311,11 @@ function Show-WorkbenchMenu([int]$TargetPort) {
         return
       }
       '6' {
-        Write-Host "已退出。"
+        Write-Host $Text.Exited
         return
       }
       default {
-        Write-Host "无效输入，请重新选择。"
+        Write-Host $Text.InvalidChoice
         Write-Host ""
       }
     }
