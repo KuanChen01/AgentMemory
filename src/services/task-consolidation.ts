@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { DatabaseManager, Observation } from './db';
 import { boundedEnvInteger } from './llm-budget';
 import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
-import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
+import { interpretWorkMemory, synthesizeEnglishWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import { modifiedFiles, summaryHash, summaryHashV2 } from './event-classifier';
 import { getEmbedding } from './embedding';
 import { runAutomaticPostTaskReview } from './post-task-review';
@@ -454,7 +454,9 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
           const user = `Session purpose: ${purpose}\nProject: ${first.project_path}\nAgent: ${first.agent_id}\nTrigger: ${trigger}\n` +
             `Tool calls: ${rows.length}${touched.length ? `\nFiles modified (from edit tools): ${touched.slice(0, 30).join(', ')}` : ''}` +
             `${rendered.omitted || atCapture ? `\nNOTE: ${rendered.omitted + atCapture} chars were omitted (${atCapture} at capture, ${rendered.omitted} for the prompt budget); the source is incomplete.` : ''}\n\n${rendered.text}`;
-          parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT, user, settings), !anyFailure);
+          const synth = await synthesizeEnglishWorkMemory(system => callLlmJson('observation', system, user, settings), TASK_SYSTEM_PROMPT);
+          result.llm_calls += synth.calls - 1;
+          parsed = interpretWorkMemory(synth.raw, !anyFailure);
         } catch (err: any) { lastError = err.message; }
       }
       // Failures, edits and abbreviated sources are never silently skipped.
@@ -622,9 +624,11 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
       }
       else {
         summary.llm_calls++;
-        parsed = interpretWorkMemory(await callLlmJson('observation', TASK_SYSTEM_PROMPT,
-          `Legacy per-step records of one session\nProject: ${first.project_path}\n` +
-          `${rendered.omitted ? `NOTE: ${rendered.omitted} chars were omitted for the prompt budget; the source is incomplete.\n` : ''}\n${rendered.text}`, settings), true);
+        const legacyUser = `Legacy per-step records of one session\nProject: ${first.project_path}\n` +
+          `${rendered.omitted ? `NOTE: ${rendered.omitted} chars were omitted for the prompt budget; the source is incomplete.\n` : ''}\n${rendered.text}`;
+        const synth = await synthesizeEnglishWorkMemory(system => callLlmJson('observation', system, legacyUser, settings), TASK_SYSTEM_PROMPT);
+        summary.llm_calls += synth.calls - 1;
+        parsed = interpretWorkMemory(synth.raw, true);
         // Same shared policy as task results: legacy rows that recorded modified files may not end as 'skipped'.
         const legacyTouched = seg.reduce((n: number, r: any) => n + legacyFilesModified(r.files_modified).length, 0);
         const refusal = parsed.skip ? skipRefusal(rendered, false, legacyTouched) : null;

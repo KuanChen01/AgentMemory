@@ -10,7 +10,10 @@ import {
 } from './memory-policy';
 import { llmBudgetOptions, recordLlmUsage } from './llm-budget';
 
-export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest-v1';
+// Bumped in v2.2.4 for the English-output rule. The version is recorded on new digests only:
+// it never makes an existing successful digest stale (no regeneration, no backfill).
+export const DAILY_DIGEST_PROMPT_VERSION = 'daily-digest-v2';
+export const DAILY_DIGEST_ENGLISH_RULE = 'Write the summary and every list entry in English regardless of the language of the observations; keep identifiers, paths, commands and proper names verbatim.';
 const DEFAULT_DIGEST_TIME_ZONE = 'Asia/Shanghai';
 
 export interface DailyDigestLlmConfig {
@@ -125,10 +128,11 @@ export async function runDailyMemoryDigest(
     return { digest, localDate, selection };
   }
 
-  // Hash dedup: identical sources + prompt version already summarized successfully
-  // means another model call cannot add information.
+  // Hash dedup: identical sources already summarized successfully means another model
+  // call cannot add information. Deliberately independent of prompt_version, so a prompt
+  // bump never regenerates existing digests (v2.2.4: no backfill of old digests).
   const existing = await input.dbManager.getDailyMemoryDigest({ projectPath: input.projectPath, localDate }).catch(() => null);
-  if (existing && existing.status === 'success' && existing.prompt_version === DAILY_DIGEST_PROMPT_VERSION
+  if (existing && existing.status === 'success'
       && [...existing.source_observation_ids].sort().join(',') === [...selectedIds].sort().join(',')) {
     return { digest: existing, localDate, selection };
   }
@@ -183,6 +187,7 @@ function buildDailyDigestChatRequest(
 Create one concise daily memory digest from selected AgentMemory observations.
 Return valid JSON only. Do not auto-promote facts into state; list them as candidates.
 Keep the summary under 150 words and each list to at most 5 concise entries.
+${DAILY_DIGEST_ENGLISH_RULE}
 Schema:
 {
   "summary": "string",
