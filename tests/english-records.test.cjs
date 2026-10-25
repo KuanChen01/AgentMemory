@@ -36,7 +36,8 @@ test('cjkRatio / isMainlyCjk heuristic on title + narrative', () => {
   assert.ok(wm.cjkRatio('フックを修正した') > 0.9 && wm.cjkRatio('훅을 수정했다') > 0.9);
   assert.equal(wm.isMainlyCjk(CJK), true);
   assert.equal(wm.isMainlyCjk(EN), false);
-  assert.equal(wm.isMainlyCjk({ ...CJK, record_kind: 'skip' }), false, 'skip answers are not retried');
+  assert.equal(wm.isMainlyCjk({ ...CJK, record_kind: 'skip' }), true, 'a CJK skip can be refused and saved, so it is retried too');
+  assert.equal(wm.isMainlyCjk({ title: 'Fixed `项目配置加载兼容性回归测试`', narrative: 'Updated E:/项目/配置/加载.ts and reran the suite.' }), false, 'CJK inside code spans and paths does not count');
   assert.equal(wm.isMainlyCjk(null), false);
   assert.equal(wm.isMainlyCjk({ title: 42, narrative: ['x'] }), false);
 });
@@ -195,4 +196,29 @@ test('install/reinstall/uninstall never touch ~/.claude/CLAUDE.md (vera:agentmem
     assert.ok(path.resolve(home).startsWith(path.resolve(os.tmpdir())));
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('legacy compaction: a CJK answer is retried once and task_results.llm_calls records both calls', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-en-legacy-'));
+  const { startStub } = require('./helpers/task-worker.cjs');
+  const stub = await startStub(); const old = { ...process.env };
+  Object.assign(process.env, { AGENTMEM_DB_PATH: path.join(root, 'l.db'), AGENTMEM_LLM_API_URL: stub.url, AGENTMEM_LLM_API_KEY: 'fixture-only', EMBEDDING_API_URL: '' });
+  const { DatabaseManager } = require('../dist/services/db.js');
+  const db = new DatabaseManager();
+  try {
+    await db.initialize();
+    const at = new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' ');
+    await db.saveObservation({ id: 'le0', session_id: 'le', project_path: 'E:/Legacy', agent_id: 'codex', title: 'Ran tests', narrative: 'tests passed',
+      facts: [], concepts: [], files_read: [], files_modified: [], embedding: [], created_at: at });
+    const base = { record_kind: 'outcome', facts: [], concepts: [], files_read: [], files_modified: [] };
+    stub.state.queue.push({ ...base, title: '修复了解析器的回归问题', narrative: '重新运行了全部测试，全部通过。' },
+      { ...base, title: 'Fixed the parser regression', narrative: 'Reran the full suite; all tests passed.' });
+    const tc = require('../dist/services/task-consolidation.js');
+    const res = await tc.compactLegacy(db, { days: 7, apply: true });
+    assert.equal(res.llm_calls, 2);
+    const row = db.sqlGet(`SELECT status, llm_calls, observation_id FROM task_results WHERE source_kind='legacy_compacted'`);
+    assert.equal(row.status, 'saved'); assert.equal(row.llm_calls, 2);
+    assert.equal(db.sqlGet(`SELECT title FROM observations WHERE id=?`, [row.observation_id]).title, 'Fixed the parser regression');
+  } finally { db.close(); await stub.close(); for (const k of Object.keys(process.env)) if (!(k in old)) delete process.env[k];
+    Object.assign(process.env, old); fs.rmSync(root, { recursive: true, force: true }); }
 });

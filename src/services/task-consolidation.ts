@@ -609,7 +609,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
       if (prior && !sameSource) throw new Error(`compact-legacy: result ${resultId} exists but covers other source rows; refusing to reuse it`);
       const reusedResult = (!prior || sameSource) ? savedResult(db, resultId, `dup-${resultId}`) : null;
       let observationId: string | null = null; let status = 'skipped'; let reason: string | null = null;
-      let parsed: any = null;
+      let parsed: any = null; let segCalls = 0;
       if (reusedResult) { observationId = reusedResult.observationId; status = reusedResult.status; summary.reused++; }
       // A pending result is reused only while its reason still holds under THIS plan/budget (the row still does not fit
       // whole); once it fits, the model is called and the result follows the new plan (round 27).
@@ -627,7 +627,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
         const legacyUser = `Legacy per-step records of one session\nProject: ${first.project_path}\n` +
           `${rendered.omitted ? `NOTE: ${rendered.omitted} chars were omitted for the prompt budget; the source is incomplete.\n` : ''}\n${rendered.text}`;
         const synth = await synthesizeEnglishWorkMemory(system => callLlmJson('observation', system, legacyUser, settings), TASK_SYSTEM_PROMPT);
-        summary.llm_calls += synth.calls - 1;
+        summary.llm_calls += synth.calls - 1; segCalls = synth.calls;
         parsed = interpretWorkMemory(synth.raw, true);
         // Same shared policy as task results: legacy rows that recorded modified files may not end as 'skipped'.
         const legacyTouched = seg.reduce((n: number, r: any) => n + legacyFilesModified(r.files_modified).length, 0);
@@ -654,7 +654,7 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
         else { observationId = obs.id; status = 'saved'; summary.results_saved++; }
       }
       if (status === 'skipped') summary.skipped++;
-      const called = parsed ? 1 : 0;
+      const called = parsed ? segCalls : 0;
       await db.sqlWrite(sql => {
         sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
           source_ids,trigger,status,observation_id,llm_calls,source_kind,last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'legacy_compacted',?)

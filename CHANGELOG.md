@@ -12,7 +12,7 @@ Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install` (kee
   - Installer-managed guidance for OpenCode (global rules), Antigravity (guidance and plugin rule) and Grok Build (agent profile) carries the English rule, so it survives reinstalls. The installer still never writes `~/.claude/CLAUDE.md`; Claude Code gets the rule from the `record_memory` tool docs.
 
 ### Added
-- Consolidation retry: if a non-skip synthesis answer's title and narrative are mainly CJK (ideographs, kana or hangul at 30% or more of the prose letters, with paths, identifiers and code spans ignored), the model is asked once more with a stronger English reminder and the second answer is kept regardless. If the retry fails, the first answer is kept. There is never a third call.
+- Consolidation retry: if a synthesis answer's title (skip answers included, since a refused skip can still be saved) and narrative are mainly CJK (ideographs, kana or hangul at 30% or more of the prose letters, with paths, identifiers and code spans ignored), the model is asked once more with a stronger English reminder and the second answer is kept regardless. If the retry fails, the first answer is kept. There is at most one English-language retry per synthesis; the existing malformed-JSON and network retries inside each request still apply. Legacy compaction records both calls in `task_results.llm_calls`.
 
 ## [2.2.3] - 2026-10-25
 

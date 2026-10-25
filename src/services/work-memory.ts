@@ -28,20 +28,23 @@ export const ENGLISH_RETRY_REMINDER = 'IMPORTANT: a previous answer for these ev
   'The title, narrative, facts and concepts MUST be written in English. Translate Chinese, Japanese or Korean prose into English; ' +
   'keep identifiers, paths, commands, quoted error text and proper names verbatim.';
 
-/** Share of CJK characters (ideographs, kana, hangul) among CJK characters plus Latin letters of prose words in `text`. */
+/** Share of CJK characters (ideographs, kana, hangul) among CJK characters plus Latin letters, both counted in prose words of `text`. */
 export function cjkRatio(text: string): number {
   // Identifiers, paths, commands and code spans stay verbatim, so they do not count as English prose.
   const prose = text.replace(/`[^`]*`/g, ' ').replace(/\S*[\/\\._:=@#-]\S+/g, ' ');
-  const cjk = (text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/g) || []).length;
+  const cjk = (prose.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/g) || []).length;
   const latin = (prose.match(/[A-Za-z]/g) || []).length;
   return cjk + latin ? cjk / (cjk + latin) : 0;
 }
 
 export const CJK_RETRY_THRESHOLD = 0.3;
 
-/** True when a non-skip model answer's title + narrative are mainly CJK. */
+/**
+ * True when a model answer's title + narrative are mainly CJK. Skip answers are checked too:
+ * the failure/edit/incomplete-source policies can refuse a skip and save its prose.
+ */
 export function isMainlyCjk(raw: any): boolean {
-  if (!raw || typeof raw !== 'object' || raw.record_kind === 'skip') return false;
+  if (!raw || typeof raw !== 'object') return false;
   const text = `${typeof raw.title === 'string' ? raw.title : ''}\n${typeof raw.narrative === 'string' ? raw.narrative : ''}`;
   return cjkRatio(text) >= CJK_RETRY_THRESHOLD;
 }
