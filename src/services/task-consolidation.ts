@@ -193,7 +193,8 @@ export function taskPipelineSql(opts: TaskPipelineSqlOpts): { sql: string; param
         CASE WHEN res.any_legacy = 1 THEN 'legacy_compacted' ELSE 'task' END AS source_kind,
         NULLIF(MIN(COALESCE(bf.min_ms, 9e18), COALESCE(bd.min_ms, 9e18), COALESCE(ev.min_ms, 9e18), COALESCE(res.min_ms, 9e18)), 9e18) AS created_ms,
         NULLIF(MAX(COALESCE(bf.max_ms, -1), COALESCE(bd.max_ms, -1), COALESCE(ev.max_ms, -1), COALESCE(res.max_ms, -1),
-          COALESCE(a.updated_ms, -1), CASE WHEN c.completed_ms > 0 THEN c.completed_ms ELSE -1 END), -1) AS updated_ms,
+          /* completed: its completion (imported: the original end); failed-attempt wall-clock time counts only while open */
+          CASE WHEN c.completed_ms > 0 THEN c.completed_ms ELSE COALESCE(a.updated_ms, -1) END), -1) AS updated_ms,
         COALESCE(a.attempts, 0) AS attempts, COALESCE(res.llm_calls, 0) AS llm_calls, COALESCE(res.segment_count, 0) AS segment_count,
         COALESCE(res.result_rows, 0) AS result_rows,
         COALESCE(bf.n, 0) + COALESCE(bd.n, 0) + COALESCE(ev.n, 0) AS evidence_count,

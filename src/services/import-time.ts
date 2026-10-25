@@ -16,6 +16,12 @@ export function parseImportTime(value: unknown, nowMs = Date.now()): ImportTimeR
   else if (typeof value === 'string' && /^\d{10,16}$/.test(value.trim())) ms = Number(value.trim());
   else if (typeof value === 'string' && ISO_WITH_ZONE.test(value.trim())) {
     const text = value.trim().replace(' ', 'T').replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+    // Date.parse rolls impossible dates over (2026-02-30 -> 2026-03-02); reject them instead.
+    const [y, mo, d] = text.slice(0, 10).split('-').map(Number);
+    const [hh, mi, ss] = text.slice(11, 19).split(':').map(n => Number(n || 0));
+    const calendar = new Date(Date.UTC(y, mo - 1, d));
+    if (calendar.getUTCFullYear() !== y || calendar.getUTCMonth() !== mo - 1 || calendar.getUTCDate() !== d
+      || hh > 23 || mi > 59 || ss > 59) return { ok: false, error: 'Invalid timestamp: not a real calendar date/time' };
     ms = Date.parse(text);
   } else if (value === undefined || value === null || value === '') {
     return { ok: false, error: 'Missing timestamp (ISO 8601 with a time zone, or epoch milliseconds)' };

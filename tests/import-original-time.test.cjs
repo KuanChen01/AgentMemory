@@ -46,7 +46,7 @@ test('parseImportTime: ISO with zone or epoch ms; rejects future, zone-less, NaN
   assert.deepEqual(parseImportTime(String(now - 1000), now), { ok: true, ms: now - 1000 });
   assert.equal(parseImportTime(now + 4 * 60000, now).ok, true, 'small clock skew allowed');
   for (const bad of [now + 6 * 60000, '2026-10-25T09:00:00+00:00', '2026-10-24T23:50:00', NaN, Infinity, -1, IMPORT_MIN_MS - 1,
-    1729760000, '2019-12-31T23:59:59Z', 'yesterday', '', null, undefined, {}, [], true, '2026-13-45T99:99:00Z'])
+    1729760000, '2019-12-31T23:59:59Z', 'yesterday', '2026-02-30T12:00:00Z', '2025-02-29T12:00:00Z', '2026-04-31T12:00:00+08:00', '2026-10-24T24:00:00Z', '', null, undefined, {}, [], true, '2026-13-45T99:99:00Z'])
     assert.equal(parseImportTime(bad, now).ok, false, `rejected: ${String(bad)}`);
 });
 
@@ -181,4 +181,28 @@ test('schema: a revision-11 database gains import_arrival_ms and task_import_tim
     if (prev === undefined) delete process.env.AGENTMEM_DB_PATH; else process.env.AGENTMEM_DB_PATH = prev;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('pipeline: a retried imported task reports its original end, not the retry wall clock', async () => {
+  await withWorker(async ({ base, get, stub, dbPath }) => {
+    const sid = 'import-retry'; const t1 = localAt(4, 9, 0); const tb = localAt(4, 9, 20);
+    // First consolidation attempts fail (injected) -> task_attempts.updated_ms = wall clock.
+    const w = new Database(dbPath);
+    w.exec(`CREATE TRIGGER boom_import BEFORE INSERT ON observations WHEN NEW.session_id='import-retry' BEGIN SELECT RAISE(ABORT,'injected failure'); END`);
+    await postRaw(base, '/import/tools', { ...toolBody(sid, 'r1'), timestamp: t1 });
+    const b = await postRaw(base, '/import/tasks/boundary', { session_id: sid, timestamp: tb });
+    const end = Date.now() + 8000; let attempted = false;
+    while (Date.now() < end) {
+      const d = openDb(dbPath); const a = d.sqlGet(`SELECT attempts FROM task_attempts WHERE task_id=?`, [b.body.task_id]); d.close();
+      if (a?.attempts) { attempted = true; break; } await new Promise(r => setTimeout(r, 100));
+    }
+    assert.ok(attempted, 'a failed attempt was recorded');
+    w.exec(`DROP TRIGGER boom_import`); w.close();
+    await settle(dbPath, b.body.task_id, 15000);
+    const pl = await get(`/admin/api/pipeline?tz_offset_minutes=${TZ}`);
+    const row = pl.items.find(i => i.task_id === b.body.task_id);
+    assert.ok(row, 'task listed');
+    assert.equal(Date.parse(row.updated_at), tb);
+    assert.equal(Date.parse(row.created_at), t1);
+  });
 });
