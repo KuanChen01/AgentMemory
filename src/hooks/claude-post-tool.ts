@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import { shouldSkipAgentMemoryToolLog } from './agentmem-tool-filter';
 import { fetchAgentMemoryWorker } from './worker-client';
+import { buildClaudeToolLog } from './claude-hook-payload';
 
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
 
@@ -39,29 +40,14 @@ async function main() {
   try {
     const payload = JSON.parse(stdinContent);
     
-    // Support varying field structures in hook schemas
-    const toolName = payload.toolName || payload.tool_name || payload.tool || 'unknown-tool';
-    if (shouldSkipAgentMemoryToolLog(toolName)) return;
-
-    const input = payload.input || payload.arguments || payload.args || {};
-    const output = payload.output || payload.result || payload.response || '';
-    const success = payload.success !== undefined ? payload.success : true;
-    const sessionId = payload.sessionId || payload.session_id || payload.uuid || 'global-session';
-    const projectPath = path.resolve(process.cwd()).replace(/\\/g, '/');
+    const body = buildClaudeToolLog(payload, path.resolve(process.cwd()));
+    if (shouldSkipAgentMemoryToolLog(body.tool_name)) return;
 
     // Post to local worker queue
     const response = await fetchAgentMemoryWorker(PORT, '/tools', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: sessionId,
-        project_path: projectPath,
-        agent_id: 'claudecode',
-        tool_name: toolName,
-        input,
-        output,
-        success
-      })
+      body: JSON.stringify(body)
     });
 
     if (!response?.ok) return;
