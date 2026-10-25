@@ -509,7 +509,7 @@ test('sanitizeLastError redacts paths, emails, and tokens', () => {
 });
 
 test('an existing database gains idx_task_event_buffer_result without a schema bump', withDb(async (db) => {
-  assert.equal(db.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+  assert.equal(db.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '12');
   assert.equal(db.sqlAll(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_task_event_buffer_result'`).length, 1);
   await db.sqlWrite((tx) => tx.run(`DROP INDEX idx_task_event_buffer_result`));
   const dbPath = process.env.AGENTMEM_DB_PATH;
@@ -520,7 +520,7 @@ test('an existing database gains idx_task_event_buffer_result without a schema b
     const row = reopened.sqlGet(`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_task_event_buffer_result'`);
     assert.ok(row);
     assert.match(row.sql, /task_event_buffer\(task_result_id, received_ms\)/);
-    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '12');
   } finally {
     reopened.close();
   }

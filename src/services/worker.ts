@@ -57,6 +57,7 @@ import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { initializeWithLockRetry } from './db-init-retry';
 import { classifyToolEvent } from './event-classifier';
+import { parseImportTime } from './import-time';
 import {
   bufferEvent, consolidateTask, freezeOpenTask, frozenTasks, inflightTaskIds, isTaskInFlight, openSessionsIdleSince, recoverInterruptedClaims,
   stuckTaskCount, taskIdleMs, taskRetryMs, TaskTrigger,
@@ -126,8 +127,8 @@ function scheduleTask(sessionId: string, taskId: string, trigger: TaskTrigger): 
   consolidationChain.set(sessionId, next);
   return next;
 }
-async function closeTask(sessionId: string, trigger: TaskTrigger): Promise<string | null> {
-  const taskId = await freezeOpenTask(dbManager, sessionId);
+async function closeTask(sessionId: string, trigger: TaskTrigger, boundaryMs?: number): Promise<string | null> {
+  const taskId = await freezeOpenTask(dbManager, sessionId, undefined, boundaryMs);
   if (taskId) void scheduleTask(sessionId, taskId, trigger);
   return taskId;
 }
@@ -1650,8 +1651,20 @@ app.post('/sessions', async (req, res) => {
   }
 });
 
-// 3. Ingest Hook Logs (Tool Execution Event)
-app.post('/tools', async (req, res) => {
+// 3. Ingest Hook Logs (Tool Execution Event). Live capture: always server time; any body timestamp is ignored.
+app.post('/tools', (req, res) => ingestToolLog(req, res, null));
+
+// 3a. Import with the ORIGINAL event time (backfill). Only this path may set the time; it requires a call id so a
+// re-import is insert-once under the same id rule as live capture (hook:<session_id>:<call_id>).
+app.post('/import/tools', (req, res) => {
+  const time = parseImportTime(req.body?.timestamp);
+  if (!time.ok) return res.status(400).json({ error: time.error });
+  if (!normalizeOptionalString(req.body?.call_id ?? req.body?.tool_use_id ?? req.body?.id))
+    return res.status(400).json({ error: 'Import requires call_id (insert-once dedupe)' });
+  return ingestToolLog(req, res, time.ms);
+});
+
+async function ingestToolLog(req: Request, res: Response, importedMs: number | null) {
   try {
     const { session_id, project_path, agent_id, tool_name, input, output, success } = req.body;
 
@@ -1662,6 +1675,8 @@ app.post('/tools', async (req, res) => {
     if (!(await isWriteEnabled())) {
       return sendWriteDisabled(res);
     }
+    if (importedMs !== null && !taskConsolidationEnabled())
+      return res.status(409).json({ error: 'Import requires task consolidation to be enabled' });
 
     const logEntry: QueuedToolLog = {
       id: uuidv4(),
@@ -1672,7 +1687,7 @@ app.post('/tools', async (req, res) => {
       input: normalizeToolLogText(input),
       output: normalizeToolLogText(output),
       success: toolResponseSucceeded(output, !!success),
-      timestamp: Date.now()
+      timestamp: importedMs ?? Date.now()
     };
 
     // Rule routing happens before any model call or embedding.
@@ -1685,7 +1700,7 @@ app.post('/tools', async (req, res) => {
       // Insert-once by tool call id when the hook provides one.
       const callId = normalizeOptionalString(req.body?.call_id ?? req.body?.tool_use_id ?? req.body?.id);
       if (callId) logEntry.id = `hook:${session_id}:${callId}`;
-      const inserted = await bufferEvent(dbManager, logEntry);
+      const inserted = await bufferEvent(dbManager, { ...logEntry, imported: importedMs !== null });
       return res.json({ success: true, route: 'task', buffered: inserted, duplicate: !inserted, queueLength: logQueue.length });
     }
 
@@ -1698,7 +1713,7 @@ app.post('/tools', async (req, res) => {
     console.error('Error ingesting tool log:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Unable to ingest tool log.' });
   }
-});
+}
 
 // 3b. Task boundary: the next user prompt closes the previous task of this session.
 app.post('/tasks/boundary', async (req, res) => {
@@ -1712,6 +1727,24 @@ app.post('/tasks/boundary', async (req, res) => {
   } catch (err: any) {
     // The task stays open (nothing was frozen) and is closed by the next boundary or the idle sweep.
     console.error(`[Task] Task boundary failed for ${sessionId}; task kept open for retry: ${err.message}`);
+    if (!res.headersSent) res.status(500).json({ error: 'Task boundary failed; task kept for retry.' });
+  }
+});
+
+// 3c. Imported task boundary: freezes the session's open (imported) events; the task ends at the later of its last
+// event and this original boundary time, never at the wall clock.
+app.post('/import/tasks/boundary', async (req, res) => {
+  const sessionId = normalizeOptionalString(req.body?.session_id);
+  if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
+  const time = parseImportTime(req.body?.timestamp);
+  if (!time.ok) return res.status(400).json({ error: time.error });
+  if (!(await isWriteEnabled())) return sendWriteDisabled(res);
+  if (!taskConsolidationEnabled()) return res.status(409).json({ error: 'Import requires task consolidation to be enabled' });
+  try {
+    const taskId = await closeTask(sessionId, 'user_prompt', time.ms);
+    res.json({ success: true, scheduled: !!taskId, task_id: taskId });
+  } catch (err: any) {
+    console.error(`[Task] Imported task boundary failed for ${sessionId}; task kept open for retry: ${err.message}`);
     if (!res.headersSent) res.status(500).json({ error: 'Task boundary failed; task kept for retry.' });
   }
 });

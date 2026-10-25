@@ -582,7 +582,7 @@ test('memories preview collapses whitespace and keeps chinese and emoji whole', 
 }));
 
 test('an existing database gains idx_observations_project_dt without a schema bump', withDb(async (db) => {
-  assert.equal(db.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+  assert.equal(db.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '12');
   assert.equal(db.sqlAll(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_observations_project_dt'`).length, 1);
   await db.sqlWrite((tx) => tx.run(`DROP INDEX idx_observations_project_dt`));
   const dbPath = process.env.AGENTMEM_DB_PATH;
@@ -594,7 +594,7 @@ test('an existing database gains idx_observations_project_dt without a schema bu
     assert.ok(row);
     assert.match(row.sql, /LOWER\(project_path\)/);
     assert.match(row.sql, /datetime\(created_at\)/);
-    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '12');
   } finally {
     reopened.close();
   }

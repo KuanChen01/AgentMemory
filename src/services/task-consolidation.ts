@@ -22,6 +22,8 @@ import { runAutomaticPostTaskReview } from './post-task-review';
 export interface IncomingToolEvent {
   id: string; session_id: string; project_path: string; agent_id: string; tool_name: string;
   input: string; output: string; success: boolean; timestamp: number;
+  /** Set only by the import path: `timestamp` is the original event time, not the arrival time. */
+  imported?: boolean;
 }
 export type TaskTrigger = 'user_prompt' | 'turn_end' | 'session_close' | 'idle_timeout' | 'manual' | 'legacy_compaction';
 
@@ -44,10 +46,16 @@ export async function bufferEvent(db: DatabaseManager, ev: IncomingToolEvent): P
   const input = String(ev.input ?? ''), output = String(ev.output ?? '');
   // Over-size at capture OR a tool's own truncation marker ('Warning: truncated output', ...) = incomplete source.
   const incomplete = incompleteToolSource(input, output, EVENT_INPUT_MAX, EVENT_OUTPUT_MAX);
-  const res: any = await db.sqlWrite(sql => sql.run(`INSERT OR IGNORE INTO task_event_buffer (id,session_id,project_path,agent_id,tool_name,success,
-    input,output,incomplete,received_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    [ev.id, ev.session_id, ev.project_path, ev.agent_id, ev.tool_name, ev.success ? 1 : 0,
-      keepHeadTail(input, EVENT_INPUT_MAX), keepHeadTail(output, EVENT_OUTPUT_MAX), incomplete ? 1 : 0, ev.timestamp]));
+  const values = [ev.id, ev.session_id, ev.project_path, ev.agent_id, ev.tool_name, ev.success ? 1 : 0,
+    keepHeadTail(input, EVENT_INPUT_MAX), keepHeadTail(output, EVENT_OUTPUT_MAX), incomplete ? 1 : 0, ev.timestamp];
+  // Imported events keep their original time in received_ms AND created_at (day bucketing, hash day); the wall-clock
+  // arrival goes to import_arrival_ms, which only the idle sweep reads.
+  const res: any = await db.sqlWrite(sql => ev.imported
+    ? sql.run(`INSERT OR IGNORE INTO task_event_buffer (id,session_id,project_path,agent_id,tool_name,success,
+      input,output,incomplete,received_ms,created_at,import_arrival_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [...values, sqlTimeMs(ev.timestamp), Date.now()])
+    : sql.run(`INSERT OR IGNORE INTO task_event_buffer (id,session_id,project_path,agent_id,tool_name,success,
+      input,output,incomplete,received_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`, values));
   return (res?.changes || 0) > 0;
 }
 const CAPTURE_MARKER = /\[\.\.\. omitted (\d+) chars at capture \.\.\.\]/g;
@@ -71,10 +79,19 @@ export async function recoverInterruptedClaims(db: DatabaseManager): Promise<num
     WHERE task_result_id LIKE 'claim:%'`).changes || 0);
 }
 
-/** Sessions with open events whose last activity (including legacy evidence rows) is older than cutoff. */
+/** SQLite CURRENT_TIMESTAMP format (UTC, second precision) for an epoch-ms instant. */
+export function sqlTimeMs(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/**
+ * Sessions with open events whose last activity (including legacy evidence rows) is older than cutoff.
+ * Imported events count by their wall-clock arrival, so an import in progress is never idle-closed because its
+ * original times are old; the task's times still come from the events (see consolidateTask).
+ */
 export function openSessionsIdleSince(db: DatabaseManager, cutoffMs: number): string[] {
   return db.sqlAll(`SELECT session_id FROM (
-      SELECT session_id, received_ms AS ms, (task_result_id IS NULL) AS open FROM task_event_buffer
+      SELECT session_id, COALESCE(import_arrival_ms, received_ms) AS ms, (task_result_id IS NULL) AS open FROM task_event_buffer
       UNION ALL SELECT session_id, received_ms, (task_id IS NULL) FROM tool_evidence)
     GROUP BY session_id HAVING SUM(open) > 0 AND MAX(ms) <= ?`, [cutoffMs]).map(r => r.session_id);
 }
@@ -176,7 +193,8 @@ export function taskPipelineSql(opts: TaskPipelineSqlOpts): { sql: string; param
         CASE WHEN res.any_legacy = 1 THEN 'legacy_compacted' ELSE 'task' END AS source_kind,
         NULLIF(MIN(COALESCE(bf.min_ms, 9e18), COALESCE(bd.min_ms, 9e18), COALESCE(ev.min_ms, 9e18), COALESCE(res.min_ms, 9e18)), 9e18) AS created_ms,
         NULLIF(MAX(COALESCE(bf.max_ms, -1), COALESCE(bd.max_ms, -1), COALESCE(ev.max_ms, -1), COALESCE(res.max_ms, -1),
-          COALESCE(a.updated_ms, -1), CASE WHEN c.completed_ms > 0 THEN c.completed_ms ELSE -1 END), -1) AS updated_ms,
+          /* completed: its completion (imported: the original end); failed-attempt wall-clock time counts only while open */
+          CASE WHEN c.completed_ms > 0 THEN c.completed_ms ELSE COALESCE(a.updated_ms, -1) END), -1) AS updated_ms,
         COALESCE(a.attempts, 0) AS attempts, COALESCE(res.llm_calls, 0) AS llm_calls, COALESCE(res.segment_count, 0) AS segment_count,
         COALESCE(res.result_rows, 0) AS result_rows,
         COALESCE(bf.n, 0) + COALESCE(bd.n, 0) + COALESCE(ev.n, 0) AS evidence_count,
@@ -247,11 +265,14 @@ export function stuckTaskCount(db: DatabaseManager, opts?: StuckTaskCountOpts): 
  * Events arriving later belong to the next task, even while this one is still queued.
  * An explicit taskId (e.g. derived from a transcript turn) makes freezing idempotent.
  */
-export async function freezeOpenTask(db: DatabaseManager, sessionId: string, explicitTaskId?: string): Promise<string | null> {
+export async function freezeOpenTask(db: DatabaseManager, sessionId: string, explicitTaskId?: string,
+    boundaryMs?: number): Promise<string | null> {
   const taskId = explicitTaskId || randomUUID();
   const frozen = await db.sqlWrite(sql => {
     const a = sql.run(`UPDATE task_event_buffer SET task_result_id=? WHERE session_id=? AND task_result_id IS NULL`, ['task:' + taskId, sessionId]).changes || 0;
     const b = sql.run(`UPDATE tool_evidence SET task_id=? WHERE session_id=? AND task_id IS NULL`, [taskId, sessionId]).changes || 0;
+    // Imported boundary: its original time bounds the task's end (never the wall clock).
+    if (a + b && boundaryMs !== undefined) sql.run(`INSERT OR IGNORE INTO task_import_times (task_id, boundary_ms) VALUES (?, ?)`, [taskId, boundaryMs]);
     return a + b;
   });
   return frozen ? taskId : null;
@@ -349,15 +370,26 @@ function legacyFilesModified(v: unknown): string[] {
   try { const a = JSON.parse(t); return Array.isArray(a) ? a.filter(Boolean).map(String) : [t]; } catch { return [t]; }
 }
 
-async function markTaskComplete(db: DatabaseManager, taskId: string) {
+async function markTaskComplete(db: DatabaseManager, taskId: string, endMs?: number | null) {
   await db.sqlWrite(sql => sql.run(`INSERT INTO task_completions (task_id, completed_ms) VALUES (?, ?)
-    ON CONFLICT(task_id) DO UPDATE SET completed_ms = excluded.completed_ms WHERE task_completions.completed_ms = 0`, [taskId, Date.now()]));
+    ON CONFLICT(task_id) DO UPDATE SET completed_ms = excluded.completed_ms WHERE task_completions.completed_ms = 0`, [taskId, endMs || Date.now()]));
+}
+
+/**
+ * End time of an imported task: its last event or its imported boundary, whichever is later. Null for a live task
+ * (live tasks keep server time). A task containing any imported event is treated as imported.
+ */
+export function importedTaskEndMs(db: DatabaseManager, taskId: string, rows: any[]): number | null {
+  if (!rows.some(r => r.import_arrival_ms !== null && r.import_arrival_ms !== undefined)) return null;
+  const last = Math.max(...rows.map(r => Number(r.received_ms) || 0));
+  const boundary = Number(db.sqlGet(`SELECT boundary_ms FROM task_import_times WHERE task_id=?`, [taskId])?.boundary_ms || 0);
+  return Math.max(last, boundary);
 }
 
 /** Rows of a task: buffered calls plus legacy evidence rows frozen by earlier revisions (read-only). */
 function taskRows(db: DatabaseManager, taskId: string): any[] {
-  const buffered = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,output,incomplete,received_ms,created_at
-    FROM task_event_buffer WHERE task_result_id=? OR task_result_id IN (SELECT id FROM task_results WHERE task_id=?)`, ['task:' + taskId, taskId]);
+  const buffered = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,output,incomplete,received_ms,created_at,
+    import_arrival_ms FROM task_event_buffer WHERE task_result_id=? OR task_result_id IN (SELECT id FROM task_results WHERE task_id=?)`, ['task:' + taskId, taskId]);
   const legacy = db.sqlAll(`SELECT id,session_id,project_path,agent_id,tool_name,success,input,output,truncated,received_ms,created_at
     FROM tool_evidence WHERE task_id=?`, [taskId]);
   return [...buffered, ...legacy].sort((a, b) => (a.received_ms - b.received_ms) || String(a.id).localeCompare(String(b.id)));
@@ -377,6 +409,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     const rows = taskRows(db, taskId);
     if (!rows.length) return { ...result, task_id: null, segments: 0 };
     const first = rows[0]; const sessionId = first.session_id;
+    const importedEnd = importedTaskEndMs(db, taskId, rows);
     // A task left by the segmented pipeline (segment_count > 1) is never finished by its first segment:
     // its whole remaining content gets a new whole-task result; the legacy rows stay untouched as history.
     const legacy = db.sqlGet(`SELECT 1 AS x FROM task_results WHERE task_id=? AND segment_count > 1 AND id <> ? LIMIT 1`, [taskId, `${taskId}-whole`]);
@@ -386,7 +419,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     if (prior && (prior.observation_id || ['skipped', 'duplicate'].includes(prior.status))) {
       // Result already recorded (crash between result and completion marker): finish without a model call.
       if (prior.observation_id) result.observations.push(prior.observation_id);
-      await markTaskComplete(db, taskId);
+      await markTaskComplete(db, taskId, importedEnd);
       return result;
     }
     const purpose = await db.getSessionPurpose(sessionId);
@@ -441,6 +474,7 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
           facts: parsed?.facts || [`${rows.length} tool calls (${tools})`], concepts: parsed?.concepts || ['task'],
           files_read: parsed?.files_read || [], files_modified: [...new Set([...(parsed?.files_modified || []), ...touched])].slice(0, 30),
           embedding: [], record_kind: fallback ? (anyFailure || touched.length ? 'outcome' : 'context') : parsed!.kind, source_kind: 'task',
+          ...(importedEnd ? { created_at: sqlTimeMs(importedEnd) } : {}),
         };
         if ((rendered.omitted || atCapture) && !fallback) obs.narrative += `\n(${rendered.omitted + atCapture} chars of the task were omitted before synthesis; source incomplete.)`;
         contentHash = summaryHashV2(obs.project_path, obs, hashDay);
@@ -461,14 +495,15 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
     if (observationId) result.observations.push(observationId);
     await db.sqlWrite(sql => {
       sql.run(`INSERT INTO task_results (id,task_id,session_id,project_path,agent_id,segment_index,segment_count,event_count,
-        source_ids,trigger,status,observation_id,content_sha256,llm_calls,last_error,evidence_count) VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,0)
+        source_ids,trigger,status,observation_id,content_sha256,llm_calls,last_error,evidence_count,created_at)
+        VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,0,COALESCE(?,CURRENT_TIMESTAMP))
         ON CONFLICT(id) DO UPDATE SET status=excluded.status, observation_id=excluded.observation_id, content_sha256=excluded.content_sha256,
-          llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=excluded.last_error, created_at=CURRENT_TIMESTAMP`,
+          llm_calls=task_results.llm_calls+excluded.llm_calls, last_error=excluded.last_error, created_at=excluded.created_at`,
         [resultId, taskId, sessionId, first.project_path, first.agent_id, segmentIndex, rows.length, JSON.stringify(rows.map(r => r.id)), trigger,
-          status, observationId, contentHash, result.llm_calls, lastError]);
+          status, observationId, contentHash, result.llm_calls, lastError, importedEnd ? sqlTimeMs(importedEnd) : null]);
       sql.run(`UPDATE task_event_buffer SET task_result_id=? WHERE task_result_id=?`, [resultId, 'task:' + taskId]);
     });
-    await markTaskComplete(db, taskId);
+    await markTaskComplete(db, taskId, importedEnd);
     // Post-task review runs once per task, never per observation.
     if (lastObservation) await runAutomaticPostTaskReview(db, lastObservation).catch(err =>
       console.error(`[Memory] Post-task review failed after task capture: ${err.message}`));

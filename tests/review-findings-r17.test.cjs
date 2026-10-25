@@ -63,7 +63,7 @@ test('R18 a database already migrated with the old comparison is repaired idempo
       assert.equal(row('cut').truncated, 1, 'really cut evidence keeps its flag');
       assert.equal(row('complete').output, '结果', 'evidence unchanged');
       assert.equal(db.sqlGet(`SELECT COUNT(*) n FROM tool_evidence_v1`).n, 2, 'v1 rows kept');
-      assert.equal(db.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+      assert.equal(db.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '12');
       db.close();
     }
   } finally { Object.assign(process.env, old); if (!old.AGENTMEM_DB_PATH) delete process.env.AGENTMEM_DB_PATH; fs.rmSync(root, { recursive: true, force: true }); }
