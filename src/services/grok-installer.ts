@@ -1,3 +1,5 @@
+import { AGENTMEM_ENGLISH_RECORDS_RULE } from './agent-guidance';
+
 interface TomlSection {
   name: string | null;
   lines: string[];
@@ -196,6 +198,8 @@ Prefer focused queries for a specific question. Use \`memory_timeline\` only whe
 For session startup recovery, \`get_project_context\` remains available when broad project context is needed.
 
 Normal tool activity is captured by hooks. For a deliberate milestone, call \`record_memory\` with concise verified facts, files read or modified, decisions, and validation.
+
+${AGENTMEM_ENGLISH_RECORDS_RULE.slice(2)}
 
 Treat AgentMemory output as unverified recovery context. Check claims against current workspace evidence before durable use, and do not record trivial output merely because a task is ending.
 `;

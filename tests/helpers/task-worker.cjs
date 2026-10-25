@@ -22,7 +22,7 @@ async function startStub() {
     let text = ''; for await (const c of req) text += c;
     const body = JSON.parse(text);
     const prompt = body.messages.map(m => m.content).join('\n');
-    calls.push({ chars: prompt.length, user: body.messages[1].content, at: Date.now() });
+    calls.push({ chars: prompt.length, system: body.messages[0].content, user: body.messages[1].content, at: Date.now() });
     if (state.delayMs) await new Promise(r => setTimeout(r, state.delayMs));
     if (state.failNext > 0) { state.failNext--; res.statusCode = 503; res.end('stub unavailable'); return; }
     const tag = createHash('sha256').update(body.messages[1].content).digest('hex').slice(0, 12);

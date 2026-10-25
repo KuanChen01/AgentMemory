@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.2.4] - 2026-10-25
+
+Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install` (keep `--claude-capture` where used) so every agent's managed guidance gains the English-records line. No schema change. Existing memories and digests are left as they are: nothing is backfilled, translated or regenerated. Install validation (`agentmem install --strict`, `agentmem bootstrap-win`) now also requires the English line in the OpenCode rules, Antigravity guidance and Grok profile. Both commands rewrite those files first, so the check only flags files that were edited afterwards or written by an older version.
+
+### Changed
+- AgentMemory-generated records are written in English, whatever language the source events use. Identifiers, paths, commands and proper names stay verbatim.
+  - The shared work-memory prompt (used by task consolidation, legacy compaction and per-event synthesis) asks for an English title, narrative, facts and concepts.
+  - The daily digest prompt asks for an English summary and list entries. The prompt version is now `daily-digest-v2`. An existing successful digest with the same sources is kept whatever its prompt version, and scheduler catch-up never reruns a successful day, so the bump does not regenerate old digests.
+  - The `record_memory` MCP tool description and its title, narrative, facts and concepts field docs ask for English.
+  - Installer-managed guidance for OpenCode (global rules), Antigravity (guidance and plugin rule) and Grok Build (agent profile) carries the English rule, so it survives reinstalls. The installer still never writes `~/.claude/CLAUDE.md`; Claude Code gets the rule from the `record_memory` tool docs.
+
+### Added
+- Consolidation retry: if a synthesis answer's title (skip answers included, since a refused skip can still be saved) and narrative are mainly CJK (ideographs, kana or hangul at 30% or more of the prose letters, with paths, identifiers and code spans ignored), the model is asked once more with a stronger English reminder and the second answer is kept regardless. If the retry fails, the first answer is kept. There is at most one English-language retry per synthesis; the existing malformed-JSON and network retries inside each request still apply. Legacy compaction records both calls in `task_results.llm_calls`.
+
 ## [2.2.3] - 2026-10-25
 
 Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install --claude-capture` on machines that use Claude Code capture. The schema change is additive (a nullable column on `task_event_buffer` and a new `task_import_times` table; task schema revision 12). It is applied automatically on first start, and v2.2.2 still runs on the upgraded database.

@@ -201,28 +201,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'record_memory',
-        description: 'Directly saves a concise working-memory observation to AgentMemory. Use it for deliberate cross-session milestones; durable knowledge promotion remains a separate, evidence-backed workflow.',
+        description: 'Directly saves a concise working-memory observation to AgentMemory. Use it for deliberate cross-session milestones; durable knowledge promotion remains a separate, evidence-backed workflow. Write in English: title, narrative, facts and concepts are always English, whatever language the conversation uses; keep identifiers, paths, commands and proper names verbatim.',
         inputSchema: {
           type: 'object',
           properties: {
             record_kind: { type: 'string', enum: ['outcome', 'context'], description: 'Optional working-memory category; defaults to outcome for explicit milestones. Neither category proves historical truth.' },
             title: {
               type: 'string',
-              description: 'Short title of the memory (e.g., Fixed JWT secret load crash)',
+              description: 'Short title of the memory, written in English (e.g., Fixed JWT secret load crash)',
             },
             narrative: {
               type: 'string',
-              description: 'Detailed description of the issue, how it was solved, code reasoning, and results.',
+              description: 'Detailed description of the issue, how it was solved, code reasoning, and results. Write in English.',
             },
             facts: {
               type: 'array',
               items: { type: 'string' },
-              description: 'List of specific facts discovered or established.',
+              description: 'List of specific facts discovered or established, written in English.',
             },
             concepts: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Keywords or tech concepts used (e.g., JWT, express, sqlite).',
+              description: 'Keywords or tech concepts used, in English (e.g., JWT, express, sqlite).',
             },
             files_modified: {
               type: 'array',

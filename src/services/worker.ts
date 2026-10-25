@@ -53,7 +53,7 @@ import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger } from './llm-budget';
 import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
-import { interpretWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
+import { interpretWorkMemory, synthesizeEnglishWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { initializeWithLockRetry } from './db-init-retry';
 import { classifyToolEvent } from './event-classifier';
@@ -1916,7 +1916,7 @@ ${boundToolText(log.input, inputLimit)}
 ${boundToolText(log.output, outputLimit)}
 `;
 
-    const parsedObs = interpretWorkMemory(await callLlmJson('observation', systemPrompt, userPrompt), log.success);
+    const parsedObs = interpretWorkMemory((await synthesizeEnglishWorkMemory(system => callLlmJson('observation', system, userPrompt), systemPrompt)).raw, log.success);
     if (parsedObs.skip && incompleteSource) {
       parsedObs.skip = false;
       parsedObs.kind = 'context';

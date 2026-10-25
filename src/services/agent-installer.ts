@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
+import { AGENTMEM_ENGLISH_RECORDS_MARKER, AGENTMEM_ENGLISH_RECORDS_RULE } from './agent-guidance';
 import os from 'os';
 import path from 'path';
 import {
@@ -197,6 +198,7 @@ function renderOpenCodeGlobalRulesBody(): string {
 - For each substantive task, use injected AgentMemory context; on tangled work, repeated failures, or unclear prior decisions, call query_memory or search_memory with the current problem.
 - Treat AgentMemory results as unverified working memory and check them against the current workspace before relying on them.
 - Tool activity is captured automatically. Use record_memory only for a deliberate cross-session milestone, not routine progress.
+${AGENTMEM_ENGLISH_RECORDS_RULE}
 - For a verified, durable project outcome, load and follow the vault-sync skill when it is available. Do not sync read-only investigations or temporary debugging to Vault.
 `;
 }
@@ -453,6 +455,7 @@ These rules are managed by AgentMemory. Use them as the Antigravity CLI rule sur
 ## Finish
 - Automatic AgentMemory hooks capture normal tool work. For an explicit milestone entry, call \`record_memory\` with \`agent_id: "antigravity"\`, including files read, files modified, decisions, and tests.
 - Do not call \`record_memory\` for trivial output or merely because a task is ending.
+${AGENTMEM_ENGLISH_RECORDS_RULE}
 `;
 }
 
@@ -1856,7 +1859,8 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
     issues.push(`Grok AgentMemory profile is missing (${paths.grokProfilePath}).`);
   } else {
     const profileText = fs.readFileSync(paths.grokProfilePath, 'utf8');
-    if (!profileText.includes('agents_md: false') || !profileText.includes('get_project_context') || !profileText.includes('AgentMemory Grok Profile')) {
+    if (!profileText.includes('agents_md: false') || !profileText.includes('get_project_context') || !profileText.includes('AgentMemory Grok Profile')
+      || !profileText.includes(AGENTMEM_ENGLISH_RECORDS_MARKER)) {
       issues.push(`Grok AgentMemory profile is missing the startup and boundary workflow (${paths.grokProfilePath}).`);
     }
   }
@@ -1896,6 +1900,8 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
     issues.push(`OpenCode global AgentMemory rules are missing (${opencodePaths.globalRulesPath}).`);
   } else if (!fs.readFileSync(opencodePaths.globalRulesPath, 'utf8').includes('vault-sync')) {
     issues.push(`OpenCode global AgentMemory rules do not reference the Vault sync skill (${opencodePaths.globalRulesPath}).`);
+  } else if (!fs.readFileSync(opencodePaths.globalRulesPath, 'utf8').includes(AGENTMEM_ENGLISH_RECORDS_MARKER)) {
+    issues.push(`OpenCode global AgentMemory rules predate the English-records rule; reinstall OpenCode (${opencodePaths.globalRulesPath}).`);
   }
 
   if (antigravityConfigPath) {
@@ -1922,7 +1928,8 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
       if (
         !guidanceText.includes('unverified working memory') ||
         !guidanceText.includes('record_memory') ||
-        !guidanceText.includes('trivial output')
+        !guidanceText.includes('trivial output') ||
+        !guidanceText.includes(AGENTMEM_ENGLISH_RECORDS_MARKER)
       ) {
         issues.push(`Antigravity AgentMemory guidance is missing the working-memory boundary rules (${paths.antigravityGuidancePath}).`);
       }
