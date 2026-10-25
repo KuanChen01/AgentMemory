@@ -2,7 +2,7 @@
 
 ## [2.2.4] - 2026-10-25
 
-Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install` (keep `--claude-capture` where used) so every agent's managed guidance gains the English-records line. No schema change. Existing memories and digests are left as they are: nothing is backfilled, translated or regenerated. `agentmem doctor` reports OpenCode rules, Antigravity guidance and the Grok profile written by an older version until the reinstall.
+Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install` (keep `--claude-capture` where used) so every agent's managed guidance gains the English-records line. No schema change. Existing memories and digests are left as they are: nothing is backfilled, translated or regenerated. Install validation (`agentmem install --strict`, `agentmem bootstrap-win`) now also requires the English line in the OpenCode rules, Antigravity guidance and Grok profile. Both commands rewrite those files first, so the check only flags files that were edited afterwards or written by an older version.
 
 ### Changed
 - AgentMemory-generated records are written in English, whatever language the source events use. Identifiers, paths, commands and proper names stay verbatim.
