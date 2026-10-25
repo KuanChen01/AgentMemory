@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.2.3] - 2026-10-25
+
+Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install --claude-capture` on machines that use Claude Code capture. The schema change is additive (a nullable column on `task_event_buffer` and a new `task_import_times` table; task schema revision 12). It is applied automatically on first start, and v2.2.2 still runs on the upgraded database.
+
+### Fixed
+- Claude Code capture: the PostToolUse hook now reads Claude Code's documented `tool_input`, `tool_response`, `tool_use_id` and `cwd` (the old field names are still accepted as fallbacks). Before this, every Claude Code event reached the worker empty and was dropped. `tool_use_id` is sent as `call_id` for insert-once dedupe, `cwd` becomes the project path, and success is read from the tool response's error flags.
+
+### Added
+- Import endpoints for backfilling captured sessions with their **original** time:
+  - `POST /import/tools`: the `/tools` body plus `timestamp` (ISO 8601 with a time zone, or epoch ms) and a required `call_id`. It uses the same insert-once id `hook:<session_id>:<call_id>` as live capture.
+  - `POST /import/tasks/boundary`: `{ session_id, timestamp }`.
+- Imported events, task results, completions and memories keep the original time, so day stats and digests count them on the original day. Task start and end come from event and boundary times.
+- Requests are rejected with 400 for a future time (beyond 5 minutes of skew), a value before 2020, a zone-less, unparseable or impossible time, or a missing call id. Live `/tools` and `/tasks/boundary` keep using server time.
+- Caveat: a digest that was already generated for a past day is not regenerated automatically.
+
 ## [2.2.2] - 2026-10-25
 
 ### Changed
