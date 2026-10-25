@@ -430,7 +430,7 @@ export function reviewItemHash(row: any): string {
 }
 
 /** Bump whenever ensureTaskTables() adds a table, index or column (round 9: dedup is transactional, claims unused). */
-const TASK_SCHEMA_REVISION = 11;
+const TASK_SCHEMA_REVISION = 12;
 
 type ActivityEra = 'v2.1' | 'legacy' | 'mixed' | null;
 
@@ -2896,7 +2896,8 @@ export class DatabaseManager {
   // Nothing here deletes or rewrites existing rows; there is no TTL cleanup.
   private async ensureTaskTables(): Promise<void> {
     const wanted = ['tool_evidence', 'task_event_buffer', 'task_results', 'observation_content_hashes',
-      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'duplicate_flags'];
+      'review_reads', 'review_runs', 'legacy_compaction_links', 'task_attempts', 'task_completions', 'duplicate_flags',
+      'task_import_times'];
     // Quick-skip only when the stored schema revision is current AND every table and index exists. Any change to the
     // block below must bump TASK_SCHEMA_REVISION, so a database from an older revision always runs the (idempotent) upgrade.
     const indexes = ['idx_tool_evidence_session', 'idx_tool_evidence_task', 'idx_task_event_buffer_open',
@@ -2925,6 +2926,11 @@ export class DatabaseManager {
         incomplete INTEGER NOT NULL DEFAULT 0, task_result_id TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, received_ms INTEGER NOT NULL)`);
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_task_event_buffer_open ON task_event_buffer(session_id, task_result_id, received_ms)`);
+      // Revision 12 (additive): imported events keep their original time in received_ms/created_at; the wall-clock
+      // arrival (idle sweep only) is import_arrival_ms, NULL for live capture. Older releases ignore both.
+      if (!this.columnsOf('task_event_buffer').has('import_arrival_ms'))
+        this.db.run(`ALTER TABLE task_event_buffer ADD COLUMN import_arrival_ms INTEGER`);
+      this.db.run(`CREATE TABLE IF NOT EXISTS task_import_times (task_id TEXT PRIMARY KEY, boundary_ms INTEGER NOT NULL)`);
       this.db.run(`CREATE TABLE IF NOT EXISTS task_results (
         id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT NOT NULL, project_path TEXT NOT NULL,
         agent_id TEXT NOT NULL, segment_index INTEGER NOT NULL, segment_count INTEGER NOT NULL,
@@ -2990,7 +2996,8 @@ export class DatabaseManager {
     const evidence = this.columnsOf('tool_evidence');
     const results = this.columnsOf('task_results');
     const hashes = this.columnsOf('observation_content_hashes'); const flags = this.columnsOf('duplicate_flags');
-    return (evidence.size > 0 && !evidence.has('task_id')) || (results.size > 0 && !results.has('evidence_count'))
+    const buffer = this.columnsOf('task_event_buffer');
+    return (buffer.size > 0 && !buffer.has('import_arrival_ms')) || (evidence.size > 0 && !evidence.has('task_id')) || (results.size > 0 && !results.has('evidence_count'))
       || (hashes.size > 0 && !hashes.has('hash_version')) || (flags.size > 0 && !flags.has('reason'));
   }
 

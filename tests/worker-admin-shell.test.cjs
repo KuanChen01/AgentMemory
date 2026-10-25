@@ -1444,7 +1444,7 @@ test('home summary queries use the datetime(created_at) index, and existing data
   try {
     await reopened.initialize();
     assert.equal(reopened.sqlAll(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_observations_created_dt'`).length, 1);
-    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '12');
   } finally {
     reopened.close();
   }
@@ -1479,7 +1479,7 @@ test('activity and memory-detail queries use the task_results observation index,
   try {
     await reopened.initialize();
     assert.equal(reopened.sqlAll(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_task_results_observation'`).length, 1);
-    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '11');
+    assert.equal(reopened.sqlGet(`SELECT value FROM task_schema_meta WHERE key='revision'`).value, '12');
   } finally {
     reopened.close();
   }
