@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- README rewritten as a short overview with screenshots made from demo data; the previous README now lives in `docs/Reference.md` / `docs/Reference.zh.md`, and install details in `docs/Installation.md` / `docs/Installation.zh.md`. The architecture diagrams no longer name a specific LLM vendor or model.
+
+### Fixed
+- `start-workbench.ps1` failed to parse under Windows PowerShell 5.1 on non-UTF-8 code pages (e.g. GBK/936); it is now pure ASCII. Under 5.1 it also reported every running worker as INACTIVE (`ConvertFrom-Json -Depth` is PowerShell 6.2+), which made `start` rebuild and start a second worker.
+
 ## [2.2.4] - 2026-10-25
 
 Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install` (keep `--claude-capture` where used) so every agent's managed guidance gains the English-records line. No schema change. Existing memories and digests are left as they are: nothing is backfilled, translated or regenerated. Install validation (`agentmem install --strict`, `agentmem bootstrap-win`) now also requires the English line in the OpenCode rules, Antigravity guidance and Grok profile. Both commands rewrite those files first, so the check only flags files that were edited afterwards or written by an older version.
