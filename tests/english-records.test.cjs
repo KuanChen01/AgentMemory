@@ -109,15 +109,17 @@ const digestJson = { summary: 'Digest.', facts: [], decisions: [], verified_comm
 
 test('daily digest: prompt v2 carries the English rule; existing v1 digests are never regenerated', async () => {
   assert.equal(digest.DAILY_DIGEST_PROMPT_VERSION, 'daily-digest-v2');
+  // Stored as the DB normalizes it, so getTimeline finds it on Windows too (path.resolve adds a drive there).
+  const app = path.resolve('/work/App').replace(/\\/g, '/');
   await withDb(async (db) => {
-    const obs = { id: randomUUID(), session_id: randomUUID(), project_path: '/work/App', agent_id: 'codex',
+    const obs = { id: randomUUID(), session_id: randomUUID(), project_path: app, agent_id: 'codex',
       title: 'Implemented the importer', narrative: 'Added the import endpoint and tests.', facts: ['Import keeps original time.'],
       concepts: ['import'], files_read: [], files_modified: ['src/a.ts'], embedding: [1, 0, 0], created_at: '2026-06-08T08:30:00.000Z' };
     await db.saveObservation(obs);
-    const old = await db.saveDailyMemoryDigest({ project_path: '/work/App', local_date: '2026-06-08', status: 'success',
+    const old = await db.saveDailyMemoryDigest({ project_path: app, local_date: '2026-06-08', status: 'success',
       digest: { ...digestJson, summary: '旧的中文摘要' }, source_observation_ids: [obs.id], source_count: 1, model: 'old', prompt_version: 'daily-digest-v1' });
     let calls = 0;
-    const run = () => digest.runDailyMemoryDigest({ dbManager: db, llmConfig, localDate: '2026-06-08', projectPath: '/work/App',
+    const run = () => digest.runDailyMemoryDigest({ dbManager: db, llmConfig, localDate: '2026-06-08', projectPath: app,
       timeZone: 'Asia/Shanghai', completeChat: async (req) => { calls++; run.req = req; return JSON.stringify(digestJson); } });
     const r = await run();
     assert.equal(calls, 0, 'prompt bump does not regenerate an existing digest');
@@ -127,7 +129,7 @@ test('daily digest: prompt v2 carries the English rule; existing v1 digests are 
     assert.deepEqual(targets, [], 'scheduler catch-up does not backfill old digests');
     // A new day gets the v2 prompt with the English rule.
     await db.saveObservation({ ...obs, id: randomUUID(), created_at: '2026-06-09T08:30:00.000Z' });
-    const r2 = await digest.runDailyMemoryDigest({ dbManager: db, llmConfig, localDate: '2026-06-09', projectPath: '/work/App',
+    const r2 = await digest.runDailyMemoryDigest({ dbManager: db, llmConfig, localDate: '2026-06-09', projectPath: app,
       timeZone: 'Asia/Shanghai', completeChat: async (req) => { calls++; run.req = req; return JSON.stringify(digestJson); } });
     assert.equal(calls, 1); assert.equal(r2.digest.prompt_version, 'daily-digest-v2');
     assert.ok(run.req.messages[0].content.includes(digest.DAILY_DIGEST_ENGLISH_RULE));
