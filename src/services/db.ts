@@ -11,6 +11,7 @@ import {
 } from './timestamps';
 import { agentMatchSql, collapseListedAgents, normalizeAgentId, presentAgentIds } from './agent-id';
 import { sanitizeText } from './redact';
+import { knownSecrets, redactSecrets } from './secret-redaction';
 
 // Stored errors can echo provider responses: redact the whole text first, then clip.
 function clipRedacted(value: unknown, max: number): string | null {
@@ -1570,7 +1571,17 @@ export class DatabaseManager {
   }
 
   /** Synchronous: callers run it inside a write transaction. */
-  private insertObservationRows(obs: Observation): void {
+  private insertObservationRows(source: Observation): void {
+      // Every memory write passes here: a model or caller that echoed a credential does not store it.
+      const known = knownSecrets();
+      const clean = (value: unknown) => redactSecrets(String(value ?? ''), known);
+      const obs: Observation = {
+        ...source,
+        title: clean(source.title),
+        narrative: clean(source.narrative),
+        facts: (source.facts || []).map(clean),
+        concepts: (source.concepts || []).map(clean),
+      };
       const factsStr = JSON.stringify(obs.facts);
       const conceptsStr = JSON.stringify(obs.concepts);
       const filesReadStr = JSON.stringify(obs.files_read);

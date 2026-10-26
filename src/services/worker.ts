@@ -54,6 +54,7 @@ import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger } from './llm-budget';
 import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
+import { redactToolEvent } from './secret-redaction';
 import { interpretWorkMemory, synthesizeEnglishWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { initializeWithLockRetry } from './db-init-retry';
@@ -1051,9 +1052,11 @@ app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
     const task = { task_id: tasks[0] };
     const items: any[] = []; let bytes = 0;
     for (const row of rows.slice(0, 20)) {
-      const size = Buffer.byteLength(JSON.stringify(row));
+      // Rows stored before capture-time redaction may still hold credentials.
+      const item = { ...row, ...redactToolEvent(String(row.input ?? ''), String(row.output ?? '')), success: !!row.success, truncated: !!row.truncated };
+      const size = Buffer.byteLength(JSON.stringify(item));
       if (items.length && bytes + size > 48 * 1024) break;
-      items.push({ ...row, success: !!row.success, truncated: !!row.truncated }); bytes += size;
+      items.push(item); bytes += size;
     }
     const more = items.length < rows.length;
     res.json({ id, task_id: task.task_id, task_ids: tasks, offset, items, next_offset: more ? offset + items.length : null });
@@ -1726,14 +1729,16 @@ async function ingestToolLog(req: Request, res: Response, importedMs: number | n
     if (importedMs !== null && !taskConsolidationEnabled())
       return res.status(409).json({ error: 'Import requires task consolidation to be enabled' });
 
+    // Credentials are removed here, before the event is stored, routed or sent to a model.
+    const redacted = redactToolEvent(normalizeToolLogText(input), normalizeToolLogText(output));
     const logEntry: QueuedToolLog = {
       id: uuidv4(),
       session_id,
       project_path: normalizeProjectPath(project_path),
       agent_id,
       tool_name,
-      input: normalizeToolLogText(input),
-      output: normalizeToolLogText(output),
+      input: redacted.input,
+      output: redacted.output,
       success: toolResponseSucceeded(output, !!success),
       timestamp: importedMs ?? Date.now()
     };
