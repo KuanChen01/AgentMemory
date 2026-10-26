@@ -163,6 +163,8 @@ The bootstrap script runs `npm install --ignore-scripts`, `npm run build`, creat
 
 If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a blank scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
 
+If the file already exists, bootstrap only sets `AGENTMEM_LLM_API_KEY`, `AGENTMEM_LLM_API_URL`, `AGENTMEM_LLM_MODEL` and `AGENTMEM_PORT`. It changes those lines in place, adds any that are missing, and leaves every other line alone (comments, gateway headers, budgets, `AGENTMEM_DB_PATH` and other options). Before it changes anything it saves the previous file next to it as `.env.bak-<timestamp>`, and prints that path as `envBackupPath`. If nothing needs to change, the file is not rewritten and no backup is made.
+
 ### 📦 Release Discipline
 
 AgentMemory now treats product releases as a first-class maintainer workflow:
@@ -189,6 +191,8 @@ http://127.0.0.1:38888/admin
 ```
 
 The admin console is intentionally restricted to loopback clients. It is not exposed to non-local network addresses.
+
+The whole worker, not just `/admin`, is local-only: it listens on `127.0.0.1` only, and every route (`/context`, `/state`, `/search`, `/tools`, `/shutdown`, ...) rejects non-loopback clients. The worker has no authentication, so there is no setting to expose it on the LAN. Other machines, containers or VMs that reach this machine over the network cannot use it. Use `http://127.0.0.1:<port>`; `http://localhost:<port>` also works in browsers and Node clients that fall back to IPv4.
 
 Windows local control now has two entrypoints:
 

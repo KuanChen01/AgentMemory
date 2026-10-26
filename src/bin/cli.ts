@@ -235,7 +235,7 @@ function startWorker() {
 async function stopWorker() {
   console.log('Sending shutdown request to AgentMemory worker...');
   try {
-    const res = await fetch(`http://localhost:${PORT}/shutdown`, {
+    const res = await fetch(`http://127.0.0.1:${PORT}/shutdown`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -258,7 +258,7 @@ async function checkStatus() {
 
   try {
     const res = await fetch(
-      `http://localhost:${PORT}/context?project_path=${encodeURIComponent(process.cwd())}&limit=1`,
+      `http://127.0.0.1:${PORT}/context?project_path=${encodeURIComponent(process.cwd())}&limit=1`,
       { signal: AbortSignal.timeout(1500) }
     );
     if (res.ok) {

@@ -23,7 +23,7 @@ cd AgentMemory
 The bootstrap script:
 
 1. Runs `npm install --ignore-scripts` and `npm run build`.
-2. Creates or rewrites `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again. Every bootstrap run rewrites this file with only the key, URL, model and port; other settings in it are dropped, so back it up first if you added any.
+2. Creates or updates `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again. On later runs bootstrap only sets the key, URL, model and port, in place; every other line is kept. Before changing the file it saves the previous version as `.env.bak-<timestamp>` next to it (reported as `envBackupPath`).
 3. Runs `npm link --ignore-scripts` so the global `agentmem` command works.
 4. Configures all five agents in strict mode (see [What the installer sets up](#what-the-installer-sets-up)).
 5. Reuses a running worker or starts one, and opens the workbench.
@@ -62,7 +62,7 @@ Once the worker is running, open **LLM Settings** in the workbench to switch the
 
 ## Network note
 
-The worker listens on port 38888 (or the port you chose) on every network interface. The admin workbench and its APIs reject requests that do not come from this machine, but the endpoints agents use to read and write memory do not. On a shared or untrusted network, make sure your firewall blocks inbound connections to that port.
+The worker listens on `127.0.0.1` only, and every endpoint (agent memory reads and writes, `/shutdown` and the admin workbench) rejects requests that do not come from this machine. Other computers, containers and VMs on your network cannot reach it, and there is no setting to expose it, because the worker has no authentication.
 
 ## Open the workbench
 

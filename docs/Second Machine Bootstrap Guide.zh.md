@@ -93,6 +93,10 @@ AGENTMEM_PORT=38888
 .\bootstrap-second-machine.cmd
 ```
 
+`.env` 已存在时，bootstrap 只就地更新上面这四项（缺少的补在末尾），其余行（注释、网关 headers、预算、`AGENTMEM_DB_PATH` 等）都保留。需要改动时会先备份为 `%USERPROFILE%\.agentmem\.env.bak-<时间戳>`，路径见输出的 `envBackupPath`；没有改动则不重写、不备份。
+
+worker 只监听 `127.0.0.1`，所有接口都只接受本机访问；从局域网里的另一台电脑无法连接这台电脑的 worker。
+
 ## Useful Variants
 
 不自动打开浏览器：

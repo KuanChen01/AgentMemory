@@ -12,7 +12,7 @@ const {
   frozenTasks, inflightTaskIds, stuckStaleMs, stuckTaskCount, taskIdleMs, taskRetryMs,
 } = require('../dist/services/task-consolidation.js');
 const { getAdminPipeline, sanitizeLastError } = require('../dist/services/pipeline-query.js');
-const { withWorker } = require('./helpers/task-worker.cjs');
+const { withWorker, assertLanRefused } = require('./helpers/task-worker.cjs');
 
 const STATES = ['queued', 'processing', 'saved', 'skipped', 'duplicate', 'fallback', 'failed', 'stuck'];
 
@@ -527,7 +527,7 @@ test('an existing database gains idx_task_event_buffer_result without a schema b
   assert.equal(process.env.AGENTMEM_DB_PATH, dbPath);
 }));
 
-test('pipeline route rejects non-loopback requests with 403', async (t) => {
+test('pipeline route is unreachable from non-loopback addresses', async (t) => {
   const external = Object.values(os.networkInterfaces()).flat()
     .find((addr) => addr && addr.family === 'IPv4' && !addr.internal);
   if (!external) {
@@ -539,11 +539,7 @@ test('pipeline route rejects non-loopback requests with 403', async (t) => {
     assert.equal(local.status, 200);
     assert.equal(local.body.status, 'ok');
     assert.equal(local.body.disabled, false);
-    const response = await fetch(`http://${external.address}:${port}/admin/api/pipeline`, {
-      signal: AbortSignal.timeout(15000),
-    });
-    assert.equal(response.status, 403);
-    assert.match((await response.json()).error, /loopback/);
+    await assertLanRefused(external.address, port, '/admin/api/pipeline');
   });
 });
 

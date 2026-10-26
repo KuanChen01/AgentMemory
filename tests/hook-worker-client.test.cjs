@@ -13,7 +13,7 @@ async function findFreePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, 'localhost', resolve);
+    server.listen(0, '127.0.0.1', resolve);
   });
   const { port } = server.address();
   await new Promise((resolve) => server.close(resolve));
@@ -24,7 +24,7 @@ async function waitForPortToClose(port) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     try {
-      await fetch(`http://localhost:${port}/admin/api/overview`, {
+      await fetch(`http://127.0.0.1:${port}/admin/api/overview`, {
         signal: AbortSignal.timeout(250),
       });
     } catch {
@@ -41,7 +41,7 @@ test('hook worker client fails open when the worker accepts a connection but nev
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, 'localhost', resolve);
+    server.listen(0, '127.0.0.1', resolve);
   });
 
   const previousTimeout = process.env.AGENTMEM_HOOK_TIMEOUT_MS;
@@ -94,7 +94,7 @@ test('hook worker client safely autostarts an inactive worker and writes lifecyc
       /worker ready/
     );
 
-    await fetch(`http://localhost:${port}/shutdown`, { method: 'POST' });
+    await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
     await waitForPortToClose(port);
   } finally {
     for (const [key, value] of Object.entries(previousEnv)) {
@@ -127,7 +127,7 @@ test('hook worker client does not retry a POST accepted before a connection rese
       res.end('{}');
     }
   });
-  await new Promise((resolve) => server.listen(0, 'localhost', resolve));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const response = await fetchAgentMemoryWorker(server.address().port, '/tools', {
       method: 'POST', body: '{}',
@@ -157,7 +157,7 @@ test('hook worker client times out while reading an incomplete response body', a
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.write('{');
   });
-  await new Promise((resolve) => server.listen(0, 'localhost', resolve));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   // Bound cleanup even if the implementation regresses and leaves a body read open.
   const safetyTimer = setTimeout(() => server.closeAllConnections(), 2000);
   try {
@@ -185,7 +185,7 @@ test('hook worker client preserves buffered JSON, HTTP errors and empty response
       res.end(JSON.stringify({ error: 'temporarily unavailable' }));
     }
   });
-  await new Promise((resolve) => server.listen(0, 'localhost', resolve));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const response = await fetchAgentMemoryWorker(server.address().port, '/error');
     assert.equal(response.status, 503);

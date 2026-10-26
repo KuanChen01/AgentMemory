@@ -8,7 +8,7 @@ const { randomUUID } = require('node:crypto');
 
 const { DatabaseManager } = require('../dist/services/db.js');
 const { READ_DISABLED_MESSAGE } = require('../dist/services/runtime-policy.js');
-const { withWorker } = require('./helpers/task-worker.cjs');
+const { withWorker, assertLanRefused } = require('./helpers/task-worker.cjs');
 
 function withDb(run) {
   return async () => {
@@ -76,7 +76,7 @@ async function pageAll(db, options) {
   return { ids, pages, last };
 }
 
-test('memories route rejects non-loopback requests with 403', async (t) => {
+test('memories route is unreachable from non-loopback addresses', async (t) => {
   const external = Object.values(os.networkInterfaces()).flat()
     .find((addr) => addr && addr.family === 'IPv4' && !addr.internal);
   if (!external) {
@@ -88,11 +88,7 @@ test('memories route rejects non-loopback requests with 403', async (t) => {
     assert.equal(local.status, 200);
     assert.equal(local.body.status, 'ok');
     assert.equal(local.body.disabled, false);
-    const response = await fetch(`http://${external.address}:${port}/admin/api/memories`, {
-      signal: AbortSignal.timeout(15000),
-    });
-    assert.equal(response.status, 403);
-    assert.match((await response.json()).error, /loopback/);
+    await assertLanRefused(external.address, port, '/admin/api/memories');
   });
 });
 

@@ -18,7 +18,7 @@ const {
   renderAdminThemeBootScript,
 } = require('../dist/services/admin-ui-client.js');
 const { DatabaseManager } = require('../dist/services/db.js');
-const { withWorker } = require('./helpers/task-worker.cjs');
+const { withWorker, assertLanRefused } = require('./helpers/task-worker.cjs');
 
 const html = renderAdminPageHtml();
 const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
@@ -1451,7 +1451,7 @@ test('home summary queries use the datetime(created_at) index, and existing data
   assert.equal(process.env.AGENTMEM_DB_PATH, dbPath);
 }));
 
-test('home summary route rejects non-loopback requests with 403', async (t) => {
+test('home summary route is unreachable from non-loopback addresses', async (t) => {
   const external = Object.values(os.networkInterfaces()).flat()
     .find(addr => addr && addr.family === 'IPv4' && !addr.internal);
   if (!external) {
@@ -1461,9 +1461,7 @@ test('home summary route rejects non-loopback requests with 403', async (t) => {
   await withWorker(async ({ port, get }) => {
     const local = await get('/admin/api/home-summary');
     assert.ok(Array.isArray(local.daily));
-    const response = await fetch(`http://${external.address}:${port}/admin/api/home-summary`, { signal: AbortSignal.timeout(15000) });
-    assert.equal(response.status, 403);
-    assert.match((await response.json()).error, /loopback/);
+    await assertLanRefused(external.address, port, '/admin/api/home-summary');
   });
 });
 

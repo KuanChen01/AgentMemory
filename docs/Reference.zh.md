@@ -163,6 +163,8 @@ cd AgentMemory
 
 如果 `%USERPROFILE%\.agentmem\.env` 不存在，bootstrap 会先写一个“空 API key + 默认 URL/model”的安全模板，然后立即停止，不会假装成功。你只需要填好 `AGENTMEM_LLM_*` 后重新运行。
 
+如果该文件已存在，bootstrap 只设置 `AGENTMEM_LLM_API_KEY`、`AGENTMEM_LLM_API_URL`、`AGENTMEM_LLM_MODEL` 和 `AGENTMEM_PORT` 这四项：就地修改对应行，缺少的补在末尾，其余所有行（注释、网关 headers、预算、`AGENTMEM_DB_PATH` 及其他选项）原样保留。只要需要改动，它会先把原文件备份为同目录下的 `.env.bak-<时间戳>`，并在输出的 `envBackupPath` 中给出路径；如果没有需要改动的内容，则不重写文件，也不生成备份。
+
 ### 📦 正式版本发布纪律
 
 AgentMemory 现在把正式版本发布视为仓库内的一条固定维护流程：
@@ -189,6 +191,8 @@ http://127.0.0.1:38888/admin
 ```
 
 该页面仅允许本机 loopback 访问，不对非本机网络地址开放。
+
+不只是 `/admin`，整个 worker 都只供本机使用：它只监听 `127.0.0.1`，所有路由（`/context`、`/state`、`/search`、`/tools`、`/shutdown` 等）都会拒绝非 loopback 客户端。worker 没有身份认证，因此没有提供对局域网开放的设置；通过网络访问本机的其他电脑、容器或虚拟机都无法使用它。请使用 `http://127.0.0.1:<port>`；浏览器和会回退到 IPv4 的 Node 客户端用 `http://localhost:<port>` 也可以访问。
 
 Windows 下现在有两个本机控制入口：
 

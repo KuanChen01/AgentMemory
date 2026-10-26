@@ -77,7 +77,12 @@ async function withWorker(run, extraEnv = {}) {
   }
 }
 
+// The worker listens on 127.0.0.1 only: a request to this machine's LAN address must get no response at all.
+async function assertLanRefused(address, port, route, init = {}) {
+  await assert.rejects(fetch(`http://${address}:${port}${route}`, { ...init, signal: AbortSignal.timeout(5000) }), route);
+}
+
 const ev = (session, tool_name, input, output, success = true, project = 'E:/Fixture/App') =>
   ({ session_id: session, project_path: project, agent_id: 'codex', tool_name, input, output, success });
 
-module.exports = { withWorker, startStub, ev, freePort };
+module.exports = { withWorker, startStub, ev, freePort, assertLanRefused };
