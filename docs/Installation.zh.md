@@ -23,7 +23,7 @@ cd AgentMemory
 bootstrap 脚本会依次：
 
 1. 运行 `npm install --ignore-scripts` 和 `npm run build`。
-2. 创建或检查 `%USERPROFILE%\.agentmem\.env`。第一次运行时这个文件还不存在：bootstrap 会写入一个 key 为空的骨架，然后**报错停下**。填好其中三项 `AGENTMEM_LLM_*`（见[配置 LLM](#配置-llm)），再运行一次同样的命令。
+2. 创建或重写 `%USERPROFILE%\.agentmem\.env`。第一次运行时这个文件还不存在：bootstrap 会写入一个 key 为空的骨架，然后**报错停下**。填好其中三项 `AGENTMEM_LLM_*`（见[配置 LLM](#配置-llm)），再运行一次同样的命令。每次运行 bootstrap 都会重写这个文件，只保留 key、URL、模型和端口，其他配置会被丢掉；如果你加过别的配置，请先备份。
 3. 运行 `npm link --ignore-scripts`，注册全局 `agentmem` 命令。
 4. 以严格模式配置全部五个 agent（见[安装器会改动什么](#安装器会改动什么)）。
 5. 复用已在运行的 worker 或启动一个新的，然后打开面板。
@@ -59,6 +59,10 @@ AGENTMEM_PORT=38888
 ```
 
 worker 运行后，可以在面板的 **LLM 设置**里切换模型或接口地址、保留或更换 key，并做实时连接测试，改动会保存到同一个 `.env`。全部配置项见[完整参考文档](./Reference.zh.md)，成本相关见 [LLM 成本控制](./LLM%20Cost%20Controls.md)。
+
+## 网络说明
+
+worker 会在所有网卡上监听 38888 端口（或你设置的端口）。管理面板和它的 API 会拒绝非本机请求，但 agent 用来读写记忆的接口不会。在共享或不可信的网络里，请确认防火墙拦截了这个端口的入站连接。
 
 ## 打开面板
 
@@ -106,7 +110,7 @@ agentmem uninstall --strict             # 移除 AgentMemory 的 hooks、MCP 条
 agentmem uninstall --strict --purge-all # 同时清除保留的安装记录和备份
 ```
 
-卸载也会删除 `~/.agentmem/.env` 和本地记忆数据库。想保留配置或记忆，请先另外复制一份。
+卸载也会删除 `~/.agentmem/.env` 和本地记忆数据库（`~/.agentmem/agentmemory.db`）。想保留记忆，请先停止 worker（`agentmem stop`）并关闭所有接入了 AgentMemory 的 agent，再把数据库连同旁边的 `-wal`、`-shm`、`-journal` 文件一起复制出来。AgentMemory 还在运行时只复制 `.db` 文件，可能会漏掉最近的记忆。同样的冷备份步骤见 [Native SQLite migration](./Native%20SQLite%20Migration.md)。
 
 ## 安装器会改动什么
 

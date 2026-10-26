@@ -23,7 +23,7 @@ cd AgentMemory
 The bootstrap script:
 
 1. Runs `npm install --ignore-scripts` and `npm run build`.
-2. Creates or checks `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again.
+2. Creates or rewrites `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again. Every bootstrap run rewrites this file with only the key, URL, model and port; other settings in it are dropped, so back it up first if you added any.
 3. Runs `npm link --ignore-scripts` so the global `agentmem` command works.
 4. Configures all five agents in strict mode (see [What the installer sets up](#what-the-installer-sets-up)).
 5. Reuses a running worker or starts one, and opens the workbench.
@@ -59,6 +59,10 @@ AGENTMEM_PORT=38888
 ```
 
 Once the worker is running, open **LLM Settings** in the workbench to switch the model or endpoint, keep or replace the key and run a live connection test. Changes are saved to the same `.env` file. See the [full reference](./Reference.md) for every setting and the [LLM cost controls](./LLM%20Cost%20Controls.md).
+
+## Network note
+
+The worker listens on port 38888 (or the port you chose) on every network interface. The admin workbench and its APIs reject requests that do not come from this machine, but the endpoints agents use to read and write memory do not. On a shared or untrusted network, make sure your firewall blocks inbound connections to that port.
 
 ## Open the workbench
 
@@ -106,7 +110,7 @@ agentmem uninstall --strict             # remove AgentMemory's hooks, MCP entrie
 agentmem uninstall --strict --purge-all # also remove retained install state and backups
 ```
 
-Uninstall also removes `~/.agentmem/.env` and the local memory database. Copy them somewhere first if you want to keep your settings or memories.
+Uninstall also removes `~/.agentmem/.env` and the local memory database (`~/.agentmem/agentmemory.db`). To keep your memories, first stop the worker (`agentmem stop`) and close every agent that uses AgentMemory, then copy the database together with any `-wal`, `-shm` and `-journal` files next to it. Copying only the `.db` file while AgentMemory is running can miss recent memories. The [Native SQLite migration](./Native%20SQLite%20Migration.md) guide describes the same cold backup.
 
 ## What the installer sets up
 

@@ -23,7 +23,7 @@ AgentMemory gives Claude Code, Codex, Antigravity, OpenCode and Grok one memory 
 - ⚡ **Zero-effort capture.** Hooks record real tool work and summarize it in the background. No prompts to remember, no notes to write.
 - 🔎 **Recall that finds the right thing.** Hybrid full-text and vector search, served to agents through MCP and at session start.
 - 🗓️ **Daily digests.** A nightly summary per project: facts, decisions, verified commands, open questions, next steps.
-- 🔒 **Yours, locally.** Memories stay on your machine, the workbench listens on loopback only, and you pick the LLM, cloud or fully local.
+- 🔒 **Yours, locally.** Memories stay in a local database on your machine, the admin workbench only answers requests from this machine, and you pick the LLM, cloud or fully local.
 - 🖥️ **A real control room.** Browse, search and audit every memory, flip read/write switches and configure the LLM from one web workbench.
 - ↩️ **Safe to try.** The installer backs up every file it touches, edits only its own entries and can put everything back with one command.
 
