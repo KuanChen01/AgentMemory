@@ -7,7 +7,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const { DatabaseManager, ADMIN_MEMORY_DETAIL_TASKS_SQL } = require('../dist/services/db.js');
-const { withWorker } = require('./helpers/task-worker.cjs');
+const { withWorker, assertLanRefused } = require('./helpers/task-worker.cjs');
 
 function withDb(run) {
   return async () => {
@@ -96,7 +96,7 @@ async function getJson(base, route) {
   return { status: response.status, body: await response.json() };
 }
 
-test('memory-detail route rejects non-loopback requests with 403', async (t) => {
+test('memory-detail route is unreachable from non-loopback addresses', async (t) => {
   const external = Object.values(os.networkInterfaces()).flat()
     .find((addr) => addr && addr.family === 'IPv4' && !addr.internal);
   if (!external) {
@@ -106,12 +106,7 @@ test('memory-detail route rejects non-loopback requests with 403', async (t) => 
   await withWorker(async ({ port, base }) => {
     const local = await getJson(base, '/admin/api/memory-detail?id=missing');
     assert.equal(local.status, 404);
-    const response = await fetch(
-      `http://${external.address}:${port}/admin/api/memory-detail?id=missing`,
-      { signal: AbortSignal.timeout(15000) },
-    );
-    assert.equal(response.status, 403);
-    assert.match((await response.json()).error, /loopback/);
+    await assertLanRefused(external.address, port, '/admin/api/memory-detail?id=missing');
   });
 });
 

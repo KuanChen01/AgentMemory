@@ -76,9 +76,14 @@ import {
 loadAgentMemoryEnv();
 
 const app = express();
+// Every route (memories, state writes, /shutdown) is for agents on this machine only;
+// reject other clients before parsing their body.
+app.use(loopbackOnlyGuard);
 app.use(express.json({ limit: '10mb' })); // Support large logs
 
 const PORT = process.env.AGENTMEM_PORT || 38888;
+// Loopback only: the worker has no authentication, so it must not listen on LAN interfaces.
+const HOST = '127.0.0.1';
 const dbManager = new DatabaseManager();
 let dailyDigestScheduler: DailyDigestSchedulerHandle | null = null;
 const workerRuntimeDir = process.env.AGENTMEM_RUNTIME_DIR || path.join(os.homedir(), '.agentmem');
@@ -207,6 +212,16 @@ function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
   const normalized = address.replace('::ffff:', '');
   return normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function loopbackOnlyGuard(req: Request, res: Response, next: express.NextFunction) {
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    res.status(403).json({
+      error: 'AgentMemory worker only accepts requests from loopback addresses.',
+    });
+    return;
+  }
+  next();
 }
 
 function adminOnlyGuard(req: Request, res: Response, next: express.NextFunction) {
@@ -458,9 +473,9 @@ async function startServer() {
   for (const t of frozenTasks(dbManager)) lastAttemptMs.set(t.task_id, 0);
 
   await new Promise<void>((resolve, reject) => {
-    const server = app.listen(PORT, () => {
+    const server = app.listen(Number(PORT), HOST, () => {
       registerWorkerRuntime();
-      console.log(`AgentMemory worker service running on port ${PORT}`);
+      console.log(`AgentMemory worker service running on port ${PORT} (${HOST} only)`);
       resolve();
     });
     server.once('error', reject);

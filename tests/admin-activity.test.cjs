@@ -7,7 +7,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const { DatabaseManager } = require('../dist/services/db.js');
-const { withWorker } = require('./helpers/task-worker.cjs');
+const { withWorker, assertLanRefused } = require('./helpers/task-worker.cjs');
 
 function withDb(run) {
   return async () => {
@@ -59,7 +59,7 @@ async function getJson(base, route) {
   return { status: response.status, body: await response.json() };
 }
 
-test('activity route rejects non-loopback requests with 403', async (t) => {
+test('activity route is unreachable from non-loopback addresses', async (t) => {
   const external = Object.values(os.networkInterfaces()).flat()
     .find((addr) => addr && addr.family === 'IPv4' && !addr.internal);
   if (!external) {
@@ -70,12 +70,7 @@ test('activity route rejects non-loopback requests with 403', async (t) => {
     const local = await getJson(base, '/admin/api/activity?from=2026-10-17T00:00:00.000Z&to=2026-10-18T00:00:00.000Z');
     assert.equal(local.status, 200);
     assert.ok(Array.isArray(local.body.days));
-    const response = await fetch(
-      `http://${external.address}:${port}/admin/api/activity?from=2026-10-17T00:00:00.000Z&to=2026-10-18T00:00:00.000Z`,
-      { signal: AbortSignal.timeout(15000) },
-    );
-    assert.equal(response.status, 403);
-    assert.match((await response.json()).error, /loopback/);
+    await assertLanRefused(external.address, port, '/admin/api/activity?from=2026-10-17T00:00:00.000Z&to=2026-10-18T00:00:00.000Z');
   });
 });
 

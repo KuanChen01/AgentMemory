@@ -9,7 +9,7 @@ const { randomUUID } = require('node:crypto');
 const { DatabaseManager } = require('../dist/services/db.js');
 const { READ_DISABLED_MESSAGE } = require('../dist/services/runtime-policy.js');
 const { getAdminVaultReviews } = require('../dist/services/digest-query.js');
-const { withWorker } = require('./helpers/task-worker.cjs');
+const { withWorker, assertLanRefused } = require('./helpers/task-worker.cjs');
 
 const NOW = Date.parse('2026-10-19T00:00:00.000Z');
 const SHA = 'ab'.repeat(32);
@@ -420,7 +420,7 @@ test('vault review route validates queries, lists checkpoints, and disables read
   });
 });
 
-test('vault review route rejects non-loopback requests with 403', async (t) => {
+test('vault review route is unreachable from non-loopback addresses', async (t) => {
   const external = Object.values(os.networkInterfaces()).flat()
     .find((addr) => addr && addr.family === 'IPv4' && !addr.internal);
   if (!external) {
@@ -431,9 +431,7 @@ test('vault review route rejects non-loopback requests with 403', async (t) => {
     const local = await getJson(base, '/admin/api/vault-reviews');
     assert.equal(local.status, 200);
     assert.equal(local.body.schedule, null);
-    const response = await fetch(`http://${external.address}:${port}/admin/api/vault-reviews`, { signal: AbortSignal.timeout(15000) });
-    assert.equal(response.status, 403);
-    assert.match((await response.json()).error, /loopback/);
+    await assertLanRefused(external.address, port, '/admin/api/vault-reviews');
   });
 });
 

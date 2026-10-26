@@ -65,7 +65,8 @@ async function attemptWorkerFetch(
   let receivedResponse = false;
 
   try {
-    const response = await fetch(`http://localhost:${port}${endpoint}`, {
+    // The worker listens on 127.0.0.1 only; `localhost` may resolve to ::1 first.
+    const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
       ...init,
       signal: controller.signal,
     });

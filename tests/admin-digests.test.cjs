@@ -9,7 +9,7 @@ const { randomUUID } = require('node:crypto');
 const { DatabaseManager } = require('../dist/services/db.js');
 const { READ_DISABLED_MESSAGE } = require('../dist/services/runtime-policy.js');
 const { getAdminDigestDetail, getAdminDigestList } = require('../dist/services/digest-query.js');
-const { withWorker } = require('./helpers/task-worker.cjs');
+const { withWorker, assertLanRefused } = require('./helpers/task-worker.cjs');
 
 const NOW = Date.parse('2026-10-20T00:00:00.000Z');
 
@@ -543,7 +543,7 @@ test('digest routes reject bad queries, page, and disable reads', async () => {
   });
 });
 
-test('digest routes reject non-loopback requests with 403', async (t) => {
+test('digest routes are unreachable from non-loopback addresses', async (t) => {
   const external = Object.values(os.networkInterfaces()).flat()
     .find((addr) => addr && addr.family === 'IPv4' && !addr.internal);
   if (!external) {
@@ -554,9 +554,7 @@ test('digest routes reject non-loopback requests with 403', async (t) => {
     for (const route of ['/admin/api/digest-list', '/admin/api/digest-detail?id=missing', '/admin/api/vault-reviews']) {
       const local = await getJson(base, route);
       assert.equal(local.status, route.includes('missing') ? 404 : 200, route);
-      const response = await fetch(`http://${external.address}:${port}${route}`, { signal: AbortSignal.timeout(15000) });
-      assert.equal(response.status, 403, route);
-      assert.match((await response.json()).error, /loopback/);
+      await assertLanRefused(external.address, port, route);
     }
   });
 });
