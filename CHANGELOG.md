@@ -7,8 +7,13 @@ Upgrade note: restart the worker after rebuilding; a running worker keeps its ol
 ### Security
 - The worker now listens on `127.0.0.1` only, instead of all network interfaces, and every route rejects non-loopback clients (before this only `/admin` did). Before this fix anyone on the same LAN could read memories through `/context` or `/search`, write state through `/state`, or stop the worker through `/shutdown`. There is no setting to expose the worker on the network. The hook client and `agentmem stop`/`status` now connect to `127.0.0.1` instead of `localhost`.
 
+### Changed
+- README screenshots and `scripts/demo-seed.cjs` use generic fake LLM values (`llm.example.com` / `my-model`); platform badges and install docs mark Windows as primary and macOS/Linux as lightly tested.
+- README rewritten as a short overview with screenshots made from demo data; the previous README now lives in `docs/Reference.md` / `docs/Reference.zh.md`, and install details in `docs/Installation.md` / `docs/Installation.zh.md`. The architecture diagrams no longer name a specific LLM vendor or model.
+
 ### Fixed
 - `agentmem bootstrap-win` no longer drops `.env` settings. It updates only `AGENTMEM_LLM_API_KEY`, `AGENTMEM_LLM_API_URL`, `AGENTMEM_LLM_MODEL` and `AGENTMEM_PORT` in place and keeps every other line. When it changes the file it first saves the previous version as `.env.bak-<timestamp>` next to it, and reports the path as `envBackupPath`.
+- `start-workbench.ps1` failed to parse under Windows PowerShell 5.1 on non-UTF-8 code pages (e.g. GBK/936); it is now pure ASCII. Under 5.1 it also reported every running worker as INACTIVE (`ConvertFrom-Json -Depth` is PowerShell 6.2+), which made `start` rebuild and start a second worker.
 
 ## [2.2.4] - 2026-10-25
 

@@ -1,0 +1,507 @@
+# AgentMemory Reference 🛡️
+
+🌐 [中文版](./Reference.zh.md) | English
+
+> The complete technical reference that used to be the project README. For the short overview, see the [README](../README.md); for setup, see [Installation](./Installation.md).
+
+---
+
+AgentMemory is a compilation-free, lightweight, and universal persistent memory system (Universal Agent Memory - UAM). It allows multiple developer agents (such as **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, **Antigravity CLI**, and **Grok**) to share, record, and query context observations and decisions across different workspaces.
+
+### 🌟 Features
+
+*   **Cross-Agent Memory Sharing**: Shares historical session facts, architectural decisions, and bug-fixing notes across different development assistants.
+*   **Native SQLite & Lightweight Embeddings**: Uses `better-sqlite3` with WAL, bounded lock retries, and atomic writes, alongside a pure JavaScript Feature Hashing Vectorizer. Supported Windows x64/ARM64 installs use bundled native binaries; other platforms may require build tools.
+*   **Hybrid Search**: Combines SQLite FTS5 BM25 keyword matching with Cosine Similarity vector retrieval for highly relevant results.
+*   **Background Summarization**: Uses the OpenAI-compatible LLM you configure to summarize session tool logs asynchronously in the background.
+*   **Daily Memory Digests**: Runs a daily per-project synthesis job that filters low-signal observations, writes compact fact/decision/action digests, and feeds recent digests into startup context.
+*   **Secure Global Config**: Stores API keys and settings globally (`~/.agentmem/.env`) to keep codebase repositories clean and credentials safe.
+*   **Loopback Admin Console**: Exposes a local-only `/admin` page for inspecting the database, filtering observations, and toggling global memory read/write gates at runtime.
+*   **Persistent Runtime Policy**: Persists `readEnabled` and `writeEnabled` flags in SQLite so runtime gating survives worker restarts.
+
+---
+
+### 🏗️ Architecture
+
+```mermaid
+graph TD
+    subgraph Clients [Developer Assistants]
+        CC[Claude Code]
+        OC[OpenCode]
+        CX["ChatGPT desktop<br/>(Codex runtime)"]
+        AG[Antigravity CLI]
+        GK[Grok]
+    end
+
+    subgraph AgentMemory Core [AgentMemory System]
+        CLI[Global CLI Wrapper]
+        Worker[Background HTTP Worker Port 38888]
+        MCP[Stdio MCP Server]
+        DB[(WASM SQLite + FTS5)]
+    end
+
+    CC -- Stdio MCP / Hooks --> MCP
+    OC -- Stdio MCP / ESM Plugin --> MCP
+    CX -- Stdio MCP --> MCP
+    AG -- Stdio MCP --> MCP
+    GK -- Stdio MCP / Hooks --> MCP
+
+    CC -- Post-Tool Event --> Worker
+    OC -- Post-Tool Event --> Worker
+    GK -- Lifecycle Events --> Worker
+
+    Worker -- Async Summarization --> LLM[Your LLM]
+    Worker -- Write Obs --> DB
+    MCP -- Query / Write --> DB
+```
+
+---
+
+### 🚀 Getting Started
+
+#### 1. Prerequisites
+*   Node.js (v22+; Node 24 recommended)
+*   Upgrading an existing WASM-backed installation: follow [Native SQLite Migration](./Native%20SQLite%20Migration.md) to stop older Worker/MCP processes and back up the database before switching.
+
+#### 2. Installation
+Clone the repository and build the distribution files:
+```bash
+git clone https://github.com/KuanChen01/AgentMemory.git
+cd AgentMemory
+npm install
+npm run build
+```
+
+The project `.npmrc` disables dependency install scripts so SQLite uses its bundled native binary. Current dependencies require no install scripts; `npm run build` still runs explicitly. Platforms without a bundled binary require a separate native build with suitable tools.
+
+Link the executable globally to register the `agentmem` CLI:
+```bash
+npm link --ignore-scripts
+```
+
+#### 3. Configuration
+Set up your global configuration file in your user home directory:
+
+**File Path**: `~/.agentmem/.env` (Create parent directory `.agentmem` if it doesn't exist)
+```env
+# LLM credentials for any OpenAI-compatible endpoint, cloud or local
+AGENTMEM_LLM_API_KEY=your_api_key_here
+AGENTMEM_LLM_API_URL=https://your-llm-endpoint.example/v1
+AGENTMEM_LLM_MODEL=your-model-name
+
+# Optional: Set to true if your proxy platform doesn't support JSON Mode parameters
+AGENTMEM_LLM_DISABLE_JSON_MODE=false
+
+# Optional: Custom JSON headers required by your proxy or gateway
+# AGENTMEM_LLM_HEADERS={"X-Custom-Auth":"value"}
+
+# Local service port
+AGENTMEM_PORT=38888
+```
+
+#### 4. Automatic Agent Registration
+Run the installer to automatically configure settings for **Claude Code**, **OpenCode**, **ChatGPT desktop (Codex runtime)**, **Antigravity**, and **Grok**:
+```bash
+agentmem install
+```
+
+If you want the command to fail whenever any one of the five agents cannot be configured, use:
+```bash
+agentmem install --strict
+```
+
+The installer is now backup-first and merge-first:
+
+- It stores install state in `~/.agentmem/install-state.json`
+- It keeps pristine baselines under `~/.agentmem/backups/` when available
+- It merges only AgentMemory-owned hooks / MCP entries instead of replacing whole hook arrays
+
+To remove AgentMemory from the current machine without deleting the repo checkout, use:
+```bash
+agentmem uninstall --strict
+```
+
+Add `--purge-all` if you also want to remove the retained install-state and backup artifacts after cleanup.
+
+For a second Windows machine, use the dedicated bootstrap entry instead of repeating the setup manually:
+```powershell
+.\bootstrap-second-machine.cmd
+```
+
+Detailed Chinese walkthrough: [docs/Second Machine Bootstrap Guide.zh.md](./Second%20Machine%20Bootstrap%20Guide.zh.md)
+
+---
+
+### 💻 Command Reference
+
+Run these commands globally from any directory:
+
+*   **Start Worker Manually**: `agentmem start` (optional foreground control; lifecycle hooks safely auto-start the background worker when it is unavailable)
+*   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
+*   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
+*   **Print Version**: `agentmem version`
+*   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, Antigravity, and Grok settings)
+*   **Strict Setup**: `agentmem install --strict` (fails if any one of the five agents cannot be configured)
+*   **Uninstall Local Integration**: `agentmem uninstall --strict` (removes AgentMemory-managed hooks, MCP entries, plugin artifacts, `.env`, and database files from the current machine)
+*   **Purge Local Install State**: `agentmem uninstall --strict --purge-all` (also removes retained backup and install-state artifacts)
+*   **Second-Machine Bootstrap**: `agentmem bootstrap-win --strict` or `bootstrap-second-machine.cmd`
+*   **Release Manifest**: `agentmem release-manifest --json` (prints the machine-readable release policy and current version)
+*   **Release Plan**: `npm run release:plan -- --next patch|minor|major` (prints the manual release checklist for the next version)
+*   **Release Bump**: `npm run release:bump -- --next patch|minor|major` (updates the root package version metadata before a release commit)
+
+### 🪟 Windows Bootstrap
+
+For a same-shape second Windows machine, the recommended path is:
+
+```powershell
+git clone https://github.com/KuanChen01/AgentMemory.git
+cd AgentMemory
+.\bootstrap-second-machine.cmd
+```
+
+The bootstrap script runs `npm install --ignore-scripts`, `npm run build`, creates or validates `%USERPROFILE%\.agentmem\.env`, runs `npm link --ignore-scripts`, configures all five agents, probes or starts the worker, and opens `/admin`.
+
+If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a blank scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
+
+If the file already exists, bootstrap only sets `AGENTMEM_LLM_API_KEY`, `AGENTMEM_LLM_API_URL`, `AGENTMEM_LLM_MODEL` and `AGENTMEM_PORT`. It changes those lines in place, adds any that are missing, and leaves every other line alone (comments, gateway headers, budgets, `AGENTMEM_DB_PATH` and other options). Before it changes anything it saves the previous file next to it as `.env.bak-<timestamp>`, and prints that path as `envBackupPath`. If nothing needs to change, the file is not rewritten and no backup is made.
+
+### 📦 Release Discipline
+
+AgentMemory now treats product releases as a first-class maintainer workflow:
+
+*   Official releases are published from `master` only.
+*   Versioning is strict `SemVer` with tags shaped like `v1.2.3`.
+*   The current v1 distribution channel is **GitHub Release + default source archives**.
+*   Release metadata is exposed through the CLI (`agentmem release-manifest`) and `/admin/api/overview`, and `/admin/api/release-check` now compares the current checkout against the latest published GitHub Release.
+
+Detailed maintainer workflow: [docs/Release Process.md](./Release%20Process.md)
+
+Use branches and reviewed PRs before merging, releasing, and upgrading each machine independently. Keep local configuration and memories on their own machine. See [Reviewed Updates](./Reviewed%20Updates.zh.md). Existing Worker/MCP processes must restart to load new code; updating source or running bootstrap does not update an already-running process.
+
+Memory processing on the official DeepSeek endpoint uses non-thinking mode and records per-machine usage. Custom summary output budgets are optional and off by default, with separate tool-summary and daily-digest controls in LLM Settings. See [LLM Cost Controls](./LLM%20Cost%20Controls.md).
+
+---
+
+### 🧭 Admin Console
+
+After the worker is running, open:
+
+```text
+http://127.0.0.1:38888/admin
+```
+
+The admin console is intentionally restricted to loopback clients. It is not exposed to non-local network addresses.
+
+The whole worker, not just `/admin`, is local-only: it listens on `127.0.0.1` only, and every route (`/context`, `/state`, `/search`, `/tools`, `/shutdown`, ...) rejects non-loopback clients. The worker has no authentication, so there is no setting to expose it on the LAN. Other machines, containers or VMs that reach this machine over the network cannot use it. Use `http://127.0.0.1:<port>`; `http://localhost:<port>` also works in browsers and Node clients that fall back to IPv4.
+
+Windows local control now has two entrypoints:
+
+*   `npm run workbench`
+*   `start-workbench.cmd`
+
+`npm run workbench` keeps the direct one-click flow: build the repo, probe `http://127.0.0.1:38888/admin/api/overview`, reuse or start the worker, and open `/admin`.
+
+`start-workbench.cmd` is now the interactive control entrypoint. With no arguments it probes the current status first, then shows a one-shot menu for `Start`, `Stop`, `Restart`, `Status`, `Open Admin`, and `Exit`. With arguments it supports:
+
+*   `start-workbench.cmd start|stop|restart|status|open-admin|menu`
+*   `start-workbench.cmd start --no-open`
+*   `start-workbench.cmd restart --port 38889 --no-open`
+
+The page provides:
+
+*   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, daily digest status / manual run / scheduler settings, workbench posture, and a read-only GitHub Release update check with manual upgrade guidance
+*   **Procedural Skills** for reviewing digest `skill_candidates`, promoting them to draft, flipping lifecycle status, recording success/failure/rejected/skipped feedback, inspecting feedback history, evidence, lifecycle, recommendation signals, and the latest automatic post-task review artifacts next to task-level query validation
+*   **LLM Settings** for switching `AGENTMEM_LLM_MODEL`, updating the OpenAI-compatible API base URL, preserving or replacing the API key, and running a live connection test
+*   **Project Context** for the current `ProjectContextView`, recent daily digests, rendered startup text, bounded context package metrics, temporal slice diagnostics, and policy decision trace
+*   **State Lab** for explicit structured state reads and writes
+*   **Search Diagnostics** for raw hybrid search scores (`hybrid_score`, `fts_score`, `vector_score`) and low-signal title visibility
+*   **Observation Ledger** for filterable observation browsing and detailed drill-down
+
+#### Structured state and context view
+
+AgentMemory now separates memory into explicit layers:
+
+*   **Observations** remain the append-only historical ledger used for hybrid search and detailed recall.
+*   **State facts** store explicit current or historical truth with `effective_at`, `recorded_at`, and `superseded_at`.
+*   **Daily digests** store scheduled or manually triggered per-project summaries with fact, decision, command, open-question, and next-action lists. Digest output is not auto-promoted into state facts.
+*   **Procedural skills** are now first-class, reviewable memory objects with draft/enabled/disabled/retired states plus success/failure feedback logs.
+
+The policy brain is now explicit instead of being scattered across hooks and ad-hoc call sites:
+
+*   `memory-policy.ts` centralizes read decisions, suppresses routine read/status/search/view/run tool noise only when it has neither modified-file evidence nor a substantive outcome, and owns draft promotion gates for procedural skill candidates. Explicit `record_memory` milestones, failures, verified findings, and validation results remain recordable.
+*   `memory-orchestrator.ts` is the shared Stage 2 read orchestrator used by worker startup context, MCP `get_project_context`, and task-level query resolution.
+*   `memory-query.ts` is the task-oriented resolution path that now reuses the shared orchestrator to decide which layers to read, when to consult procedural memory, and how to attach bounded context, temporal diagnostics, and decision trace output.
+
+New interfaces in this first cut:
+
+*   `GET /context?project_path=&limit=&as_of=` returns a `ProjectContextView` object instead of a raw observation array.
+*   `GET /state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads current or historical structured state.
+*   `POST /state` explicitly writes a structured state fact.
+*   `POST /memory/query` returns the policy decision, layered context, matching observations, matching procedural skills, a bounded context package, temporal slice diagnostics, and a decision trace for a task query.
+*   `POST /search` and `POST /admin/api/search` now accept optional `as_of` filtering for historical replay.
+*   MCP tools: `get_project_context`, `query_memory`, `get_memory_state`, `set_memory_state`, `list_procedural_skills`, `promote_skill_candidate`, `set_procedural_skill_status`, `record_procedural_skill_feedback`
+
+`ProjectContextView` combines:
+
+*   `as_of` for time-sliced reconstruction
+*   `current_state`
+*   `daily_digests` from recent successful daily summaries, trimmed for startup use
+*   `procedural_skills` from enabled or draft first-class procedural memory, enriched with feedback summary/history, lifecycle signal, and recommendation state when relevant
+*   `summary_blocks` built from curated recent observations with low-signal titles filtered out and duplicate titles collapsed
+*   `recent_observations` as a slim startup-oriented metadata list (`id`, `title`, `created_at`, `agent_id`) without full narratives or embeddings
+*   `sliding_window` as the compatibility alias for the Stage 2 bounded context package
+*   `bounded_context` as the host-facing bounded recent-context package with layer budgets, trimming order, rendered package text, and host responsibilities
+*   `temporal_diagnostics` for per-layer `as_of` / latest slice behavior
+*   `decision_trace` for why the policy and recommendation path produced the current package
+*   `memory_layers` for explicit metadata/profile/recent-summary/ledger/procedural/window separation
+*   `generated_at`
+
+Structured state is still **explicit-write only** in this phase. Observations, hook logs, and LLM summaries do not automatically promote themselves into the state layer. Procedural skill candidates also remain **reviewable before promotion**: they can be promoted into draft skills, but they are never auto-enabled.
+
+All lifecycle hooks fail open. Worker requests have a short bounded timeout covering response headers and the complete body (default `1500ms`, configurable with `AGENTMEM_HOOK_TIMEOUT_MS`). Only a refused connection (`ECONNREFUSED` on every connection attempt) triggers one lock-protected detached worker start and a separate startup grace period (default `5000ms`, configurable with `AGENTMEM_HOOK_STARTUP_TIMEOUT_MS`). Timeouts, connection resets, and other ambiguous failures are never retried because the worker may already have accepted a `POST /tools` event. Set `AGENTMEM_HOOK_AUTOSTART=false` to disable hook-driven startup. Lifecycle diagnostics are written to `%USERPROFILE%\.agentmem\worker-status.json`, `worker.pid`, and `logs\worker-autostart.log`; integration tests isolate these files with `AGENTMEM_RUNTIME_DIR`. When summarization is unavailable, successful raw executions are skipped because they contain no extracted outcome or file evidence; actual tool failures are still recorded.
+
+#### Admin-only diagnostics APIs
+
+The workbench also exposes loopback-only admin APIs for the UI:
+
+*   `GET /admin/api/context?project_path=&limit=` returns:
+    *   `view`: raw `ProjectContextView`
+    *   `rendered`: the same text block produced by `renderProjectContextView(view)`
+    *   `metrics`: `payloadBytes`, `summaryCount`, `lowSignalCount`, `duplicateTitleCount`, `proceduralSkillCount`, `slidingWindowEntryCount`, `boundedContextBudget`, `boundedContextCharsUsed`, `boundedContextTrimmedEntries`, `temporalDiagnosticLayerCount`, `decisionTraceStepCount`
+*   `GET /admin/api/state?project_path=&entity_type=&entity_key=&fact_key=&as_of=` reads structured state for the workbench
+*   `POST /admin/api/state` explicitly writes a structured state fact from the workbench
+*   `POST /admin/api/search` returns raw hybrid search diagnostics for the current project without changing the ranking algorithm, and accepts optional `as_of`
+*   `POST /admin/api/memory/query` exposes the policy-driven task resolution path used to assemble layered memory context, bounded context packaging, temporal diagnostics, and decision trace output
+*   `GET /admin/api/skills?project_path=&status=&as_of=&limit=` lists current procedural skills with feedback history, evidence summary, lifecycle signal, and recommendation metadata
+*   `GET /admin/api/post-task-reviews?project_path=&limit=` lists automatic post-task review artifacts generated from the real observation write path, including matched skills, recommendation states, bounded context, temporal diagnostics, and decision trace data
+*   `POST /admin/api/skills/promote-candidate` explicitly promotes a digest `skill_candidate` into a draft procedural skill
+*   `POST /admin/api/skills/status` flips a procedural skill between `draft`, `enabled`, `disabled`, and `retired`
+*   `POST /admin/api/skills/feedback` records success/failure/rejected/skipped feedback for a procedural skill
+*   `GET /admin/api/digests?project_path=&limit=` returns recent saved daily memory digests for a project
+*   `POST /admin/api/digests/run` manually runs the daily memory digest job for a selected project and optional `local_date`
+*   `GET /admin/api/digest-scheduler` returns the persisted daily digest scheduler config and current runtime status
+*   `POST /admin/api/digest-scheduler` saves scheduler `enabled`, `schedule_time`, `time_zone`, and `lookback_days`, then applies the new timer to the running worker
+*   `GET /admin/api/release-check` compares the current checkout against the latest published GitHub Release and returns manual upgrade guidance for either git checkouts or source archives
+*   `GET /admin/api/llm-config` returns a sanitized LLM config snapshot without exposing the full API key
+*   `POST /admin/api/llm-config` persists model, API URL, JSON-mode, headers, and optional API key changes to `~/.agentmem/.env` and updates the running worker process
+*   `POST /admin/api/llm-test` sends a small OpenAI-compatible `chat/completions` request with the current form values and returns pass/fail diagnostics
+
+#### Runtime policy semantics
+
+*   `readEnabled=false` blocks memory restoration and explicit read APIs:
+    *   HTTP: `/context`, `/search`, `/state`, `/memory/query`
+    *   MCP: `get_project_context`, `query_memory`, `search_memory`, `memory_timeline`, `get_memory_details`, `get_memory_state`, `list_procedural_skills`
+    *   Session-start hooks stop printing restored memory into the agent session
+*   `writeEnabled=false` blocks new memory creation:
+    *   HTTP: `/tools`, `/sessions`, `/sessions/close`, `/state`, `/admin/api/skills/*`
+    *   MCP: `record_memory`, `set_memory_state`, `promote_skill_candidate`, `set_procedural_skill_status`, `record_procedural_skill_feedback`
+    *   Post-tool hooks stop producing new observations
+
+Both flags are stored in SQLite `app_settings`, so the selected policy survives worker restarts.
+
+Daily digest reads use the same read gate as startup context, and manual digest runs use the same write gate as observation and state writes. Scheduler settings are persisted in SQLite `app_settings`; the legacy `AGENTMEM_DAILY_DIGEST_DISABLED=true` environment flag only seeds the default value before a scheduler setting is saved.
+
+#### Operating workflow
+
+1. Use `npm run workbench` for the old one-click launch, or use `start-workbench.cmd` for interactive `Start / Stop / Restart / Status / Open Admin` control
+2. Open `http://127.0.0.1:38888/admin`
+3. Use the `Read Memory` and `Write Memory` switches to change runtime policy
+4. Use the Runtime release card to compare the current checkout with the latest GitHub Release and choose the recommended manual upgrade path
+5. Use Runtime daily digest controls to inspect the latest per-project digest, manually run one for a selected local date, or change the automatic scheduler's enabled state, run time, time zone, and catch-up window
+6. Use `Procedural Skills` to review digest candidates, promote the reusable ones to draft, flip `enabled/disabled/retired`, record operator feedback, inspect automatic post-task reviews, and run a validation query that shows matched skill titles plus the current `rollout_stage`
+7. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
+8. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
+9. Use `Observation Ledger` to drill into the raw observation history when needed
+10. Use `agentmem status` to confirm reachability and inspect the last runtime state. `agentmem stop` is still available, but the next managed lifecycle hook will start the worker again unless `AGENTMEM_HOOK_AUTOSTART=false` is set
+
+---
+
+### 🔌 Agent Integration Specifications
+
+#### 1. OpenCode (`~/.config/opencode/opencode.jsonc`)
+`agentmem install` registers `mcp.agentmem`, generates the global bridge plugin, and merges a marked AgentMemory rules block into `~/.config/opencode/AGENTS.md`. The plugin retrieves task memory through `chat.message`, injects startup context and task memory through `experimental.chat.system.transform`, and records normal tool activity through `tool.execute.after`, with a second retrieval after repeated failures. The MCP identity is fixed to `AGENTMEM_AGENT_ID=opencode`. The config shape is:
+```jsonc
+{
+  "mcp": {
+    "agentmem": {
+      "type": "local",
+      "command": ["node", "path/to/AgentMemory/dist/servers/mcp-server.js"],
+      "environment": { "AGENTMEM_AGENT_ID": "opencode" },
+      "enabled": true
+    }
+  },
+  "plugin": [
+    "file:///C:/Users/YourUsername/.config/opencode/plugins/agentmem-plugin.mjs"
+  ]
+}
+```
+
+AgentMemory does not copy or take ownership of the Vault `vault-sync` skill. If the skill is currently installed only in the Codex skills directory, expose the same skill folder at OpenCode's supported global agent skill path:
+```powershell
+New-Item -ItemType Junction `
+  -Path "$env:USERPROFILE\.agents\skills\vault-sync" `
+  -Target "$env:USERPROFILE\.codex\skills\vault-sync"
+```
+OpenCode can then discover and load the same `SKILL.md` with its `skill` tool; the global rules recommend it only for verified, durable project outcomes.
+
+#### 2. Claude Code
+Claude Code uses two different files:
+
+*   `~/.claude.json` for global stdio MCP servers
+*   `~/.claude/settings.json` for hooks and other session settings
+
+**`~/.claude.json`**
+```json
+{
+  "mcpServers": {
+    "agentmem": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["path/to/AgentMemory/dist/servers/mcp-server.js"],
+      "env": { "AGENTMEM_AGENT_ID": "claudecode" }
+    }
+  }
+}
+```
+
+**`~/.claude/settings.json`**
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"path/to/AgentMemory/dist/hooks/claude-session-start.js\"" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"path/to/AgentMemory/dist/hooks/claude-post-tool.js\"" }]
+      }
+    ]
+  }
+}
+```
+
+**Active-recording mode (optional).** The `PostToolUse` hook is what records Claude Code tool activity automatically. You can leave it out and let Claude Code decide when to save memories through the `agentmem` MCP tools instead; those writes are stored as direct memories under agent id `claudecode` (no task capture).
+
+*   `agentmem install --no-claude-capture` installs or keeps Claude Code without the `PostToolUse` hook.
+*   `agentmem install --claude-capture` adds the hook back.
+*   With neither flag, the installer keeps the current choice: an existing managed setup without the hook stays that way; a fresh install enables capture (same as earlier versions).
+*   The installer writes `AGENTMEM_AGENT_ID=claudecode` into the MCP server `env`, so direct writes are attributed correctly. `agentmem install --strict` checks for it; re-run `agentmem install` on each machine after upgrading.
+*   The `SessionStart` hook prints a compact context (latest summary blocks and daily digests, lines capped) so it stays under Claude Code's hook output preview limit; use `search_memory` for anything omitted.
+
+#### 3. ChatGPT desktop (Codex runtime) (`~/.codex/config.toml` and `~/.codex/hooks.json`)
+The desktop app is currently branded **ChatGPT**, while its Codex runtime continues to use `~/.codex`. Expose the MCP server in `config.toml`, and register lifecycle hooks in `hooks.json`; keep the `codex-*` hook file names unchanged.
+
+**`~/.codex/config.toml`**
+```toml
+[features]
+hooks = true
+
+[mcp_servers.agentmem]
+command = "node"
+args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
+```
+
+**`~/.codex/hooks.json`**
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"path/to/AgentMemory/dist/hooks/codex-session-start.js\"" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"path/to/AgentMemory/dist/hooks/codex-post-tool.js\"" }]
+      }
+    ]
+  }
+}
+```
+
+#### 4. Antigravity CLI
+`agentmem install` always updates Antigravity's official global MCP registry at `%USERPROFILE%\.gemini\config\mcp_config.json`. During migration it also updates an existing legacy direct registry (`antigravity-cli`, `antigravity-ide`, or `antigravity`) or an existing Gemini-compatible plugin registry under `%USERPROFILE%\.gemini\config\plugins\*\mcp_config.json`. If your machine keeps an additional registry somewhere else, pass:
+
+```bash
+agentmem install --strict --antigravity-config "C:\\path\\to\\mcp_config.json"
+```
+
+Generic shape:
+```json
+{
+  "mcpServers": {
+    "agentmem": {
+      "command": "node",
+      "args": ["path/to/AgentMemory/dist/servers/mcp-server.js"],
+      "env": { "AGENTMEM_AGENT_ID": "antigravity" },
+      "disabled": false
+    }
+  }
+}
+```
+
+The installer builds the Antigravity plugin under `%USERPROFILE%\.agentmem\antigravity-plugins\agentmem`, then activates it with `agy plugin install`. Antigravity stages the imported plugin to `%USERPROFILE%\.gemini\config\plugins\agentmem` and records it in `import_manifest.json`. The plugin bundles `PreInvocation` / `PostToolUse` / `Stop` hooks and a frontmatter rule; it does not declare a second MCP server. The single AgentMemory MCP registration lives in `%USERPROFILE%\.gemini\config\mcp_config.json` with `AGENTMEM_AGENT_ID=antigravity`. The installer removes older duplicate registrations that point to this AgentMemory server. `%USERPROFILE%\.agentmem\AGENTMEM_ANTIGRAVITY.md` remains as a readable compatibility copy of the plugin rule.
+
+Preferred Antigravity workflow:
+
+1. Let the `PreInvocation` hook retrieve task-relevant memory automatically for substantive requests.
+2. For difficult work, repeated failures, or unclear past decisions, call `query_memory` or `search_memory` with the concrete problem. Use `memory_timeline` only when event order matters; it returns at most 40 entries per page. Verify relevant results against current workspace files, diffs, commands, tests, or artifacts.
+3. Normal tool work is recorded automatically by `PostToolUse`, and `Stop` closes the session. Use explicit `record_memory(agent_id="antigravity")` only for a deliberate cross-session milestone.
+4. Do not treat raw AgentMemory summaries or session recaps as durable truth, and do not record trivial output merely because a task is ending.
+
+This gives Antigravity the same automatic read/write lifecycle as the other hook-backed agents.
+
+#### 5. Grok (`~/.grok/config.toml`)
+`agentmem install` registers the stdio MCP server with `AGENTMEM_AGENT_ID=grok-build`, creates a default `~/.grok/agents/agentmem.md` profile, and writes global lifecycle hooks to `~/.grok/hooks/agentmem.json`. It does not create or require a global `~/.grok/AGENTS.md` file.
+
+```toml
+[agent]
+name = "agentmem"
+
+[compat.claude]
+hooks = false
+
+[mcp_servers.agentmem]
+command = "node"
+args = [ "path/to/AgentMemory/dist/servers/mcp-server.js" ]
+env = { AGENTMEM_AGENT_ID = "grok-build" }
+```
+
+The default profile disables global `AGENTS.md` loading and makes `get_project_context` its first memory read. Grok's passive hooks cannot inject stdout into the model, so the profile owns startup recovery while `SessionStart`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd` hooks register sessions, record tool work, and close sessions. The installer disables Grok's Claude-hook compatibility only: this prevents the existing Claude post-tool hook from mislabeling Grok activity as `claudecode`; Claude skills and MCP compatibility remain enabled.
+
+### ✅ Smoke Validation Checklist
+
+Use this when validating a live local installation:
+
+1. Precheck: worker starts, `/admin` loads, and the current observation count is readable
+2. `read on / write on`: previous memory is restored and a new observation can be recorded
+3. `read off / write on`: restored memory disappears, explicit read tools return disabled messages, but new writes still succeed
+4. `read on / write off`: memory can still be read, but new writes no longer increase the observation count
+5. Restore defaults: turn both toggles back on and verify the persisted policy survives a worker restart
+
+If a smoke check fails, fix only issues directly related to `/admin`, runtime policy gating, or the current agent integration path, then re-run `npm run build` and the affected `tests/*.test.cjs`.
+
+---
+
+### 📄 License
+Apache-2.0 License
+
+## Work memory and global review overview
+
+Tool synthesis now returns `record_kind`: `outcome`, `context`, or `skip`. Routine events can stop before embedding/review; useful read-only findings and actual failed-tool evidence remain eligible. Missing/invalid classification is uncertain recovery context, not a keyword-based exclusion. The existing synthesis call is reused; this does not prove natural-language classification quality or quota savings.
+
+Synthesis failure retains bounded tool input/output as uncertain recovery context for successful events, or failure evidence for failed events, without another model/embedding call. Structured MCP `isError` and failing exit/status override optimistic caller success. Known upstream truncation markers and local capture limits prevent `skip` from treating unseen content as proven routine work.
+
+New additive metadata tables retain every existing observation unchanged as legacy. `record_memory` accepts optional `record_kind` (outcome/context), defaulting to outcome for explicit milestones. `/sessions` accepts purpose=work/daily_review and echoes the stored purpose. Review plumbing is distinguished from real failures/results by the synthesis prompt, not whole-session exclusion.
+
+`get_work_overview(since, until, cursor?)` and loopback `GET /admin/api/work-overview` page the catalog of recorded session starts and saved observations in the frozen interval, newly typed memories, and at most five whole legacy samples. Sessions without observations and projects without Vault registration remain visible; unrecorded work or dormant historical sessions are not claimed as covered. The entire JSON response is capped at 12 KiB, including catalog, references and cursor. Each memory is whole or a detail reference; legacy samples are not exhaustive and unshown text is not classified as inactivity. Cursor freezes both observation and session high-water and separate catalog/memory/sample positions, preserving boundary-second rescans. Do not treat imported older observations as automatically covered by a newer checkpoint. This draft replaces the earlier draft cursor encoding; no production migration or old queue adoption is performed.
+
+`GET /admin/api/work-details?id=ID&offset=BYTE_OFFSET` returns UTF-8 detail chunks (up to 8 KiB), next_offset and source SHA-256 for concrete continuation. Changed source requires inspection. Read-disabled workers return unavailable, not an empty successful overview. Existing startup/search/timeline/digest APIs remain for working-memory recovery; digests are clues, not a complete review ledger.
+
+This revision must be independently reviewed before production deployment. Source tests use temporary DBs and mocked LLMs; real capture quality and scheduled acceptance require separate authorization. No database/history pruning, real queue replay or scheduler activation is part of this repair.
