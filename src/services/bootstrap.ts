@@ -30,6 +30,7 @@ export interface BootstrapOptions {
 export interface BootstrapResult {
   adminUrl: string;
   antigravityConfigPath?: string;
+  envBackupPath?: string;
   installValidationIssues: string[];
   logs: { stderrPath: string; stdoutPath: string } | null;
   mode: 'started-new-worker' | 'reused-existing-worker';
@@ -83,6 +84,25 @@ AGENTMEM_PORT=${port}
 `;
 }
 
+// Sets only the given keys: a changed line is rewritten in place, a missing key is appended,
+// and every other line (comments, headers, budgets, DB path, ...) is kept as it was.
+export function mergeBootstrapEnvText(text: string, values: Record<string, string>): string {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const missing = new Set(Object.keys(values));
+  const lines = text.split(/\r?\n/).map((rawLine) => {
+    const line = rawLine.trim();
+    const equalIndex = line.indexOf('=');
+    if (!line || line.startsWith('#') || equalIndex === -1) return rawLine;
+    const key = line.slice(0, equalIndex).trim();
+    if (!Object.prototype.hasOwnProperty.call(values, key)) return rawLine;
+    missing.delete(key);
+    return line.slice(equalIndex + 1).trim() === values[key] ? rawLine : `${key}=${values[key]}`;
+  });
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  for (const key of missing) lines.push(`${key}=${values[key]}`);
+  return `${lines.join(eol)}${eol}`;
+}
+
 export function ensureBootstrapEnvFile(
   homeDir: string,
   seed: {
@@ -91,7 +111,7 @@ export function ensureBootstrapEnvFile(
     model?: string;
     port?: number;
   } = {}
-): { envPath: string; ready: boolean; created: boolean } {
+): { envPath: string; ready: boolean; created: boolean; backupPath?: string } {
   const envDir = path.join(homeDir, '.agentmem');
   const envPath = path.join(envDir, '.env');
   fs.mkdirSync(envDir, { recursive: true });
@@ -102,23 +122,35 @@ export function ensureBootstrapEnvFile(
     created = true;
   }
 
-  const existing = parseEnvText(fs.readFileSync(envPath, 'utf8'));
-  const merged = renderEnvTemplate({
-    apiKey:
+  const original = fs.readFileSync(envPath, 'utf8');
+  const existing = parseEnvText(original);
+  const merged = mergeBootstrapEnvText(original, {
+    AGENTMEM_LLM_API_KEY:
       normalizeSeedValue(seed.apiKey) ||
       normalizeSeedValue(existing.AGENTMEM_LLM_API_KEY) ||
-      normalizeSeedValue(existing.DEEPSEEK_API_KEY),
-    apiUrl:
+      normalizeSeedValue(existing.DEEPSEEK_API_KEY) ||
+      '',
+    AGENTMEM_LLM_API_URL:
       normalizeSeedValue(seed.apiUrl) ||
       normalizeSeedValue(existing.AGENTMEM_LLM_API_URL) ||
-      normalizeSeedValue(existing.DEEPSEEK_API_URL),
-    model:
+      normalizeSeedValue(existing.DEEPSEEK_API_URL) ||
+      'https://api.deepseek.com/v1',
+    AGENTMEM_LLM_MODEL:
       normalizeSeedValue(seed.model) ||
       normalizeSeedValue(existing.AGENTMEM_LLM_MODEL) ||
       'deepseek-chat',
-    port: seed.port || Number(existing.AGENTMEM_PORT) || 38888,
+    AGENTMEM_PORT: String(seed.port || Number(existing.AGENTMEM_PORT) || 38888),
   });
-  fs.writeFileSync(envPath, merged, 'utf8');
+
+  let backupPath: string | undefined;
+  if (merged !== original) {
+    if (!created) {
+      // Keep the user's previous file next to it before changing anything.
+      backupPath = `${envPath}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      fs.copyFileSync(envPath, backupPath);
+    }
+    fs.writeFileSync(envPath, merged, 'utf8');
+  }
 
   const parsed = parseEnvText(fs.readFileSync(envPath, 'utf8'));
   const ready =
@@ -129,7 +161,7 @@ export function ensureBootstrapEnvFile(
     !!parsed.AGENTMEM_LLM_MODEL &&
     parsed.AGENTMEM_LLM_MODEL !== ENV_PLACEHOLDER;
 
-  return { envPath, ready, created };
+  return { envPath, ready, created, backupPath };
 }
 
 function runCommand(command: string, args: string[], cwd: string, extraEnv: Record<string, string> = {}): Promise<void> {
@@ -256,6 +288,7 @@ export async function runWindowsBootstrap(options: BootstrapOptions): Promise<Bo
   return {
     adminUrl: urls.adminUrl,
     antigravityConfigPath: antigravityPath,
+    envBackupPath: envStatus.backupPath,
     installValidationIssues,
     logs,
     mode: initialState === 'reuse-existing' ? 'reused-existing-worker' : 'started-new-worker',
