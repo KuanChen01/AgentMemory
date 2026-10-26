@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+Upgrade note: restart the worker after rebuilding; a running worker keeps its old bind address until it restarts.
+
+### Security
+- The worker now listens on `127.0.0.1` only, instead of all network interfaces, and every route rejects non-loopback clients (before this only `/admin` did). Before this fix anyone on the same LAN could read memories through `/context` or `/search`, write state through `/state`, or stop the worker through `/shutdown`. There is no setting to expose the worker on the network. The hook client and `agentmem stop`/`status` now connect to `127.0.0.1` instead of `localhost`.
+
+### Fixed
+- `agentmem bootstrap-win` no longer drops `.env` settings. It updates only `AGENTMEM_LLM_API_KEY`, `AGENTMEM_LLM_API_URL`, `AGENTMEM_LLM_MODEL` and `AGENTMEM_PORT` in place and keeps every other line. When it changes the file it first saves the previous version as `.env.bak-<timestamp>` next to it, and reports the path as `envBackupPath`.
+
 ## [2.2.4] - 2026-10-25
 
 Upgrade note: run `npm ci && npm run build`, then re-run `agentmem install` (keep `--claude-capture` where used) so every agent's managed guidance gains the English-records line. No schema change. Existing memories and digests are left as they are: nothing is backfilled, translated or regenerated. Install validation (`agentmem install --strict`, `agentmem bootstrap-win`) now also requires the English line in the OpenCode rules, Antigravity guidance and Grok profile. Both commands rewrite those files first, so the check only flags files that were edited afterwards or written by an older version.
