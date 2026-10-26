@@ -5,7 +5,9 @@ const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
 
 const { withWorker, ev } = require('./helpers/task-worker.cjs');
-const { redactSecrets, redactToolEvent, knownSecrets, isSecretFilePath, SECRET_FILE_OMITTED } = require('../dist/services/secret-redaction.js');
+const { redactSecrets, redactToolEvent, redactObservation, knownSecrets, isSecretFilePath, SECRET_FILE_OMITTED } = require('../dist/services/secret-redaction.js');
+const { summaryHashV2 } = require('../dist/services/event-classifier.js');
+const { getLocalHashingEmbedding } = require('../dist/services/embedding.js');
 
 // Assembled from parts so no complete credential-shaped literal sits in the source.
 const OPENAI = ['sk', 'proj', 'Fx7Qa9Lm2Zt4Wc8Rb1Nd6Hk3'].join('-');
@@ -134,19 +136,95 @@ test('code, identifiers, hashes, paths and prose stay readable', () => {
   assert.equal(redactSecrets(keep, []), keep);
 });
 
-test('redaction is idempotent and fast on large captured output', () => {
+test('ordinary keys, ids, paths, digests and code values are not credentials', () => {
+  const keep = [
+    'sort_key=created_at2', 'const secret = value123;', 'primary_key=6f1c2a9e-3b4d-4e5f-8a9b-0c1d2e3f4a5b',
+    'idempotency_key: 6f1c2a9e-3b4d-4e5f-8a9b-0c1d2e3f4a5b', 'API_KEY=config/tenant1.json', 'object_key: uploads/2026/a.png',
+    'cache_key = sha256:abc123def4567890', 'hash_key = "a1b2c3d4e5f6"', 'auth_mode=oauth2client', 'partition_key=user_id_2',
+    'SORT_KEY=created_at2', 'token_type: bearer2', 'api_key_file=./secrets/key.txt', 'author_id=Jane12345678',
+  ];
+  for (const line of keep) assert.equal(redactSecrets(line, []), line, line);
+  for (const [key, value] of [['sort_key', 'created_at2'], ['partition_key', 'user_id_2'], ['hash_key', 'a1b2c3d4e5f6'], ['auth_mode', 'oauth2client']]) {
+    const input = JSON.stringify({ [key]: value });
+    assert.equal(redactToolEvent(input, input, []).output, input, key);
+  }
+  // Real credentials under the same kinds of names still go.
+  for (const line of ['STRIPE_KEY=rk9Lm2Zt4Wc8Rb1Nd6Hk', 'api_key=Fx7Qa9Lm2Zt4Wc8Rb1Nd6Hk', 'client_secret: Zx9-fixture-77', 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCY1fixture']) {
+    assert.match(redactSecrets(line, []), /<redacted>$/, line);
+  }
+});
+
+test('quoted passwords are redacted whole, and secret-file names cover variants', () => {
+  for (const [line, expected] of [
+    ['DB_PASSWORD="hunter2 with spaces"', 'DB_PASSWORD="<redacted>"'],
+    ["password: 'hunter2 with spaces'", "password: '<redacted>'"],
+    ['{"password": "hunter2 with spaces"}', '{"password": "<redacted>"}'],
+  ]) assert.equal(redactSecrets(line, []), expected, line);
+  const escaped = JSON.stringify({ log: 'DB_PASSWORD="hunter2 with spaces"' });
+  assert.deepEqual(JSON.parse(redactSecrets(escaped, [])), { log: 'DB_PASSWORD="<redacted>"' });
+  for (const p of ['credentials-prod.json', 'config/credentials.staging.json', 'id_rsa.backup', '~/.ssh/id_ed25519_old']) assert.ok(isSecretFilePath(p), p);
+  for (const p of ['id_rsa.pub', 'id_ed25519_old.pub']) assert.ok(!isSecretFilePath(p), p);
+});
+
+test('redacted JSON always parses, so a Write event keeps its modified file', () => {
+  const { modifiedFiles } = require('../dist/services/event-classifier.js');
+  const write = JSON.stringify({ file_path: 'src/config.ts', content: 'export const x = 1;', password: 123456 });
+  const redacted = redactToolEvent(write, '{"success":true,"token":987654321098,"secret":"Zx9-fixture-77"}', []);
+  assert.deepEqual(JSON.parse(redacted.input), { file_path: 'src/config.ts', content: 'export const x = 1;', password: '<redacted>' });
+  assert.deepEqual(JSON.parse(redacted.output), { success: true, token: 987654321098, secret: '<redacted>' });
+  assert.deepEqual(modifiedFiles('Write', redacted.input), ['src/config.ts']);
+  // Text redaction keeps JSON and dict literals valid too.
+  assert.deepEqual(JSON.parse(redactSecrets('{"password":123456,"n":1}', [])), { password: '<redacted>', n: 1 });
+  assert.equal(redactSecrets("{'password': 123456}", []), "{'password': '<redacted>'}");
+  const nested = JSON.stringify({ stdout: '{"password":123456}' });
+  assert.deepEqual(JSON.parse(JSON.parse(redactSecrets(nested, [])).stdout), { password: '<redacted>' });
+  // Every shape that parsed before redaction still parses after it.
+  for (const value of [{ password: 123456 }, { api_key: 'Fx7Qa9Lm2Zt4Wc8Rb1Nd6Hk' }, [{ token: OPENAI }], OPENAI, `DB_PASSWORD=${DB_PASSWORD}`,
+    { nested: { client_secret: ['Zx9-fixture-77'] }, pem: PEM }]) {
+    const text = JSON.stringify(value);
+    const out = redactToolEvent(text, text, []);
+    JSON.parse(out.input); JSON.parse(out.output);
+  }
+});
+
+test('memory text uses only the high-precision rules', () => {
+  const memory = redactObservation({ title: `Rotated ${GITHUB}`, narrative: 'sort_key=created_at2; DB_PASSWORD=hunter-fixture', facts: [`key ${OPENAI}`], concepts: ['env'] }, []);
+  assert.equal(memory.title, 'Rotated <redacted:github-token>');
+  assert.equal(memory.facts[0], 'key <redacted:openai-style-key>');
+  // No assignment heuristic: a deliberately saved line is never guessed away.
+  assert.equal(memory.narrative, 'sort_key=created_at2; DB_PASSWORD=hunter-fixture');
+  assert.deepEqual(redactObservation(memory, []), memory, 'idempotent');
+});
+
+test('redaction is idempotent and linear on large adversarial input', () => {
   const once = redactSecrets(ENV_FILE + PEM + ` ${GITHUB}`, []);
   assert.equal(redactSecrets(once, []), once);
-  const big = 'A1b2C3d4'.repeat(8000) + ' api_key_token_secret '.repeat(2000);
-  const started = Date.now();
-  redactSecrets(big, []);
-  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
+  const base64url = require('node:crypto').randomBytes(800000).toString('base64url').slice(0, 1000000);
+  const shapes = {
+    'a. run': 'a.'.repeat(500000),
+    'api_key run': 'api_key'.repeat(200000),
+    'api_key= run': 'api_key='.repeat(125000),
+    'base64url': base64url,
+    'sk- run': 'sk-'.repeat(333333),
+    'Bearer run': 'Bearer '.repeat(140000),
+    'url run': 'x://u:'.repeat(160000),
+    'pem headers': '-----BEGIN PRIVATE KEY-----'.repeat(37000),
+    'quoted password run': '"password": "'.repeat(70000),
+    'patch headers': '*** Update File: src/a.ts\n'.repeat(38000),
+  };
+  for (const [label, text] of Object.entries(shapes)) {
+    const started = Date.now();
+    redactSecrets(text, []);
+    redactToolEvent(JSON.stringify({ command: text.slice(0, 200000) }), JSON.stringify({ stdout: text }), []);
+    const ms = Date.now() - started;
+    assert.ok(ms < 1500, `${label}: ${ms}ms`);
+  }
 });
 
 test('worker: captured credentials never reach the buffer, the model prompt, the evidence API or stored memory', async () => {
   await withWorker(async ({ post, get, idle, stub, dbPath }) => {
     // The model echoes a credential back: the stored memory must not keep it.
-    stub.setFixed({ record_kind: 'outcome', title: 'Read env', narrative: `Saw key ${GITHUB}`, facts: [`DB_PASSWORD=${DB_PASSWORD}`],
+    stub.setFixed({ record_kind: 'outcome', title: 'Read env', narrative: `Saw key ${GITHUB}`, facts: [`key ${OPENAI}`],
       concepts: ['env'], files_read: [], files_modified: ['src/x.ts'] });
     await post('/tools', ev('s1', 'Read', JSON.stringify({ file_path: 'E:/Fixture/App/.env' }), JSON.stringify({ file: { content: ENV_FILE } })));
     await post('/tools', ev('s1', 'Bash', JSON.stringify({ command: 'env' }), `OPENAI_API_KEY=${OPENAI}\nGITHUB_TOKEN=${GITHUB}\nHOME=/home/u`));
@@ -159,10 +237,18 @@ test('worker: captured credentials never reach the buffer, the model prompt, the
       const rows = db.prepare('SELECT input, output FROM task_event_buffer').all();
       assert.equal(rows.length, 3);
       assertClean(JSON.stringify(rows), secrets, 'buffer');
-      const memories = db.prepare('SELECT o.id, o.title, o.narrative, o.facts, f.narrative AS fts_narrative, f.facts AS fts_facts FROM observations o JOIN observations_fts f ON f.observation_id = o.id').all();
+      const memories = db.prepare('SELECT o.id, o.project_path, o.title, o.narrative, o.facts, o.concepts, o.files_read, o.files_modified, o.embedding, f.narrative AS fts_narrative, f.facts AS fts_facts FROM observations o JOIN observations_fts f ON f.observation_id = o.id').all();
       assert.equal(memories.length, 1);
       assertClean(JSON.stringify(memories), secrets, 'memory');
       assert.match(memories[0].narrative, /<redacted:github-token>/);
+      // The content hash and the embedding describe the stored (redacted) text, so dedup and crash recovery agree.
+      const m = memories[0];
+      const stored = { title: m.title, narrative: m.narrative, facts: JSON.parse(m.facts), files_read: JSON.parse(m.files_read), files_modified: JSON.parse(m.files_modified) };
+      const day = String(db.prepare('SELECT MAX(created_at) AS d FROM task_event_buffer').get().d).slice(0, 10);
+      const hash = db.prepare('SELECT sha256 FROM observation_content_hashes WHERE observation_id = ? AND hash_version = 2').get(m.id);
+      assert.equal(hash.sha256, summaryHashV2(m.project_path, stored, day));
+      const embedText = `${m.title} ${m.narrative} ${stored.facts.join(' ')} ${JSON.parse(m.concepts).join(' ')}`;
+      assert.deepEqual(JSON.parse(m.embedding), getLocalHashingEmbedding(embedText));
       assertClean(stub.calls.map(c => c.user).join('\n'), secrets, 'prompt');
       assert.ok(stub.calls.some(c => c.user.includes(SECRET_FILE_OMITTED)));
       const evidence = await get('/admin/api/work-evidence?' + new URLSearchParams({ id: memories[0].id }));
