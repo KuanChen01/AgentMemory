@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
+import { ensurePrivateDir, restrictToOwner } from './private-files';
 import {
   DailyDigestSchedulerConfig,
   DatabaseManager,
@@ -37,11 +38,11 @@ import {
 } from './procedural-memory';
 import { runAutomaticPostTaskReview } from './post-task-review';
 import {
-  normalizeRuntimePolicy,
   READ_DISABLED_MESSAGE,
   WRITE_DISABLED_MESSAGE,
 } from './runtime-policy';
 import {
+  getAgentMemoryEnvPath,
   loadAgentMemoryEnv,
   readLlmConfig,
   redactLlmTestPayload,
@@ -76,9 +77,10 @@ import {
 loadAgentMemoryEnv();
 
 const app = express();
-// Every route (memories, state writes, /shutdown) is for agents on this machine only;
-// reject other clients before parsing their body.
+// Every route (memories, state writes, /shutdown) is for agents on this machine only:
+// reject other machines and web pages before parsing their body.
 app.use(loopbackOnlyGuard);
+app.use(localOriginGuard);
 app.use(express.json({ limit: '10mb' })); // Support large logs
 
 const PORT = process.env.AGENTMEM_PORT || 38888;
@@ -219,6 +221,30 @@ function loopbackOnlyGuard(req: Request, res: Response, next: express.NextFuncti
     res.status(403).json({
       error: 'AgentMemory worker only accepts requests from loopback addresses.',
     });
+    return;
+  }
+  next();
+}
+
+// DNS rebinding and cross-site requests: a page on another origin may resolve to 127.0.0.1, but its
+// requests still carry its own Host/Origin. Only this worker's own loopback origin is accepted.
+function localOriginGuard(req: Request, res: Response, next: express.NextFunction) {
+  const allowedHosts = ['127.0.0.1', 'localhost', '[::1]'].map(host => `${host}:${PORT}`);
+  const host = String(req.headers.host || '').toLowerCase();
+  const origin = req.headers.origin;
+  // Opening the (data-free) workbench page from a link elsewhere is fine; its API calls are same-origin.
+  const pageNavigation = req.method === 'GET' && req.path === '/admin' && req.headers['sec-fetch-mode'] === 'navigate';
+  const fetchSite = pageNavigation ? '' : String(req.headers['sec-fetch-site'] || '');
+  if (!allowedHosts.includes(host)
+    || (origin !== undefined && !allowedHosts.some(allowed => origin.toLowerCase() === `http://${allowed}`))
+    || fetchSite === 'cross-site' || fetchSite === 'same-site') {
+    res.status(403).json({ error: 'AgentMemory worker only accepts requests addressed to its own loopback origin.' });
+    return;
+  }
+  // Clients send JSON; a form or text/plain body (which a browser may send cross-site without preflight) is refused.
+  const hasBody = Number(req.headers['content-length'] || 0) > 0 || req.headers['transfer-encoding'] !== undefined;
+  if (hasBody && !req.is('application/json')) {
+    res.status(415).json({ error: 'AgentMemory worker requests must use Content-Type: application/json.' });
     return;
   }
   next();
@@ -471,6 +497,10 @@ async function startServer() {
   setInterval(() => { void sweepIdleTasks(); }, Number(process.env.AGENTMEM_TASK_SWEEP_MS) || sweepMs).unref();
   // Frozen tasks left by a previous process are retried promptly.
   for (const t of frozenTasks(dbManager)) lastAttemptMs.set(t.task_id, 0);
+  // Owner-only runtime directory (POSIX 0700/0600; Windows writes stay atomic with no ACL changes).
+  ensurePrivateDir(workerRuntimeDir, true);
+  const envPath = getAgentMemoryEnvPath();
+  if (fs.existsSync(envPath)) restrictToOwner(envPath, false);   // .env files from older versions were 0644
 
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(Number(PORT), HOST, () => {
@@ -1094,9 +1124,12 @@ app.post('/admin/api/settings', adminOnlyGuard, async (req, res) => {
       updates.writeEnabled = !!body.writeEnabled;
     }
 
-    const normalized =
-      Object.keys(updates).length === 0 ? normalizeRuntimePolicy({}) : updates;
-    const policy = await dbManager.updateRuntimePolicy(normalized);
+    // A request without a boolean switch changes nothing (it used to reset both switches to on).
+    if (Object.keys(updates).length === 0
+      || Object.keys(updates).some(key => typeof body[key] !== 'boolean')) {
+      return res.status(400).json({ error: 'readEnabled and/or writeEnabled must be given as booleans.' });
+    }
+    const policy = await dbManager.updateRuntimePolicy(updates);
     res.json({ success: true, policy });
   } catch (err: any) {
     console.error('Error updating runtime policy:', err);
@@ -1827,7 +1860,8 @@ app.post('/memory/query', async (req, res) => {
   }
 
   try {
-    if (!(await isReadEnabled())) {
+    const policy = await dbManager.getRuntimePolicy();
+    if (!policy.readEnabled) {
       return res.json({
         disabled: true,
         message: READ_DISABLED_MESSAGE,
@@ -1846,7 +1880,8 @@ app.post('/memory/query', async (req, res) => {
       skillLimit: parseSearchLimit(body.skill_limit, 3),
       windowCharBudget: parseWindowCharBudget(body.window_char_budget, 1800),
     });
-    res.json(result);
+    // Auto-recall keeps a prompt on disk only while capture (writes) is on.
+    res.json({ ...result, write_enabled: policy.writeEnabled });
   } catch (err: any) {
     console.error('Error resolving memory query:', err);
     res.status(500).json({ error: err.message });

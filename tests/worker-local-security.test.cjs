@@ -103,7 +103,7 @@ test('memory, state and shutdown routes are unreachable from the LAN address', a
   });
 });
 
-test('bootstrap keeps every other .env setting and backs the old file up before changing it', () => {
+test('bootstrap keeps every other .env setting and writes no backup copy of the key', () => {
   const home = makeTempHome();
   try {
     const envDir = path.join(home, '.agentmem');
@@ -138,15 +138,14 @@ test('bootstrap keeps every other .env setting and backs the old file up before 
       'AGENTMEM_PORT=38999',
       '',
     ].join('\n'));
-    assert.ok(result.backupPath, 'a backup path is reported');
-    assert.equal(path.dirname(result.backupPath), envDir);
-    assert.equal(fs.readFileSync(result.backupPath, 'utf8'), original);
+    assert.equal(Object.hasOwn(result, 'backupPath'), false);
+    // No .env.bak-* copy and no leftover temp file from the atomic write.
+    assert.deepEqual(fs.readdirSync(envDir), ['.env']);
 
-    // Running bootstrap again with the same values changes nothing and makes no second backup.
-    const again = ensureBootstrapEnvFile(home, { apiKey: 'new-fake-key', port: 38999 });
-    assert.equal(again.backupPath, undefined);
+    // Running bootstrap again with the same values changes nothing.
+    ensureBootstrapEnvFile(home, { apiKey: 'new-fake-key', port: 38999 });
     assert.equal(fs.readFileSync(envPath, 'utf8'), text);
-    assert.equal(envBackups(envDir).length, 1);
+    assert.deepEqual(envBackups(envDir), []);
   } finally {
     removeTempHome(home);
   }
@@ -163,7 +162,6 @@ test('bootstrap leaves a complete .env byte-for-byte unchanged, including CRLF a
     fs.writeFileSync(envPath, original, 'utf8');
     const result = ensureBootstrapEnvFile(home, { port: 38888 });
     assert.equal(result.ready, true);
-    assert.equal(result.backupPath, undefined);
     assert.equal(fs.readFileSync(envPath, 'utf8'), original);
     assert.deepEqual(envBackups(envDir), []);
   } finally {
@@ -177,7 +175,6 @@ test('bootstrap scaffolds a new .env without a backup, and the merge helper appe
     const result = ensureBootstrapEnvFile(home, { port: 38999 });
     assert.equal(result.created, true);
     assert.equal(result.ready, false);
-    assert.equal(result.backupPath, undefined);
     assert.deepEqual(envBackups(path.join(home, '.agentmem')), []);
     assert.match(fs.readFileSync(result.envPath, 'utf8'), /^AGENTMEM_PORT=38999$/m);
   } finally {

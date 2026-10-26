@@ -1,9 +1,16 @@
 import { llmBudgetOptions, recordLlmUsage } from './llm-budget';
+import { llmErrorExcerpt } from './llm-config';
 
 export interface LlmSettings { apiKey: string; apiUrl: string; model: string; headers: Record<string, string>; disableJsonMode: boolean; }
 
 export function resolveLlmSettings(env: NodeJS.ProcessEnv = process.env): LlmSettings {
-  const headers = env.AGENTMEM_LLM_HEADERS ? JSON.parse(env.AGENTMEM_LLM_HEADERS) : {};
+  let headers = {};
+  try {
+    headers = env.AGENTMEM_LLM_HEADERS ? JSON.parse(env.AGENTMEM_LLM_HEADERS) : {};
+  } catch {
+    // The engine's parse message quotes the input, which may hold a credential.
+    throw new Error('AGENTMEM_LLM_HEADERS must be valid JSON.');
+  }
   return {
     apiKey: env.AGENTMEM_LLM_API_KEY || env.DEEPSEEK_API_KEY || '',
     apiUrl: (env.AGENTMEM_LLM_API_URL || env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1').trim().replace(/\/+$/, ''),
@@ -92,7 +99,7 @@ export async function callLlmJson(kind: 'observation' | 'daily_digest', system: 
     const startedAt = Date.now();
     const response = await fetchWithRetry(`${settings.apiUrl}/chat/completions`, { method: 'POST', headers,
       body: JSON.stringify(body) }, { timeoutMs: 90000 });
-    if (!response.ok) throw new Error(`LLM API error: ${response.status} - ${(await response.text()).slice(0, 500)}`);
+    if (!response.ok) throw new Error(`LLM API error: ${response.status} - ${llmErrorExcerpt(await response.text(), headers, settings.apiKey)}`);
     const data: any = await response.json();
     recordLlmUsage(kind, data, Date.now() - startedAt);
     if (data.choices?.[0]?.finish_reason === 'length') throw new Error(`${kind} exceeded output token budget`);

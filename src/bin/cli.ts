@@ -6,6 +6,7 @@ import os from 'os';
 import dotenv from 'dotenv';
 import { installAgentMemory, uninstallAgentMemory } from '../services/agent-installer';
 import { runWindowsBootstrap } from '../services/bootstrap';
+import { ensurePrivateDir } from '../services/private-files';
 import {
   buildReleaseManifest,
   buildReleasePlan,
@@ -25,7 +26,7 @@ const workerStatusFile = path.join(vaultDir, 'worker-status.json');
 const PORT = Number(process.env.AGENTMEM_PORT || 38888);
 
 if (!fs.existsSync(vaultDir)) {
-  fs.mkdirSync(vaultDir, { recursive: true });
+  ensurePrivateDir(vaultDir);
 }
 
 const args = process.argv.slice(2);
@@ -193,7 +194,7 @@ Usage:
   agentmem version
   agentmem install [--strict] [--antigravity-config <path>] [--claude-capture | --no-claude-capture]
   agentmem uninstall [--strict] [--antigravity-config <path>] [--purge-all]
-  agentmem bootstrap-win [--strict] [--no-open] [--antigravity-config <path>] [--api-key <key>] [--api-url <url>] [--model <name>] [--port <number>]
+  agentmem bootstrap-win [--strict] [--no-open] [--antigravity-config <path>] [--api-url <url>] [--model <name>] [--port <number>]
   agentmem release-manifest [--json]
   agentmem release-plan --next <patch|minor|major>
   agentmem release-bump (--next <patch|minor|major> | --set-version <x.y.z>)
@@ -332,9 +333,14 @@ async function bootstrapWin(options: ParsedOptions) {
   process.chdir(repoRoot);
 
   console.log('Bootstrapping AgentMemory on Windows...\n');
+  // The bootstrap script hands the key over in the environment: a command-line key lands in shell
+  // history and process listings. --api-key still works but is no longer documented. The variable is
+  // removed so the worker started below does not inherit it.
+  const apiKey = process.env.AGENTMEM_BOOTSTRAP_API_KEY || options.apiKey;
+  delete process.env.AGENTMEM_BOOTSTRAP_API_KEY;
   const result = await runWindowsBootstrap({
     antigravityConfigPath: options.antigravityConfigPath,
-    apiKey: options.apiKey,
+    apiKey,
     apiUrl: options.apiUrl,
     model: options.model,
     openBrowser: !options.noOpen,

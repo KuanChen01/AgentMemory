@@ -5,6 +5,7 @@ import path from 'path';
 import { fetchAgentMemoryWorker } from './worker-client';
 import { llmBudgetOptions, recordLlmUsage } from '../services/llm-budget';
 import { loadAgentMemoryEnv } from '../services/llm-config';
+import { ensurePrivateDir, writePrivateFileAtomic } from '../services/private-files';
 
 loadAgentMemoryEnv();
 
@@ -32,6 +33,11 @@ interface TurnState {
   stuckInjected: boolean;
 }
 
+// A turn's prompt and prepared context reach disk only after the worker confirmed in this process that
+// memory reads and capture (writes) are both on; otherwise they live in memory for this hook call only.
+let persistTurns: boolean | undefined;
+const turnsInMemory = new Map<string, TurnState>();
+
 function statePath(sessionKey: string): string {
   const root = process.env.AGENTMEM_RUNTIME_DIR || path.join(os.homedir(), '.agentmem');
   const hash = createHash('sha256').update(sessionKey).digest('hex');
@@ -39,6 +45,8 @@ function statePath(sessionKey: string): string {
 }
 
 function readState(sessionKey: string): TurnState | null {
+  const held = turnsInMemory.get(sessionKey);
+  if (held) return { ...held };
   try { return JSON.parse(fs.readFileSync(statePath(sessionKey), 'utf8')); }
   catch { return null; }
 }
@@ -52,14 +60,24 @@ export function activeRecallTurn(sessionKey: string): string {
 }
 
 export function clearRecallSession(sessionKey: string): void {
+  turnsInMemory.delete(sessionKey);
   try { fs.unlinkSync(statePath(sessionKey)); } catch { /* No state to clear. */ }
 }
 
-function saveState(sessionKey: string, state: TurnState): void {
+// A new turn is written only when allowed; an update to a turn already on disk is written unless the
+// worker has just reported memory as disabled.
+function saveState(sessionKey: string, state: TurnState, newTurn = false): void {
+  const persist = newTurn ? persistTurns === true : persistTurns !== false;
+  if (!persist) {
+    turnsInMemory.set(sessionKey, { ...state });
+    try { fs.unlinkSync(statePath(sessionKey)); } catch { /* Nothing on disk. */ }
+    return;
+  }
+  turnsInMemory.delete(sessionKey);
   try {
     const target = statePath(sessionKey);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, `${JSON.stringify(state)}\n`, 'utf8');
+    ensurePrivateDir(path.dirname(target));
+    writePrivateFileAtomic(target, `${JSON.stringify(state)}\n`);
   } catch { /* Memory must never block the host. */ }
 }
 
@@ -92,7 +110,7 @@ export function beginRecallTurn(sessionKey: string, turnId: string, prompt: stri
   saveState(sessionKey, {
     turnId, prompt, context, delivered: false,
     errorSignature: '', errorCount: 0, stuckInjected: false,
-  });
+  }, true);
 }
 
 export function takePreparedRecall(sessionKey: string, turnId: string): string {
@@ -135,15 +153,17 @@ export function markStuckRecall(sessionKey: string, turnId: string): void {
   saveState(sessionKey, state);
 }
 
-async function query(projectPath: string, prompt: string, limit: number, timeoutMs: number): Promise<MemoryHit[]> {
+// null: the worker did not answer, or memory is disabled. Then nothing else (no query rewrite) is sent anywhere.
+async function query(projectPath: string, prompt: string, limit: number, timeoutMs: number): Promise<MemoryHit[] | null> {
   const response = await fetchAgentMemoryWorker(PORT, '/memory/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project_path: projectPath, query: prompt, mode: 'task_query', limit, window_char_budget: 900 }),
   }, timeoutMs, false);
-  if (!response?.ok) return [];
+  if (!response?.ok) return null;
   const data: any = await response.json();
-  if (data?.disabled) return [];
+  persistTurns = !data?.disabled && data?.write_enabled !== false;
+  if (data?.disabled) return null;
   return Array.isArray(data?.search_results) ? data.search_results : [];
 }
 
@@ -179,9 +199,10 @@ async function recallWithinDeadline(projectPath: string, prompt: string, maxHits
   if (!isSubstantivePrompt(prompt)) return '';
   const deadline = Date.now() + RECALL_DEADLINE_MS;
   let hits = await query(projectPath, prompt, Math.max(3, maxHits), Math.min(1800, deadline - Date.now()));
+  if (!hits) return '';
   if ((!hits[0] || Number(hits[0].hybrid_score) < MIN_SCORE) && /[\u3400-\u9fff]/.test(prompt)) {
     const rewritten = await rewriteChineseQuery(prompt, Math.min(2000, deadline - Date.now()));
-    if (rewritten) hits = await query(projectPath, rewritten, Math.max(3, maxHits), Math.max(100, deadline - Date.now()));
+    if (rewritten) hits = await query(projectPath, rewritten, Math.max(3, maxHits), Math.max(100, deadline - Date.now())) || [];
   }
   const selected = hits.filter((hit) => Number(hit.hybrid_score) >= MIN_SCORE).slice(0, maxHits);
   if (!selected.length) return '';

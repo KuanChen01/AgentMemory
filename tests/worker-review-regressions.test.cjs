@@ -107,7 +107,8 @@ test('saved custom headers reach real mock summary requests after worker restart
     assert.equal((await post('/admin/api/llm-config', { headers, outputBudgetEnabled: false })).status, 200);
     await stop(); await start();
     const config = (await (await get('/admin/api/llm-config')).json()).config;
-    assert.equal(config.headers, headers);
+    // The admin API never returns saved header values; the requests below still carry them.
+    assert.equal(config.headers, JSON.stringify({ 'X-Test-Header': '••••', 'X-Second': '••••' }));
     assert.equal(config.outputBudgetEnabled, false);
     await post('/tools', { session_id: 'restart', project_path: 'E:/Review/Headers', agent_id: 'fixture',
       tool_name: 'exec_command', input: 'verify header persistence', output: 'verification passed', success: true });
