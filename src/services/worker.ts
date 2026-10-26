@@ -54,6 +54,7 @@ import { checkLatestRelease } from './release-check';
 import { runDailyMemoryDigest } from './daily-digest';
 import { boundToolText, boundedEnvInteger } from './llm-budget';
 import { normalizeToolLogText, skipRawToolLog, toolResponseSucceeded, incompleteToolSource } from './tool-log-policy';
+import { redactObservation, redactToolEvent } from './secret-redaction';
 import { interpretWorkMemory, synthesizeEnglishWorkMemory, WORK_MEMORY_PROMPT } from './work-memory';
 import { callLlmJson, llmAvailable, resolveLlmSettings } from './llm-client';
 import { initializeWithLockRetry } from './db-init-retry';
@@ -1051,9 +1052,11 @@ app.get('/admin/api/work-evidence', adminOnlyGuard, async (req, res) => {
     const task = { task_id: tasks[0] };
     const items: any[] = []; let bytes = 0;
     for (const row of rows.slice(0, 20)) {
-      const size = Buffer.byteLength(JSON.stringify(row));
+      // Rows stored before capture-time redaction may still hold credentials.
+      const item = { ...row, ...redactToolEvent(String(row.input ?? ''), String(row.output ?? '')), success: !!row.success, truncated: !!row.truncated };
+      const size = Buffer.byteLength(JSON.stringify(item));
       if (items.length && bytes + size > 48 * 1024) break;
-      items.push({ ...row, success: !!row.success, truncated: !!row.truncated }); bytes += size;
+      items.push(item); bytes += size;
     }
     const more = items.length < rows.length;
     res.json({ id, task_id: task.task_id, task_ids: tasks, offset, items, next_offset: more ? offset + items.length : null });
@@ -1726,14 +1729,16 @@ async function ingestToolLog(req: Request, res: Response, importedMs: number | n
     if (importedMs !== null && !taskConsolidationEnabled())
       return res.status(409).json({ error: 'Import requires task consolidation to be enabled' });
 
+    // Credentials are removed here, before the event is stored, routed or sent to a model.
+    const redacted = redactToolEvent(normalizeToolLogText(input), normalizeToolLogText(output));
     const logEntry: QueuedToolLog = {
       id: uuidv4(),
       session_id,
       project_path: normalizeProjectPath(project_path),
       agent_id,
       tool_name,
-      input: normalizeToolLogText(input),
-      output: normalizeToolLogText(output),
+      input: redacted.input,
+      output: redacted.output,
       success: toolResponseSucceeded(output, !!success),
       timestamp: importedMs ?? Date.now()
     };
@@ -1981,8 +1986,10 @@ ${boundToolText(log.output, outputLimit)}
       parsedObs.narrative += `\nObserved failed tool output (recovery evidence, not a verified diagnosis): ${boundToolText(log.output, 2000)}`;
     }
 
+    // Redact before embedding, so the stored text and its embedding agree.
+    const memory = redactObservation(parsedObs);
     // Compute embedding for vector search
-    const textToEmbed = `${parsedObs.title} ${parsedObs.narrative} ${parsedObs.facts.join(' ')} ${parsedObs.concepts.join(' ')}`;
+    const textToEmbed = `${memory.title} ${memory.narrative} ${memory.facts.join(' ')} ${memory.concepts.join(' ')}`;
     const embedding = await getEmbedding(textToEmbed);
 
     const observation: Observation = {
@@ -1990,13 +1997,13 @@ ${boundToolText(log.output, outputLimit)}
       session_id: log.session_id,
       project_path: log.project_path,
       agent_id: log.agent_id,
-      title: parsedObs.title || `Ran ${log.tool_name}`,
-      narrative: parsedObs.narrative || `Executed tool ${log.tool_name} in workspace.`,
-      facts: parsedObs.facts || [],
-      concepts: parsedObs.concepts || [],
-      files_read: parsedObs.files_read || [],
-      files_modified: parsedObs.files_modified || [],
-      embedding, record_kind: parsedObs.kind, source_kind: 'tool'
+      title: memory.title || `Ran ${log.tool_name}`,
+      narrative: memory.narrative || `Executed tool ${log.tool_name} in workspace.`,
+      facts: memory.facts || [],
+      concepts: memory.concepts || [],
+      files_read: memory.files_read || [],
+      files_modified: memory.files_modified || [],
+      embedding, record_kind: memory.kind, source_kind: 'tool'
     };
 
     await dbManager.saveObservation(observation);

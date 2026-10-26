@@ -33,6 +33,7 @@ import {
   renderProceduralSkillForAgent,
 } from '../services/procedural-memory';
 import { buildReleaseManifest } from '../services/release';
+import { redactObservation } from '../services/secret-redaction';
 
 // Load environment variables
 dotenv.config({ path: path.join(os.homedir(), '.agentmem', '.env') });
@@ -587,10 +588,13 @@ ${d.files_read.map((f) => `  * ${f}`).join('\n') || '  (None)'}
           };
         }
 
-        const title = String(args?.title);
-        const narrative = String(args?.narrative);
-        const facts = (args?.facts as string[]) || [];
-        const concepts = (args?.concepts as string[]) || [];
+        // Redacted before embedding, so the stored text and its embedding agree.
+        const { title, narrative, facts, concepts } = redactObservation({
+          title: String(args?.title),
+          narrative: String(args?.narrative),
+          facts: (args?.facts as string[]) || [],
+          concepts: (args?.concepts as string[]) || [],
+        });
         const filesModified = (args?.files_modified as string[]) || [];
         const filesRead = (args?.files_read as string[]) || [];
         const projectPath = String(args?.project_path || currentPath).replace(/\\/g, '/');

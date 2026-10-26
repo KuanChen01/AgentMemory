@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { incompleteToolSource } from './tool-log-policy';
+import { redactObservation, redactToolEvent } from './secret-redaction';
 import { randomUUID } from 'crypto';
 import { DatabaseManager, Observation } from './db';
 import { boundedEnvInteger } from './llm-budget';
@@ -279,11 +280,13 @@ export async function freezeOpenTask(db: DatabaseManager, sessionId: string, exp
 }
 
 function renderOne(row: any): string {
+  // Rows captured before capture-time redaction (and legacy rows) are redacted again before they reach a model.
+  const { input, output } = redactToolEvent(String(row.input ?? ''), String(row.output ?? ''));
   return `## ${row.tool_name} (${row.success ? 'success' : 'FAILURE'})${row.incomplete || row.truncated ? ' [source abbreviated at capture]' : ''}
 [INPUT]
-${String(row.input ?? '')}
+${input}
 [OUTPUT]
-${String(row.output ?? '')}`;
+${output}`;
 }
 
 /**
@@ -468,16 +471,18 @@ export async function consolidateTask(db: DatabaseManager, taskId: string, trigg
       else {
         const fallback = !parsed;
         const tools = [...new Set(rows.map(r => r.tool_name))].join(', ');
-        const obs: Observation = {
+        // Redacted before hashing and embedding, so the stored text, its hash and its embedding agree.
+        const obs = redactObservation<Observation>({
           id: resultId, session_id: sessionId, project_path: first.project_path, agent_id: first.agent_id,
           title: parsed?.title || `Task capture incomplete: ${tools}`.slice(0, 200),
+          // The fallback names the calls only: raw tool input/output never becomes memory text.
           narrative: parsed?.narrative || `Memory synthesis unavailable; classification unknown. ${String(lastError || '').slice(0, 300)}\n` +
-            rows.slice(-5).map(r => `${r.tool_name}: ${String(r.input).slice(0, 300)} => ${String(r.output).slice(0, 600)}`).join('\n'),
+            rows.slice(-5).map(r => `${r.tool_name} (${r.success ? 'success' : 'failure'})`).join('\n'),
           facts: parsed?.facts || [`${rows.length} tool calls (${tools})`], concepts: parsed?.concepts || ['task'],
           files_read: parsed?.files_read || [], files_modified: [...new Set([...(parsed?.files_modified || []), ...touched])].slice(0, 30),
           embedding: [], record_kind: fallback ? (anyFailure || touched.length ? 'outcome' : 'context') : parsed!.kind, source_kind: 'task',
           ...(importedEnd ? { created_at: sqlTimeMs(importedEnd) } : {}),
-        };
+        });
         if ((rendered.omitted || atCapture) && !fallback) obs.narrative += `\n(${rendered.omitted + atCapture} chars of the task were omitted before synthesis; source incomplete.)`;
         contentHash = summaryHashV2(obs.project_path, obs, hashDay);
         // One transaction: link to an EXISTING observation with this hash, or save observation + hash together.
@@ -640,10 +645,10 @@ export async function compactLegacy(db: DatabaseManager, options: CompactLegacyO
       }
       if (status === 'pending') { summary.pending++; reason ||= 'legacy source truncated; kept pending'; summary.pending_reasons.push(`${resultId}: ${reason}`); }
       else if (parsed && !parsed.skip) {
-        const obs: Observation = { id: resultId, session_id: p.session, project_path: first.project_path, agent_id: first.agent_id,
+        const obs = redactObservation<Observation>({ id: resultId, session_id: p.session, project_path: first.project_path, agent_id: first.agent_id,
           title: parsed.title || 'Compacted legacy session', narrative: parsed.narrative, facts: parsed.facts, concepts: parsed.concepts,
           files_read: parsed.files_read, files_modified: parsed.files_modified, embedding: [], record_kind: parsed.kind,
-          source_kind: 'legacy_compacted', created_at: seg[seg.length - 1].created_at };
+          source_kind: 'legacy_compacted', created_at: seg[seg.length - 1].created_at });
         const day = String(obs.created_at || '').slice(0, 10); const hash = summaryHashV2(obs.project_path, obs, day);
         const known = db.sqlGet(`SELECT h.observation_id FROM observation_content_hashes h JOIN observations o ON o.id=h.observation_id
           WHERE h.project_path=? AND h.sha256=? AND h.hash_version=2 AND h.observation_id<>?`, [obs.project_path, hash, obs.id]);
