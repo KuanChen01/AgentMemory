@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- README screenshots and `scripts/demo-seed.cjs` use generic fake LLM values (`llm.example.com` / `my-model`); platform badges and install docs mark Windows as primary and macOS/Linux as lightly tested.
 - README rewritten as a short overview with screenshots made from demo data; the previous README now lives in `docs/Reference.md` / `docs/Reference.zh.md`, and install details in `docs/Installation.md` / `docs/Installation.zh.md`. The architecture diagrams no longer name a specific LLM vendor or model.
 
 ### Fixed

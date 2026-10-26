@@ -6,7 +6,7 @@ Everything the [README](../README.md) quick start leaves out: the Windows bootst
 
 ## Requirements
 
-- Windows 10/11, macOS or Linux. Windows is the most tested platform; its one-command bootstrap is Windows only.
+- Windows 10/11 is the primary, most tested platform. macOS and Linux are available but lightly tested; the one-command bootstrap is Windows only.
 - [Node.js](https://nodejs.org/) 22 or newer (24 recommended) and Git
 - On Windows: Windows PowerShell 5.1 or PowerShell 7
 - Platforms without a prebuilt native SQLite binary need native build tools
@@ -74,7 +74,7 @@ npm run workbench               # same as above
 
 Then browse to <http://127.0.0.1:38888/admin>. The launcher defaults to port 38888; if you changed the port, pass it with `.\start-workbench.cmd start --port <n>`.
 
-## macOS and Linux
+## macOS and Linux (lightly tested)
 
 ```bash
 git clone https://github.com/KuanChen01/AgentMemory.git && cd AgentMemory

@@ -6,7 +6,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](#license)
 [![Node.js 22+](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)](https://nodejs.org/)
-[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](docs/Installation.md)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20primary%20%7C%20macOS%2FLinux%20lightly%20tested-lightgrey)](docs/Installation.md)
 ![Status: public beta](https://img.shields.io/badge/status-public%20beta-orange)
 
 ![AgentMemory workbench](docs/images/admin-overview.png)
@@ -49,7 +49,7 @@ cd AgentMemory
 .\bootstrap-second-machine.cmd
 ```
 
-**macOS / Linux**
+**macOS / Linux (lightly tested)**
 
 ```bash
 git clone https://github.com/KuanChen01/AgentMemory.git && cd AgentMemory

@@ -6,7 +6,7 @@
 
 ## 环境要求
 
-- Windows 10/11、macOS 或 Linux。Windows 测试最充分，一条命令的 bootstrap 只支持 Windows。
+- Windows 10/11 是主要、测试最充分的平台。macOS 和 Linux 可用但测试较少；一条命令的 bootstrap 只支持 Windows。
 - [Node.js](https://nodejs.org/) 22 及以上（推荐 24）和 Git
 - Windows 上可以用 Windows PowerShell 5.1 或 PowerShell 7
 - 没有预编译原生 SQLite 二进制的平台需要本地编译工具
@@ -74,7 +74,7 @@ npm run workbench               # 同上
 
 面板地址：<http://127.0.0.1:38888/admin>。启动器默认使用 38888 端口；如果改过端口，用 `.\start-workbench.cmd start --port <n>`。
 
-## macOS 和 Linux
+## macOS 和 Linux（少量测试）
 
 ```bash
 git clone https://github.com/KuanChen01/AgentMemory.git && cd AgentMemory
