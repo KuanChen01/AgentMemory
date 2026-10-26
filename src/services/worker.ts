@@ -6,7 +6,6 @@ import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
 import { ensurePrivateDir, restrictToOwner } from './private-files';
-import { ensureWorkerToken, WORKER_TOKEN_HEADER, workerTokenMatches } from './worker-auth';
 import {
   DailyDigestSchedulerConfig,
   DatabaseManager,
@@ -78,11 +77,10 @@ import {
 loadAgentMemoryEnv();
 
 const app = express();
-// Every route (memories, state writes, /shutdown) is for this user's agents only: reject other
-// machines, other local accounts and web pages before parsing their body.
+// Every route (memories, state writes, /shutdown) is for agents on this machine only:
+// reject other machines and web pages before parsing their body.
 app.use(loopbackOnlyGuard);
 app.use(localOriginGuard);
-app.use(workerTokenGuard);
 app.use(express.json({ limit: '10mb' })); // Support large logs
 
 const PORT = process.env.AGENTMEM_PORT || 38888;
@@ -247,22 +245,6 @@ function localOriginGuard(req: Request, res: Response, next: express.NextFunctio
   const hasBody = Number(req.headers['content-length'] || 0) > 0 || req.headers['transfer-encoding'] !== undefined;
   if (hasBody && !req.is('application/json')) {
     res.status(415).json({ error: 'AgentMemory worker requests must use Content-Type: application/json.' });
-    return;
-  }
-  next();
-}
-
-// Ties requests to the owning user: the token is readable only by that user (see worker-auth).
-// The static workbench page carries no data and loads without it; its API calls send the token.
-function workerTokenGuard(req: Request, res: Response, next: express.NextFunction) {
-  if ((req.method === 'GET' || req.method === 'HEAD') && req.path === '/admin') return next();
-  let expected = '';
-  try { expected = ensureWorkerToken(); } catch (error: any) { console.error(`[Auth] Worker token unavailable: ${error.message}`); }
-  if (!workerTokenMatches(expected, req.get(WORKER_TOKEN_HEADER))) {
-    res.status(401).json({
-      auth_required: true,
-      error: `AgentMemory worker token required (${WORKER_TOKEN_HEADER}). Open the workbench with the launcher or "agentmem admin-url".`,
-    });
     return;
   }
   next();
@@ -515,11 +497,10 @@ async function startServer() {
   setInterval(() => { void sweepIdleTasks(); }, Number(process.env.AGENTMEM_TASK_SWEEP_MS) || sweepMs).unref();
   // Frozen tasks left by a previous process are retried promptly.
   for (const t of frozenTasks(dbManager)) lastAttemptMs.set(t.task_id, 0);
-  // Owner-only runtime directory, and the client token in place before the port opens.
+  // Owner-only runtime directory (POSIX 0700/0600; Windows writes stay atomic with no ACL changes).
   ensurePrivateDir(workerRuntimeDir, true);
   const envPath = getAgentMemoryEnvPath();
   if (fs.existsSync(envPath)) restrictToOwner(envPath, false);   // .env files from older versions were 0644
-  ensureWorkerToken();
 
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(Number(PORT), HOST, () => {

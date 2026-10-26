@@ -15,7 +15,6 @@ import {
   validateInstalledFiles,
 } from './agent-installer';
 import { ensurePrivateDir, restrictToOwner, writePrivateFileAtomic } from './private-files';
-import { adminUrlWithToken } from './worker-auth';
 
 export interface BootstrapOptions {
   antigravityConfigPath?: string;
@@ -273,7 +272,7 @@ export async function runWindowsBootstrap(options: BootstrapOptions): Promise<Bo
   }
 
   if (options.openBrowser !== false) {
-    await openBrowser(adminUrlWithToken(urls.adminUrl));
+    await openBrowser(urls.adminUrl);
   }
 
   const installPaths = resolveInstallPaths(repoRoot, homeDir);

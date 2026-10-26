@@ -6,10 +6,9 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 const { withWorker } = require('./helpers/task-worker.cjs');
-const { rawFetch, workerToken } = require('./helpers/worker-token.cjs');
 const { ensureBootstrapEnvFile } = require('../dist/services/bootstrap.js');
 const { ensurePrivateDir, writePrivateFileAtomic } = require('../dist/services/private-files.js');
 const { prepareManagedTarget } = require('../dist/services/install-state.js');
@@ -49,37 +48,6 @@ function rawRequest(port, { method = 'GET', route, headers = {}, body }) {
   });
 }
 
-test('P1: every worker route except the static page requires the owner token', async () => {
-  await withWorker(async ({ base, port, root }) => {
-    const token = workerToken(root);
-    assert.match(token, /^[0-9a-f]{64}$/, 'the worker created its token at startup');
-    if (POSIX) {
-      assert.equal(mode(path.join(root, 'worker-token')), 0o600);
-      assert.equal(mode(root), 0o700);
-    }
-
-    for (const route of ['/admin/api/overview', '/admin/api/llm-config', `/context?project_path=${encodeURIComponent(projectPath)}`]) {
-      const missing = await rawFetch(base + route);
-      assert.equal(missing.status, 401, route);
-      assert.equal((await missing.json()).auth_required, true);
-      const wrong = await rawFetch(base + route, { headers: { 'X-AgentMem-Token': 'f'.repeat(64) } });
-      assert.equal(wrong.status, 401, route);
-      const right = await rawFetch(base + route, { headers: { 'X-AgentMem-Token': token } });
-      assert.equal(right.status, 200, route);
-    }
-    for (const route of ['/admin/api/llm-test', '/tools', '/shutdown']) {
-      const response = await rawFetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      assert.equal(response.status, 401, route);
-    }
-    // The page itself carries no data and must load from a plain bookmark.
-    const page = await rawFetch(`${base}/admin`);
-    assert.equal(page.status, 200);
-    assert.match(await page.text(), /agentmemory\.admin\.workerToken/);
-    // Still running: the unauthenticated /shutdown above was refused.
-    assert.equal((await rawFetch(`${base}/admin/api/overview`, { headers: { 'X-AgentMem-Token': token } })).status, 200);
-  });
-});
-
 test('P1: the admin LLM config never returns saved header values, and saving them back keeps them', async () => {
   await withWorker(async ({ base, post, root }) => {
     const headers = JSON.stringify({ 'X-Gateway-Auth': FAKE_HEADER, 'X-Title': 'fixture-title' });
@@ -103,83 +71,19 @@ test('P1: the admin LLM config never returns saved header values, and saving the
   assert.throws(() => restoreSavedHeaderValues('{"C":"••••"}', '{"A":"x"}'), /Enter a value for the C header/);
 });
 
-test('P1: the CLI reaches the worker with the token and prints the tokenized workbench URL', async () => {
-  await withWorker(async ({ port, root }) => {
-    const cliHome = path.join(root, 'cli-home');
-    fs.mkdirSync(cliHome);
-    const env = { ...process.env, AGENTMEM_PORT: String(port), AGENTMEM_RUNTIME_DIR: root, HOME: cliHome, USERPROFILE: cliHome };
-    const run = (command) => spawnSync(process.execPath, [path.join(projectRoot, 'dist', 'bin', 'cli.js'), command],
-      { cwd: root, encoding: 'utf8', env, timeout: 15000 });
-    assert.match(run('status').stdout, new RegExp(`ACTIVE \\(Port: ${port}\\)`));
-    assert.equal(run('admin-url').stdout.trim(), `http://127.0.0.1:${port}/admin#token=${workerToken(root)}`);
-  });
-});
-
-// Pulls one top-level function out of the workbench client script (brace matching; no braces in strings there).
-function clientFunction(script, name) {
-  const start = script.search(new RegExp(`(?:async )?function ${name}\\(`));
-  assert.ok(start >= 0, `missing ${name}`);
-  let depth = 0;
-  for (let index = script.indexOf('{', start); index < script.length; index += 1) {
-    if (script[index] === '{') depth += 1;
-    else if (script[index] === '}' && --depth === 0) return script.slice(start, index + 1);
-  }
-  throw new Error(`unclosed ${name}`);
-}
-
-test('P1: the workbench page takes the token from the launcher link, drops it from the URL and sends it on API calls', async () => {
-  const vm = require('node:vm');
-  const { renderAdminWorkbenchClientScript } = require('../dist/services/admin-ui-client.js');
-  const script = renderAdminWorkbenchClientScript(5000);
-  const tokenInit = script.slice(script.indexOf('const WORKER_TOKEN_STORAGE_KEY'), script.indexOf('const BG_DB_NAME'));
-  const token = 'a'.repeat(64);
-  const stored = new Map();
-  const replaced = [];
-  const requests = [];
-  const responses = [401, 200];
-  const context = {
-    window: {
-      location: { hash: `#token=${token}`, pathname: '/admin', search: '?view=homeView' },
-      history: { state: null, replaceState: (_state, _title, url) => replaced.push(url) },
-      sessionStorage: { getItem: (key) => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) },
-      prompt: () => 'b'.repeat(64),
-    },
-    t: (key) => key,
-    fetch: async (url, options) => {
-      requests.push({ url, token: options.headers['X-AgentMem-Token'] });
-      const status = responses.shift();
-      return { ok: status === 200, status, text: async () => (status === 200 ? '{"ok":true}' : '{"error":"auth"}') };
-    },
-  };
-  vm.createContext(context);
-  vm.runInContext(`${tokenInit}\nlet workerTokenAsked = false;\n${['workerTokenHeaders', 'askWorkerToken', 'fetchJson'].map((name) => clientFunction(script, name)).join('\n')}
-    this.fetchJson = fetchJson;`, context);
-  assert.deepEqual(replaced, ['/admin?view=homeView'], 'the token leaves the address bar');
-  assert.equal(stored.get('agentmemory.admin.workerToken'), token);
-  // A rejected token asks once, then retries with the pasted one.
-  const payload = await context.fetchJson('/admin/api/overview', { headers: { 'Content-Type': 'application/json' } });
-  assert.equal(JSON.stringify(payload), '{"ok":true}');
-  assert.deepEqual(requests, [
-    { url: '/admin/api/overview', token },
-    { url: '/admin/api/overview', token: 'b'.repeat(64) },
-  ]);
-});
-
-test('P2: requests addressed to another host or sent from another origin are refused even with the token', async () => {
-  await withWorker(async ({ port, root }) => {
-    const token = workerToken(root);
-    const auth = { 'X-AgentMem-Token': token };
+test('P2: requests addressed to another host or sent from another origin are refused', async () => {
+  await withWorker(async ({ port }) => {
     // DNS rebinding: evil.example resolved to 127.0.0.1, so the browser sends Host: evil.example:<port>.
-    const rebound = await rawRequest(port, { route: '/admin/api/overview', headers: { ...auth, Host: `evil.example:${port}` } });
+    const rebound = await rawRequest(port, { route: '/admin/api/overview', headers: { Host: `evil.example:${port}` } });
     assert.equal(rebound.status, 403);
     const crossOrigin = await rawRequest(port, { route: '/admin/api/overview',
-      headers: { ...auth, Host: `127.0.0.1:${port}`, Origin: 'http://evil.example' } });
+      headers: { Host: `127.0.0.1:${port}`, Origin: 'http://evil.example' } });
     assert.equal(crossOrigin.status, 403);
     const crossSite = await rawRequest(port, { route: '/admin/api/overview',
-      headers: { ...auth, Host: `127.0.0.1:${port}`, 'Sec-Fetch-Site': 'cross-site' } });
+      headers: { Host: `127.0.0.1:${port}`, 'Sec-Fetch-Site': 'cross-site' } });
     assert.equal(crossSite.status, 403);
     const sameOrigin = await rawRequest(port, { route: '/admin/api/overview',
-      headers: { ...auth, Host: `localhost:${port}`, Origin: `http://localhost:${port}`, 'Sec-Fetch-Site': 'same-origin' } });
+      headers: { Host: `localhost:${port}`, Origin: `http://localhost:${port}`, 'Sec-Fetch-Site': 'same-origin' } });
     assert.equal(sameOrigin.status, 200);
     // Opening the page from a link elsewhere is fine; it holds no data.
     const navigation = await rawRequest(port, { route: '/admin',
@@ -189,29 +93,22 @@ test('P2: requests addressed to another host or sent from another origin are ref
 });
 
 test('P3: simple cross-site POSTs cannot change settings, and an empty settings body changes nothing', async () => {
-  await withWorker(async ({ base, port, post, root }) => {
-    const token = workerToken(root);
+  await withWorker(async ({ base, port, post }) => {
     assert.equal((await post('/admin/api/settings', { writeEnabled: false })).policy.writeEnabled, false);
 
-    // A form / text/plain POST (no preflight in a browser) is refused before it is parsed, token or not.
+    // A form / text/plain POST (no preflight in a browser) is refused before it is parsed.
     for (const [type, body] of [['text/plain', '{"writeEnabled":true}'], ['application/x-www-form-urlencoded', 'writeEnabled=true']]) {
-      const withoutToken = await rawRequest(port, { method: 'POST', route: '/admin/api/settings', headers: { 'Content-Type': type }, body });
-      assert.ok([401, 415].includes(withoutToken.status), type);
-      const withToken = await rawRequest(port, { method: 'POST', route: '/admin/api/settings',
-        headers: { 'Content-Type': type, 'X-AgentMem-Token': token }, body });
-      assert.equal(withToken.status, 415, type);
+      const refused = await rawRequest(port, { method: 'POST', route: '/admin/api/settings', headers: { 'Content-Type': type }, body });
+      assert.equal(refused.status, 415, type);
     }
-    const empty = await rawFetch(`${base}/admin/api/settings`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-AgentMem-Token': token }, body: '{}' });
+    const empty = await fetch(`${base}/admin/api/settings`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(empty.status, 400);
-    const stringFlag = await rawFetch(`${base}/admin/api/settings`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-AgentMem-Token': token }, body: '{"writeEnabled":"true"}' });
+    const stringFlag = await fetch(`${base}/admin/api/settings`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: '{"writeEnabled":"true"}' });
     assert.equal(stringFlag.status, 400);
     const overview = await (await fetch(`${base}/admin/api/overview`)).json();
     assert.equal(overview.policy.writeEnabled, false, 'capture stays off');
-    for (const route of ['/admin/api/tasks/flush', '/shutdown']) {
-      assert.equal((await rawFetch(base + route, { method: 'POST' })).status, 401, route);
-    }
   });
 });
 
@@ -310,26 +207,6 @@ test('P5: private files are written atomically and owner-only', () => {
     }
   } finally {
     removeTemp(root);
-  }
-});
-
-test('P5: on Windows a store outside the user profile loses its inherited (shared) ACL', { skip: POSIX && 'Windows ACL only' }, () => {
-  const fakeProfile = tempDir('profile');
-  const outside = tempDir('outside');
-  const previous = process.env.USERPROFILE;
-  try {
-    process.env.USERPROFILE = fakeProfile;   // os.homedir() follows USERPROFILE on Windows
-    const store = path.join(outside, 'store');
-    ensurePrivateDir(store);
-    const acl = spawnSync('icacls', [store], { encoding: 'utf8' }).stdout;
-    assert.doesNotMatch(acl, /\(I\)/, 'no inherited entries remain');
-    assert.match(acl, new RegExp(os.userInfo().username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
-    fs.writeFileSync(path.join(store, 'still-usable.txt'), 'ok');
-  } finally {
-    if (previous === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = previous;
-    removeTemp(outside);
-    removeTemp(fakeProfile);
   }
 });
 

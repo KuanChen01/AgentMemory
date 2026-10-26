@@ -139,7 +139,6 @@ Run these commands globally from any directory:
 *   **Start Worker Manually**: `agentmem start` (optional foreground control; lifecycle hooks safely auto-start the background worker when it is unavailable)
 *   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
 *   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
-*   **Workbench Link**: `agentmem admin-url` (prints `/admin#token=...` with your worker access token; don't share it)
 *   **Print Version**: `agentmem version`
 *   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, Antigravity, and Grok settings)
 *   **Strict Setup**: `agentmem install --strict` (fails if any one of the five agents cannot be configured)
@@ -195,9 +194,9 @@ http://127.0.0.1:38888/admin
 
 The admin console is intentionally restricted to loopback clients. It is not exposed to non-local network addresses.
 
-The whole worker, not just `/admin`, is local-only: it listens on `127.0.0.1` only, and every route (`/context`, `/state`, `/search`, `/tools`, `/shutdown`, ...) rejects non-loopback clients. There is no setting to expose it on the LAN.
+The whole worker, not just `/admin`, is local-only: it listens on `127.0.0.1` only, and every route (`/context`, `/state`, `/search`, `/tools`, `/shutdown`, ...) rejects non-loopback clients. Any local process on this machine may query the worker. There is no setting to expose it on the LAN. Other machines, containers or VMs that reach this machine over the network cannot use it.
 
-Every route except the static `/admin` page also requires the owner's token in the `X-AgentMem-Token` header (`401` otherwise). The worker creates it at startup in `<AGENTMEM_RUNTIME_DIR or ~/.agentmem>/worker-token`, readable only by your account; hooks, the CLI and the launchers read it from there. Requests must be addressed to the worker's own origin (`Host` `127.0.0.1`/`localhost`/`[::1]` with its port, and the same `Origin` when a browser sends one; `403` otherwise), and request bodies must be JSON (`415` otherwise). Launchers open `/admin#token=<token>`; the page keeps the token in `sessionStorage` for that tab and strips it from the address bar, and asks for it once when it is missing. `agentmem admin-url` prints that link. Delete the file and restart the worker to rotate the token. The admin LLM config API shows custom header values as `••••`; sending `••••` back keeps the saved value. Other machines, containers or VMs that reach this machine over the network cannot use it. Use `http://127.0.0.1:<port>`; `http://localhost:<port>` also works in browsers and Node clients that fall back to IPv4.
+Requests must be addressed to the worker's own origin (`Host` `127.0.0.1`/`localhost`/`[::1]` with its port, and the same `Origin` when a browser sends one; `403` otherwise), and request bodies must be JSON (`415` otherwise). The admin LLM config API shows custom header values as `••••`; sending `••••` back keeps the saved value. Use `http://127.0.0.1:<port>`; `http://localhost:<port>` also works in browsers and Node clients that fall back to IPv4.
 
 Windows local control now has two entrypoints:
 

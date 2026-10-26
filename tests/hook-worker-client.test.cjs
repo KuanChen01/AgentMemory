@@ -8,12 +8,6 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const { fetchAgentMemoryWorker } = require('../dist/hooks/worker-client.js');
-const { registerWorker } = require('./helpers/worker-token.cjs');
-
-// Hook clients read the worker token from AGENTMEM_RUNTIME_DIR; never the real ~/.agentmem.
-const sharedRuntimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmemory-hook-client-'));
-process.env.AGENTMEM_RUNTIME_DIR = sharedRuntimeDir;
-test.after(() => fs.rmSync(sharedRuntimeDir, { recursive: true, force: true }));
 
 async function findFreePort() {
   const server = net.createServer();
@@ -100,9 +94,6 @@ test('hook worker client safely autostarts an inactive worker and writes lifecyc
       /worker ready/
     );
 
-    // The autostarted worker created its token in the runtime dir; /shutdown needs it.
-    assert.match(fs.readFileSync(path.join(runtimeDir, 'worker-token'), 'utf8'), /^[0-9a-f]{64}\n$/);
-    registerWorker(port, runtimeDir);
     await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST' });
     await waitForPortToClose(port);
   } finally {

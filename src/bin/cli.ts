@@ -7,8 +7,6 @@ import dotenv from 'dotenv';
 import { installAgentMemory, uninstallAgentMemory } from '../services/agent-installer';
 import { runWindowsBootstrap } from '../services/bootstrap';
 import { ensurePrivateDir } from '../services/private-files';
-import { buildAdminWorkbenchUrls } from '../services/workbench-launcher';
-import { adminUrlWithToken, readWorkerToken, workerAuthHeaders } from '../services/worker-auth';
 import {
   buildReleaseManifest,
   buildReleasePlan,
@@ -145,9 +143,6 @@ async function main() {
     case 'status':
       await checkStatus();
       break;
-    case 'admin-url':
-      printAdminUrl();
-      break;
     case 'install':
       await runInstaller(options);
       break;
@@ -196,7 +191,6 @@ Usage:
   agentmem start
   agentmem stop
   agentmem status
-  agentmem admin-url   (prints the workbench URL with your access token; do not share it)
   agentmem version
   agentmem install [--strict] [--antigravity-config <path>] [--claude-capture | --no-claude-capture]
   agentmem uninstall [--strict] [--antigravity-config <path>] [--purge-all]
@@ -244,7 +238,7 @@ async function stopWorker() {
   try {
     const res = await fetch(`http://127.0.0.1:${PORT}/shutdown`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...workerAuthHeaders() },
+      headers: { 'Content-Type': 'application/json' },
     });
     if (res.ok) {
       console.log('Successfully stopped AgentMemory background worker.');
@@ -266,7 +260,7 @@ async function checkStatus() {
   try {
     const res = await fetch(
       `http://127.0.0.1:${PORT}/context?project_path=${encodeURIComponent(process.cwd())}&limit=1`,
-      { headers: workerAuthHeaders(), signal: AbortSignal.timeout(1500) }
+      { signal: AbortSignal.timeout(1500) }
     );
     if (res.ok) {
       isRunning = true;
@@ -298,15 +292,6 @@ async function checkStatus() {
       }
     }
   }
-}
-
-function printAdminUrl() {
-  if (!readWorkerToken()) {
-    console.log('No worker token yet: start the worker once, then run this again.');
-    process.exitCode = 1;
-    return;
-  }
-  console.log(adminUrlWithToken(buildAdminWorkbenchUrls(PORT).adminUrl));
 }
 
 async function runInstaller(options: ParsedOptions) {

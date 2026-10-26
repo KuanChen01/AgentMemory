@@ -5,7 +5,6 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { registerWorker } = require('./helpers/worker-token.cjs');
 
 const { DatabaseManager } = require('../dist/services/db.js');
 
@@ -109,7 +108,6 @@ async function seedDatabase(dbPath, projectPath) {
 }
 
 async function startWorker(dbPath, port) {
-  registerWorker(port, `${dbPath}.runtime`);
   const child = spawn('node', ['dist/services/worker.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: {
@@ -166,7 +164,7 @@ async function stopWorker(child, port) {
 function cleanupDb(dbPath) {
   const runtimeDir = `${dbPath}.runtime`;
   if (fs.existsSync(runtimeDir)) {
-    for (const name of ['worker.pid', 'worker-status.json', 'worker-token']) {
+    for (const name of ['worker.pid', 'worker-status.json']) {
       fs.rmSync(path.join(runtimeDir, name), { force: true });
     }
     fs.rmdirSync(runtimeDir);
@@ -179,14 +177,13 @@ function cleanupDb(dbPath) {
   }
 }
 
-async function runHook(scriptName, projectPath, port, runtimeDir) {
+async function runHook(scriptName, projectPath, port) {
   const scriptPath = path.resolve(__dirname, '..', 'dist', 'hooks', scriptName);
   const child = spawn('node', [scriptPath], {
     cwd: projectPath,
     env: {
       ...process.env,
       AGENTMEM_PORT: String(port),
-      AGENTMEM_RUNTIME_DIR: runtimeDir,   // the hook reads the worker token from here
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -249,7 +246,7 @@ test('worker context endpoint returns ProjectContextView and hooks render it', a
     assert.ok(payload.summary_blocks.every((entry) => entry.title !== 'Checked git status'));
 
     for (const scriptName of ['claude-session-start.js', 'codex-session-start.js', 'opencode-session-start.js']) {
-      const output = await runHook(scriptName, projectPath, port, `${dbPath}.runtime`);
+      const output = await runHook(scriptName, projectPath, port);
       assert.match(output, /Current structured state/i);
       assert.match(output, /Memory layers/i);
       assert.match(output, /Recent daily digests/i);

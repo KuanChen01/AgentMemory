@@ -6,7 +6,6 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { registerWorker } = require('./worker-token.cjs');
 
 // A free ephemeral port per worker (no fixed port shared across files/processes).
 async function freePort() {
@@ -56,7 +55,6 @@ async function withWorker(run, extraEnv = {}) {
     worker.stdout.on('data', c => { log += c; if (String(c).includes('worker service running')) { clearTimeout(t); resolve(); } });
     worker.stderr.on('data', c => { log += c; });
   });
-  registerWorker(PORT, root);
   const base = `http://127.0.0.1:${PORT}`;
   const post = async (route, body) => (await fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(15000) })).json();

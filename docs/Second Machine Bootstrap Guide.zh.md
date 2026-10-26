@@ -95,7 +95,7 @@ AGENTMEM_PORT=38888
 
 `.env` 已存在时，bootstrap 只就地更新上面这四项（缺少的补在末尾），其余行（注释、网关 headers、预算、`AGENTMEM_DB_PATH` 等）都保留。文件以原子方式替换、只有你能读，不再生成备份；没有改动则不重写。旧版本留下的 `%USERPROFILE%\.agentmem\.env.bak-<时间戳>` 包含 API key，不会被自动删除，如不需要请自行删除。
 
-worker 只监听 `127.0.0.1`，所有接口都只接受本机访问；从局域网里的另一台电脑无法连接这台电脑的 worker。本机上它也只接受带 `~/.agentmem/worker-token` 访问令牌的请求，`start-workbench.cmd` 会自动带上令牌打开面板。
+worker 只监听 `127.0.0.1`，所有接口都只接受本机访问；从局域网里的另一台电脑无法连接这台电脑的 worker。本机上的任意本地进程都可以查询 worker。
 
 ## Useful Variants
 

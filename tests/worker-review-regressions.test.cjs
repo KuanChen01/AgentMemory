@@ -6,7 +6,6 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { registerWorker } = require('./helpers/worker-token.cjs');
 
 async function fixture(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-review-'));
@@ -46,7 +45,6 @@ async function fixture(run) {
       worker.stderr.on('data', () => {});
     });
     port = JSON.parse(fs.readFileSync(path.join(root, 'worker-status.json'))).port;
-    registerWorker(port, root);
   };
   const reservation = http.createServer();
   await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));

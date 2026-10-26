@@ -7,7 +7,6 @@ const path = require('node:path');
 const http = require('node:http');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { registerWorker } = require('./helpers/worker-token.cjs');
 
 const { DatabaseManager } = require('../dist/services/db.js');
 const { formatLocalDate } = require('../dist/services/daily-digest.js');
@@ -101,7 +100,6 @@ async function startWorker(dbPath, port) {
 }
 
 async function startWorkerWithEnv(dbPath, port, extraEnv) {
-  registerWorker(port, extraEnv.AGENTMEM_RUNTIME_DIR || `${dbPath}.runtime`);
   const child = spawn('node', ['dist/services/worker.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: {
@@ -326,7 +324,7 @@ function cleanupDb(dbPath) {
       for (const name of fs.readdirSync(logsDir)) fs.unlinkSync(path.join(logsDir, name));
       fs.rmdirSync(logsDir);
     }
-    for (const name of ['worker.pid', 'worker-status.json', 'worker-token']) {
+    for (const name of ['worker.pid', 'worker-status.json']) {
       fs.rmSync(path.join(runtimeDir, name), { force: true });
     }
     fs.rmdirSync(runtimeDir);

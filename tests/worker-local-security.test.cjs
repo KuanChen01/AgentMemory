@@ -59,17 +59,13 @@ test('local clients still reach the worker: 127.0.0.1, localhost, the hook clien
     assert.equal((await viaLocalhost.json()).facts.length, 1);
 
     const previousAutostart = process.env.AGENTMEM_HOOK_AUTOSTART;
-    const previousRuntime = process.env.AGENTMEM_RUNTIME_DIR;
     process.env.AGENTMEM_HOOK_AUTOSTART = 'false';
-    process.env.AGENTMEM_RUNTIME_DIR = root;   // where this worker keeps its token
     try {
       const viaHook = await fetchAgentMemoryWorker(String(port), `/context?project_path=${encodeURIComponent(projectPath)}&limit=1`);
       assert.equal(viaHook?.status, 200);
     } finally {
       if (previousAutostart === undefined) delete process.env.AGENTMEM_HOOK_AUTOSTART;
       else process.env.AGENTMEM_HOOK_AUTOSTART = previousAutostart;
-      if (previousRuntime === undefined) delete process.env.AGENTMEM_RUNTIME_DIR;
-      else process.env.AGENTMEM_RUNTIME_DIR = previousRuntime;
     }
 
     const cliHome = path.join(root, 'cli-home');
@@ -77,7 +73,7 @@ test('local clients still reach the worker: 127.0.0.1, localhost, the hook clien
     const status = spawnSync(process.execPath, [path.join(projectRoot, 'dist', 'bin', 'cli.js'), 'status'], {
       cwd: root,
       encoding: 'utf8',
-      env: { ...process.env, AGENTMEM_PORT: String(port), AGENTMEM_RUNTIME_DIR: root, HOME: cliHome, USERPROFILE: cliHome },
+      env: { ...process.env, AGENTMEM_PORT: String(port), HOME: cliHome, USERPROFILE: cliHome },
       timeout: 15000,
     });
     assert.match(status.stdout, new RegExp(`ACTIVE \\(Port: ${port}\\)`));

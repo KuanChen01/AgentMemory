@@ -139,7 +139,6 @@ agentmem uninstall --strict
 *   **手动启动 Worker**：`agentmem start`（可选的前台控制方式；worker 不在线时，lifecycle hook 默认会安全地后台拉起）
 *   **停止后台服务**：`agentmem stop`
 *   **查询运行状态**：`agentmem status`
-*   **面板链接**：`agentmem admin-url`（输出带 worker 访问令牌的 `/admin#token=...` 链接，请勿分享）
 *   **查看当前版本**：`agentmem version`
 *   **一键注册配置**：`agentmem install`（更新 Claude Code、OpenCode、Codex、Antigravity 和 Grok 的设置）
 *   **严格注册模式**：`agentmem install --strict`（任意一项失败即退出）
@@ -195,9 +194,9 @@ http://127.0.0.1:38888/admin
 
 该页面仅允许本机 loopback 访问，不对非本机网络地址开放。
 
-不只是 `/admin`，整个 worker 都只供本机使用：它只监听 `127.0.0.1`，所有路由（`/context`、`/state`、`/search`、`/tools`、`/shutdown` 等）都会拒绝非 loopback 客户端。没有提供对局域网开放的设置；通过网络访问本机的其他电脑、容器或虚拟机都无法使用它。
+不只是 `/admin`，整个 worker 都只供本机使用：它只监听 `127.0.0.1`，所有路由（`/context`、`/state`、`/search`、`/tools`、`/shutdown` 等）都会拒绝非 loopback 客户端。本机上的任意本地进程都可以查询 worker。没有提供对局域网开放的设置；通过网络访问本机的其他电脑、容器或虚拟机都无法使用它。
 
-除静态的 `/admin` 页面外，每个路由还要求在 `X-AgentMem-Token` 请求头里带上所有者的令牌（否则返回 `401`）。worker 启动时在 `<AGENTMEM_RUNTIME_DIR 或 ~/.agentmem>/worker-token` 生成它，只有你的账户能读；hooks、CLI 和启动器都从这里读取。请求必须发往 worker 自己的源（`Host` 为 `127.0.0.1`/`localhost`/`[::1]` 加端口；浏览器发送 `Origin` 时也必须一致，否则返回 `403`），请求体必须是 JSON（否则返回 `415`）。启动器打开 `/admin#token=<令牌>`，页面把令牌保存在该标签页的 `sessionStorage` 中并从地址栏去掉；缺少令牌时会询问一次。`agentmem admin-url` 会输出这个链接。删除该文件并重启 worker 即可更换令牌。管理端 LLM 配置接口把自定义 header 的值显示为 `••••`，保存时原样传回 `••••` 表示保留已保存的值。请使用 `http://127.0.0.1:<port>`；浏览器和会回退到 IPv4 的 Node 客户端用 `http://localhost:<port>` 也可以访问。
+请求必须发往 worker 自己的源（`Host` 为 `127.0.0.1`/`localhost`/`[::1]` 加端口；浏览器发送 `Origin` 时也必须一致，否则返回 `403`），请求体必须是 JSON（否则返回 `415`）。管理端 LLM 配置接口把自定义 header 的值显示为 `••••`，保存时原样传回 `••••` 表示保留已保存的值。请使用 `http://127.0.0.1:<port>`；浏览器和会回退到 IPv4 的 Node 客户端用 `http://localhost:<port>` 也可以访问。
 
 Windows 下现在有两个本机控制入口：
 

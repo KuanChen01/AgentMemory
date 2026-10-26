@@ -1,40 +1,13 @@
 import { randomBytes } from 'crypto';
-import { spawnSync } from 'child_process';
 import fs from 'fs';
-import os from 'os';
-import path from 'path';
 
-// ~/.agentmem holds the LLM key, the worker token, prompts and config backups: only the owner may read them.
-// POSIX: directories 0700, files 0600. Windows: a directory inside the user profile keeps the profile's
-// owner-only ACL (tools may have granted themselves access there on purpose); a directory outside the
-// profile gets its inherited ACL replaced by the current user, SYSTEM and Administrators.
-
-const restrictedWindowsDirs = new Set<string>();
-
-function insideHomeDir(target: string): boolean {
-  const home = path.resolve(os.homedir()).toLowerCase();
-  const resolved = path.resolve(target).toLowerCase();
-  return resolved === home || resolved.startsWith(home.endsWith(path.sep) ? home : `${home}${path.sep}`);
-}
-
-function restrictWindowsDir(dir: string): void {
-  const resolved = path.resolve(dir);
-  if (restrictedWindowsDirs.has(resolved) || insideHomeDir(resolved)) return;
-  restrictedWindowsDirs.add(resolved);
-  const user = os.userInfo().username;
-  const principal = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${user}` : user;
-  // icacls changes nothing when a principal cannot be resolved, so a failure leaves the old ACL in place.
-  spawnSync('icacls', [resolved, '/inheritance:r', '/grant:r', `${principal}:(OI)(CI)F`,
-    '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '/Q'], { stdio: 'ignore', windowsHide: true, timeout: 15000 });
-}
+// ~/.agentmem holds the LLM key, prompts and config backups: only the owner may read them.
+// POSIX: directories 0700, files 0600. Windows: atomic writes with no ACL changes.
 
 /** Restricts an existing file (0600) or directory (0700) to its owner. Best effort; never throws. */
 export function restrictToOwner(target: string, isDirectory: boolean): void {
   try {
-    if (process.platform === 'win32') {
-      if (isDirectory) restrictWindowsDir(target);
-      return;
-    }
+    if (process.platform === 'win32') return;
     fs.chmodSync(target, isDirectory ? 0o700 : 0o600);
   } catch { /* A filesystem without permissions (FAT, some network shares) keeps its defaults. */ }
 }

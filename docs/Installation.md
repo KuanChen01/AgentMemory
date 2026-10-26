@@ -64,9 +64,7 @@ Once the worker is running, open **LLM Settings** in the workbench to switch the
 
 ## Network note
 
-The worker listens on `127.0.0.1` only, and every endpoint (agent memory reads and writes, `/shutdown` and the admin workbench) rejects requests that do not come from this machine. Other computers, containers and VMs on your network cannot reach it, and there is no setting to expose it.
-
-On this machine it answers only you: every request must carry the access token the worker keeps in `~/.agentmem/worker-token` (readable only by your account). The agent hooks, the CLI and the launchers read it automatically (the MCP server reads the database directly and needs no token). Other accounts on the computer, other people's processes and web pages (including DNS-rebinding pages that pretend to be `127.0.0.1`) are refused. To rotate the token, delete the file and restart the worker. `~/.agentmem` itself is owner-only (on macOS/Linux 0700 with 0600 files; on Windows it keeps your user profile's private permissions).
+The worker listens on `127.0.0.1` only, and every endpoint (agent memory reads and writes, `/shutdown` and the admin workbench) rejects requests that do not come from this machine. Other computers, containers and VMs on your network cannot reach it, and there is no setting to expose it. Any local process on this machine may query the worker. Requests must be addressed to the worker's own origin (`Host` `127.0.0.1`/`localhost`/`[::1]` with its port; when a browser sends `Origin` it must match; `403` otherwise), and request bodies must be JSON (`415` otherwise), so a web page cannot use DNS rebinding or CSRF against it. On macOS/Linux, `~/.agentmem` is owner-only (0700 directory, 0600 files).
 
 ## Open the workbench
 
@@ -76,7 +74,7 @@ On this machine it answers only you: every request must carry the access token t
 npm run workbench               # same as above
 ```
 
-The launcher opens <http://127.0.0.1:38888/admin> with your access token in the link (`#token=...`); the page keeps it for that browser tab only and removes it from the address bar. `agentmem admin-url` prints the same link on any platform; don't share it. If you open the plain address (a bookmark, a new tab), the page asks once for the token: paste the contents of `~/.agentmem/worker-token`. The launcher defaults to port 38888; if you changed the port, pass it with `.\start-workbench.cmd start --port <n>`.
+Then browse to <http://127.0.0.1:38888/admin>. The launcher defaults to port 38888; if you changed the port, pass it with `.\start-workbench.cmd start --port <n>`.
 
 ## macOS and Linux (lightly tested)
 
@@ -88,7 +86,7 @@ agentmem install                # configures the five agents
 agentmem start                  # foreground worker; agent hooks also start it on demand
 ```
 
-Set the LLM in `~/.agentmem/.env` or in the workbench's **LLM Settings**; open the workbench with the link printed by `agentmem admin-url`.
+Set the LLM in `~/.agentmem/.env` or in the workbench's **LLM Settings** at <http://127.0.0.1:38888/admin>.
 
 ## Installer options
 
@@ -97,7 +95,6 @@ agentmem install                                # configure all five agents, rep
 agentmem install --strict                       # fail if any agent cannot be configured
 agentmem install --no-claude-capture            # Claude Code without automatic tool capture
 agentmem bootstrap-win --api-url <openai-compatible-url> --model <model>
-agentmem admin-url                              # print the workbench link with your access token
 ```
 
 | Flag | Meaning |

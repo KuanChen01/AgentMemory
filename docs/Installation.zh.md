@@ -64,9 +64,7 @@ worker 运行后，可以在面板的 **LLM 设置**里切换模型或接口地�
 
 ## 网络说明
 
-worker 只监听 `127.0.0.1`，所有接口（agent 读写记忆、`/shutdown`、管理面板）都会拒绝非本机请求；局域网里的其他电脑、容器和虚拟机都连不上它，也不提供对外开放的设置。
-
-在本机上它也只响应你自己：每个请求都必须带上 worker 保存在 `~/.agentmem/worker-token` 里的访问令牌（只有你的账户能读）。agent hooks、CLI 和启动器会自动读取它（MCP server 直接读数据库，不需要令牌）。同一台电脑上的其他账户、别人的进程以及网页（包括伪装成 `127.0.0.1` 的 DNS rebinding 页面）都会被拒绝。要更换令牌，删除该文件并重启 worker 即可。`~/.agentmem` 目录本身也只对你开放（macOS/Linux 上目录为 0700、文件为 0600；Windows 上沿用用户目录的私有权限）。
+worker 只监听 `127.0.0.1`，所有接口（agent 读写记忆、`/shutdown`、管理面板）都会拒绝非本机请求；局域网里的其他电脑、容器和虚拟机都连不上它，也不提供对外开放的设置。本机上的任意本地进程都可以查询 worker。请求必须发往 worker 自己的源（`Host` 为 `127.0.0.1`/`localhost`/`[::1]` 加端口；浏览器发送 `Origin` 时也必须一致，否则返回 `403`），请求体必须是 JSON（否则返回 `415`），因此网页无法用 DNS rebinding 或 CSRF 访问它。macOS/Linux 上 `~/.agentmem` 只对你开放（目录 0700、文件 0600）。
 
 ## 打开面板
 
@@ -76,7 +74,7 @@ worker 只监听 `127.0.0.1`，所有接口（agent 读写记忆、`/shutdown`�
 npm run workbench               # 同上
 ```
 
-启动器打开的 <http://127.0.0.1:38888/admin> 链接里带有你的访问令牌（`#token=...`）；页面只在当前浏览器标签页里保留它，并把它从地址栏移除。`agentmem admin-url` 在任何平台都会输出同样的链接，请不要分享。直接打开不带令牌的地址（书签、新标签页）时，页面会询问一次令牌：粘贴 `~/.agentmem/worker-token` 的内容即可。启动器默认使用 38888 端口；如果改过端口，用 `.\start-workbench.cmd start --port <n>`。
+面板地址：<http://127.0.0.1:38888/admin>。启动器默认使用 38888 端口；如果改过端口，用 `.\start-workbench.cmd start --port <n>`。
 
 ## macOS 和 Linux（少量测试）
 
@@ -88,7 +86,7 @@ agentmem install                # 配置五个 agent
 agentmem start                  # 前台运行 worker；agent 的 hooks 也会按需自动启动它
 ```
 
-LLM 可以在 `~/.agentmem/.env` 里配置，也可以在面板的 **LLM 设置**里配置；面板用 `agentmem admin-url` 输出的链接打开。
+LLM 可以在 `~/.agentmem/.env` 里配置，也可以在面板 <http://127.0.0.1:38888/admin> 的 **LLM 设置**里配置。
 
 ## 安装参数
 
@@ -97,7 +95,6 @@ agentmem install                                # 配置全部五个 agent，配
 agentmem install --strict                       # 任何一个 agent 配置失败就报错
 agentmem install --no-claude-capture            # Claude Code 不开工具调用自动捕获
 agentmem bootstrap-win --api-url <OpenAI 兼容地址> --model <模型名>
-agentmem admin-url                              # 输出带访问令牌的面板链接
 ```
 
 | 参数 | 作用 |

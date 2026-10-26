@@ -2070,9 +2070,6 @@ export async function uninstallAgentMemory(options: UninstallOptions): Promise<U
   if (removeFileIfExists(path.join(runtimeDir, 'worker.pid'))) {
     removedArtifacts.push(path.join(runtimeDir, 'worker.pid'));
   }
-  if (removeFileIfExists(path.join(runtimeDir, 'worker-token'))) {
-    removedArtifacts.push(path.join(runtimeDir, 'worker-token'));
-  }
 
   results.push({
     action: removedArtifacts.length > 0 ? 'removed-runtime-artifacts' : 'no-op',
