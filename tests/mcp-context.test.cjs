@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { registerWorker } = require('./helpers/worker-token.cjs');
 
 const { DatabaseManager } = require('../dist/services/db.js');
 const { renderProjectContextView } = require('../dist/services/context-view.js');
@@ -41,7 +42,7 @@ async function withDatabase(run) {
     }
     const runtimeDir = `${dbPath}.runtime`;
     if (fs.existsSync(runtimeDir)) {
-      for (const name of ['worker.pid', 'worker-status.json']) {
+      for (const name of ['worker.pid', 'worker-status.json', 'worker-token']) {
         fs.rmSync(path.join(runtimeDir, name), { force: true });
       }
       fs.rmdirSync(runtimeDir);
@@ -144,6 +145,7 @@ async function startMcpServer(dbPath) {
 }
 
 async function startWorker(dbPath, port) {
+  registerWorker(port, `${dbPath}.runtime`);
   const child = spawn('node', ['dist/services/worker.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: {

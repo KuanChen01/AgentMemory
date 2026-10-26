@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import dotenv from 'dotenv';
 import { llmBudgetOptions, recordLlmUsage, readLlmBudgetConfig, MIN_OUTPUT_BUDGET, MAX_OUTPUT_BUDGET } from './llm-budget';
+import { ensurePrivateDir, writePrivateFileAtomic } from './private-files';
+import { sanitizeText } from './redact';
 
 export const DEFAULT_LLM_API_URL = 'https://api.deepseek.com/v1';
 export const DEFAULT_LLM_MODEL = 'deepseek-chat';
@@ -153,6 +155,42 @@ function applyConfigToProcessEnv(snapshot: Pick<LlmConfigSnapshot, 'apiUrl' | 'd
   }
 }
 
+// Saved custom header values (gateway credentials) never leave the worker: the admin API shows this
+// placeholder instead, and a placeholder sent back means "keep the saved value". It cannot be a real
+// value: fetch rejects non-Latin-1 header values.
+export const SAVED_HEADER_PLACEHOLDER = '••••';
+
+function savedHeadersText(env: NodeJS.ProcessEnv = process.env): string {
+  const parsed = parseEnvText(readEnvText(getAgentMemoryEnvPath(env)));
+  return normalizeHeaders(parsed.AGENTMEM_LLM_HEADERS || env.AGENTMEM_LLM_HEADERS);
+}
+
+function maskHeaderValues(headersText: string): string {
+  if (!headersText) return '';
+  try {
+    const parsed = parseCustomHeaders(headersText);
+    return JSON.stringify(Object.fromEntries(Object.keys(parsed).map((name) => [name, SAVED_HEADER_PLACEHOLDER])));
+  } catch {
+    return SAVED_HEADER_PLACEHOLDER;
+  }
+}
+
+/** Puts the saved value back for every header the client sent as the placeholder. */
+export function restoreSavedHeaderValues(headersText: string, savedText: string): string {
+  if (!headersText.includes(SAVED_HEADER_PLACEHOLDER)) return headersText;
+  if (headersText === SAVED_HEADER_PLACEHOLDER) return savedText;
+  let saved: Record<string, string> = {};
+  try { saved = parseCustomHeaders(savedText); } catch { /* Nothing saved to keep. */ }
+  const next = parseCustomHeaders(headersText);
+  for (const [name, value] of Object.entries(next)) {
+    if (value !== SAVED_HEADER_PLACEHOLDER) continue;
+    const savedName = Object.keys(saved).find((key) => key.toLowerCase() === name.toLowerCase());
+    if (savedName === undefined) throw new Error(`Enter a value for the ${name} header: there is no saved value to keep.`);
+    next[name] = saved[savedName];
+  }
+  return JSON.stringify(next);
+}
+
 export function readLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfigSnapshot {
   const envPath = getAgentMemoryEnvPath(env);
   const text = readEnvText(envPath);
@@ -160,7 +198,7 @@ export function readLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfigSn
   const apiKey = parsed.AGENTMEM_LLM_API_KEY || env.AGENTMEM_LLM_API_KEY || env.DEEPSEEK_API_KEY || '';
   const apiUrl = normalizeApiUrl(parsed.AGENTMEM_LLM_API_URL || env.AGENTMEM_LLM_API_URL || env.DEEPSEEK_API_URL);
   const model = normalizeModel(parsed.AGENTMEM_LLM_MODEL || env.AGENTMEM_LLM_MODEL);
-  const headers = normalizeHeaders(parsed.AGENTMEM_LLM_HEADERS || env.AGENTMEM_LLM_HEADERS);
+  const headers = maskHeaderValues(normalizeHeaders(parsed.AGENTMEM_LLM_HEADERS || env.AGENTMEM_LLM_HEADERS));
   const disableJsonMode = String(
     parsed.AGENTMEM_LLM_DISABLE_JSON_MODE ?? env.AGENTMEM_LLM_DISABLE_JSON_MODE ?? 'false'
   ).toLowerCase() === 'true';
@@ -185,7 +223,9 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
   const current = parseEnvText(currentText);
   const nextApiUrl = normalizeApiUrl(update.apiUrl ?? current.AGENTMEM_LLM_API_URL ?? process.env.AGENTMEM_LLM_API_URL);
   const nextModel = normalizeModel(update.model ?? current.AGENTMEM_LLM_MODEL ?? process.env.AGENTMEM_LLM_MODEL);
-  const nextHeaders = normalizeHeaders(update.headers ?? current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS);
+  const nextHeaders = restoreSavedHeaderValues(
+    normalizeHeaders(update.headers ?? current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS),
+    normalizeHeaders(current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS));
   const nextDisableJsonMode = update.disableJsonMode ?? String(current.AGENTMEM_LLM_DISABLE_JSON_MODE ?? process.env.AGENTMEM_LLM_DISABLE_JSON_MODE ?? 'false').toLowerCase() === 'true';
   const currentBudget = readLlmBudgetConfig({ ...process.env, ...current });
   if (update.outputBudgetEnabled !== undefined && typeof update.outputBudgetEnabled !== 'boolean') {
@@ -221,8 +261,8 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
   }
   updates.AGENTMEM_LLM_HEADERS = nextHeaders;
 
-  fs.mkdirSync(path.dirname(envPath), { recursive: true });
-  fs.writeFileSync(envPath, upsertEnvText(currentText, updates), 'utf8');
+  ensurePrivateDir(path.dirname(envPath));
+  writePrivateFileAtomic(envPath, upsertEnvText(currentText, updates));
   applyConfigToProcessEnv({
     apiKey: nextApiKey || undefined,
     apiUrl: nextApiUrl,
@@ -299,6 +339,18 @@ function redactThenClip(text: string, max: number, secrets: string[]): string {
   return out.slice(0, max);
 }
 
+/**
+ * Error text from an LLM gateway, safe to store or log: the key, header values and credential-shaped
+ * tokens are removed, then it is clipped, so an echoed request or credential does not travel on.
+ */
+export function llmErrorExcerpt(text: string, headers: Record<string, string>, apiKey = ''): string {
+  const headerValues = Object.entries(headers)
+    .filter(([name, value]) => name.toLowerCase() !== 'content-type' && String(value ?? '').trim().length >= 6)
+    .map(([, value]) => String(value).trim());
+  const redacted = redactThenClip(text, 4000, [apiKey, ...llmHeaderSecrets(headers), ...headerValues]);
+  return (sanitizeText(redacted) || '').slice(0, 300);
+}
+
 function parseCustomHeaders(headersText: string): Record<string, string> {
   if (!headersText) return {};
   let parsed: any;
@@ -323,7 +375,8 @@ export async function testLlmConnection(
   const apiUrl = normalizeApiUrl(override.apiUrl || saved.apiUrl);
   const model = normalizeModel(override.model || saved.model);
   const apiKey = effectiveLlmTestApiKey(override.apiKey);
-  const headersText = normalizeHeaders(override.headers ?? saved.headers);
+  const savedHeaders = savedHeadersText();
+  const headersText = restoreSavedHeaderValues(normalizeHeaders(override.headers ?? savedHeaders), savedHeaders);
   const requestUrl = buildChatCompletionsUrl(apiUrl);
   const startedAt = Date.now();
   const controller = new AbortController();

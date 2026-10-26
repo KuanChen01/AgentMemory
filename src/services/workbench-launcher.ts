@@ -1,3 +1,5 @@
+import { workerAuthHeaders } from './worker-auth';
+
 export interface AdminWorkbenchUrls {
   adminUrl: string;
   overviewUrl: string;
@@ -83,6 +85,7 @@ export async function probeWorkbenchOverview(
 
   try {
     const response = await fetch(overviewUrl, {
+      headers: workerAuthHeaders(),
       signal: controller.signal,
     });
     const rawText = await response.text();

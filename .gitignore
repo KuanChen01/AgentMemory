@@ -10,6 +10,9 @@ scratch/
 
 # Local configuration and environment keys
 .env
+# .env backups written by older bootstrap versions, and interrupted atomic writes: both hold the key
+.env.bak-*
+.env.tmp-*
 .env.local
 .env.development.local
 .env.test.local

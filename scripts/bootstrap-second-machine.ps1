@@ -37,9 +37,28 @@ if ($AntigravityConfig) {
   $cliArgs += "--antigravity-config"
   $cliArgs += $AntigravityConfig
 }
+# The key never goes on a command line (shell history, transcripts, process listings): it is read
+# without echo when ~/.agentmem/.env has none yet, and handed to Node in the environment.
 if ($ApiKey) {
-  $cliArgs += "--api-key"
-  $cliArgs += $ApiKey
+  Write-Warning "-ApiKey puts the key in your shell history. Next time leave it out and type the key at the prompt, or set it in the workbench."
+} else {
+  $envFile = Join-Path (Join-Path $env:USERPROFILE ".agentmem") ".env"
+  $savedKey = $null
+  if (Test-Path -LiteralPath $envFile) {
+    $savedKey = Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^\s*AGENTMEM_LLM_API_KEY\s*=\s*\S' -and $_ -notmatch '=\s*fill-me\s*$' } | Select-Object -First 1
+  }
+  if (-not $savedKey -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    $secureKey = Read-Host "LLM API key (input hidden; press Enter to skip and fill ~/.agentmem/.env later)" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+    try {
+      $ApiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+  }
+}
+if ($ApiKey) {
+  $env:AGENTMEM_BOOTSTRAP_API_KEY = $ApiKey
 }
 if ($ApiUrl) {
   $cliArgs += "--api-url"
@@ -51,5 +70,10 @@ if ($Model) {
 }
 
 Write-Host "Running AgentMemory bootstrap..."
-& node @cliArgs
-exit $LASTEXITCODE
+try {
+  & node @cliArgs
+  $bootstrapExit = $LASTEXITCODE
+} finally {
+  Remove-Item Env:AGENTMEM_BOOTSTRAP_API_KEY -ErrorAction SilentlyContinue
+}
+exit $bootstrapExit

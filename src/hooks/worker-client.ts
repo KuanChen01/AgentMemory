@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { workerAuthHeaders } from '../services/worker-auth';
 
 const DEFAULT_HOOK_TIMEOUT_MS = 1500;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5000;
@@ -66,8 +67,10 @@ async function attemptWorkerFetch(
 
   try {
     // The worker listens on 127.0.0.1 only; `localhost` may resolve to ::1 first.
+    // The token is read on every attempt: a worker started by autostart creates it.
     const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
       ...init,
+      headers: { ...(init?.headers as Record<string, string> | undefined), ...workerAuthHeaders() },
       signal: controller.signal,
     });
     receivedResponse = true;

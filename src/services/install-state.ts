@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { ensurePrivateDir, restrictToOwner, writePrivateFileAtomic } from './private-files';
 
 export type BaselineStatus = 'pristine' | 'legacy-no-pristine-baseline';
 
@@ -50,7 +51,7 @@ export interface PrepareManagedTargetOptions {
 const STATE_VERSION = 1;
 
 function ensureAgentMemDir(homeDir: string) {
-  fs.mkdirSync(path.join(homeDir, '.agentmem'), { recursive: true });
+  ensurePrivateDir(path.join(homeDir, '.agentmem'), true);
 }
 
 function getBackupsDir(homeDir: string): string {
@@ -92,7 +93,8 @@ export function sha256Text(text: string): string {
 
 function buildBackupPath(homeDir: string, targetPath: string): string {
   const backupsDir = getBackupsDir(homeDir);
-  fs.mkdirSync(backupsDir, { recursive: true });
+  ensureAgentMemDir(homeDir);
+  ensurePrivateDir(backupsDir, true);
 
   const baseName = path.basename(targetPath).replace(/[^a-zA-Z0-9._-]/g, '_');
   const suffix = crypto.createHash('sha1').update(path.resolve(targetPath)).digest('hex').slice(0, 12);
@@ -132,9 +134,12 @@ export function prepareManagedTarget(
         `No pristine baseline was captured for legacy AgentMemory-managed file: ${absolutePath}`
       );
     } else {
+      // The baseline is the complete original config (it may hold other services' keys): owner-only.
       const backupPath = buildBackupPath(options.homeDir, absolutePath);
       if (!fs.existsSync(backupPath)) {
-        fs.writeFileSync(backupPath, options.currentText || '', 'utf8');
+        writePrivateFileAtomic(backupPath, options.currentText || '');
+      } else {
+        restrictToOwner(backupPath, false);
       }
       record.baselineBackupPath = backupPath;
     }

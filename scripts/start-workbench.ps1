@@ -50,6 +50,28 @@ function Get-WorkbenchUrls([int]$TargetPort) {
   }
 }
 
+# The worker requires the per-user token it keeps in its runtime directory (see src/services/worker-auth.ts).
+function Get-WorkerToken() {
+  $runtimeDir = $env:AGENTMEM_RUNTIME_DIR
+  if (-not $runtimeDir) {
+    $homeDir = $env:USERPROFILE
+    if (-not $homeDir) { $homeDir = $HOME }
+    $runtimeDir = Join-Path $homeDir '.agentmem'
+  }
+  $tokenPath = Join-Path $runtimeDir 'worker-token'
+  if (Test-Path -LiteralPath $tokenPath) {
+    $token = (Get-Content -LiteralPath $tokenPath -Raw).Trim()
+    if ($token -match '^[A-Za-z0-9_-]{32,256}$') { return $token }
+  }
+  return ''
+}
+
+function Get-WorkerHeaders() {
+  $token = Get-WorkerToken
+  if ($token) { return @{ 'X-AgentMem-Token' = $token } }
+  return @{}
+}
+
 function Test-ReusableOverviewPayload([object]$Payload) {
   if ($null -eq $Payload) {
     return $false
@@ -91,7 +113,7 @@ function Get-WorkbenchStatus([int]$TargetPort) {
   try {
     # -UseBasicParsing avoids the Internet Explorer engine dependency in Windows PowerShell 5.1
     # (it is accepted and ignored by PowerShell 7).
-    $response = Invoke-WebRequest -Uri $urls.OverviewUrl -TimeoutSec 2 -UseBasicParsing
+    $response = Invoke-WebRequest -Uri $urls.OverviewUrl -Headers (Get-WorkerHeaders) -TimeoutSec 2 -UseBasicParsing
     $httpStatus = [int]$response.StatusCode
     $payload = $null
     if ($response.Content) {
@@ -156,6 +178,9 @@ function Invoke-WorkbenchBuild() {
 }
 
 function Invoke-WorkbenchBrowserOpen([string]$Url) {
+  # The token rides in the URL fragment, which the browser never sends to the server.
+  $token = Get-WorkerToken
+  if ($token) { $Url = "$Url#token=$token" }
   Start-Process $Url | Out-Null
 }
 

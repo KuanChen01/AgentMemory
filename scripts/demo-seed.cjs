@@ -78,6 +78,7 @@ fs.writeFileSync(process.env.AGENTMEM_ENV_PATH, [
 const { DatabaseManager } = require(path.join(repoRoot, 'dist', 'services', 'db.js'));
 const { getLocalHashingEmbedding } = require(path.join(repoRoot, 'dist', 'services', 'embedding.js'));
 const { DAILY_DIGEST_PROMPT_VERSION } = require(path.join(repoRoot, 'dist', 'services', 'daily-digest.js'));
+const { adminUrlWithToken } = require(path.join(repoRoot, 'dist', 'services', 'worker-auth.js'));
 
 const PROJECTS = {
   web: 'C:/Users/demo/projects/acme-storefront',
@@ -291,7 +292,8 @@ function captureScreenshots(outDir) {
       '--lang=en-US', '--accept-lang=en-US',
       `--user-data-dir=${profile}`, '--window-size=1440,1000', '--force-device-scale-factor=1',
       '--virtual-time-budget=10000', `--screenshot=${file}`,
-      `http://127.0.0.1:${options.port}/admin#${view}`,
+      // The worker token of this sandbox's worker rides in the fragment (see src/services/worker-auth.ts).
+      adminUrlWithToken(`http://127.0.0.1:${options.port}/admin?view=${view}`),
     ], { encoding: 'utf8', timeout: 90000, windowsHide: true });
     if (result.error || !fs.existsSync(file)) {
       throw new Error(`screenshot of ${view} failed: ${result.error?.message || result.stderr}`);
@@ -304,7 +306,7 @@ function captureScreenshots(outDir) {
 async function main() {
   await seed();
   const worker = await startWorker();
-  const url = `http://127.0.0.1:${options.port}/admin`;
+  const url = adminUrlWithToken(`http://127.0.0.1:${options.port}/admin`);
   console.log(`Demo worker PID ${worker.pid} serving ${url} (sandbox: ${options.root})`);
   if (options.screenshots) {
     try {

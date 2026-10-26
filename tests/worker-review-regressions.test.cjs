@@ -6,6 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { registerWorker } = require('./helpers/worker-token.cjs');
 
 async function fixture(run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-review-'));
@@ -45,6 +46,7 @@ async function fixture(run) {
       worker.stderr.on('data', () => {});
     });
     port = JSON.parse(fs.readFileSync(path.join(root, 'worker-status.json'))).port;
+    registerWorker(port, root);
   };
   const reservation = http.createServer();
   await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
@@ -107,7 +109,8 @@ test('saved custom headers reach real mock summary requests after worker restart
     assert.equal((await post('/admin/api/llm-config', { headers, outputBudgetEnabled: false })).status, 200);
     await stop(); await start();
     const config = (await (await get('/admin/api/llm-config')).json()).config;
-    assert.equal(config.headers, headers);
+    // The admin API never returns saved header values; the requests below still carry them.
+    assert.equal(config.headers, JSON.stringify({ 'X-Test-Header': '••••', 'X-Second': '••••' }));
     assert.equal(config.outputBudgetEnabled, false);
     await post('/tools', { session_id: 'restart', project_path: 'E:/Review/Headers', agent_id: 'fixture',
       tool_name: 'exec_command', input: 'verify header persistence', output: 'verification passed', success: true });

@@ -9,6 +9,7 @@ import {
   selectDigestObservations,
 } from './memory-policy';
 import { llmBudgetOptions, recordLlmUsage } from './llm-budget';
+import { llmErrorExcerpt } from './llm-config';
 
 // Bumped in v2.2.4 for the English-output rule. The version is recorded on new digests only:
 // it never makes an existing successful digest stale (no regeneration, no backfill).
@@ -249,7 +250,7 @@ async function callDailyDigestLlm(
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`LLM API error: ${response.status} - ${text.slice(0, 500)}`);
+    throw new Error(`LLM API error: ${response.status} - ${llmErrorExcerpt(text, headers, llmConfig.apiKey)}`);
   }
 
   const payload = JSON.parse(text);
@@ -310,7 +311,13 @@ function hasUsableLlmCredentials(config: DailyDigestLlmConfig): boolean {
 function parseHeaders(headersText: string): Record<string, string> {
   const trimmed = headersText.trim();
   if (!trimmed) return {};
-  const parsed = JSON.parse(trimmed);
+  let parsed: any;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    // The engine's parse message quotes the input, which may hold a credential.
+    throw new Error('AGENTMEM_LLM_HEADERS must be valid JSON.');
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('AGENTMEM_LLM_HEADERS must be a JSON object.');
   }

@@ -254,6 +254,20 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const DEV_TOOLS_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_DEV_TOOLS_STORAGE_KEY)};
   const THEME_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_THEME_STORAGE_KEY)};
   const LEGACY_BG_STORAGE_KEY = ${JSON.stringify(ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY)};
+  const WORKER_TOKEN_STORAGE_KEY = "agentmemory.admin.workerToken";
+  let workerToken = "";
+  try {
+    const tokenMatch = /^#token=([A-Za-z0-9_-]+)$/.exec(String(window.location.hash || ""));
+    if (tokenMatch) {
+      workerToken = tokenMatch[1];
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+      window.sessionStorage.setItem(WORKER_TOKEN_STORAGE_KEY, workerToken);
+    } else {
+      workerToken = window.sessionStorage.getItem(WORKER_TOKEN_STORAGE_KEY) || "";
+    }
+  } catch (_error) {
+    // Without storage the page asks for the token when the worker requires it.
+  }
   const BG_DB_NAME = "agentmemory-admin-ui";
   const BG_DB_STORE = "wallpapers";
   const BG_DB_LEGACY_KEY = "custom";
@@ -3323,8 +3337,39 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderHomeRecent();
   }
 
+  // Every worker API call carries this user's worker token. Launchers open /admin#token=...; the token is
+  // kept in this tab's sessionStorage and removed from the address bar. Without one, ask once.
+  let workerTokenAsked = false;
+  function workerTokenHeaders(options) {
+    const token = workerToken;
+    const headers = Object.assign({}, options && options.headers);
+    if (token) headers["X-AgentMem-Token"] = token;
+    return Object.assign({}, options, { headers: headers });
+  }
+
+  function askWorkerToken() {
+    if (workerTokenAsked) return false;
+    workerTokenAsked = true;
+    let entered = "";
+    try {
+      entered = String(window.prompt(t("auth.tokenPrompt")) || "").trim();
+    } catch (_error) {
+      entered = "";
+    }
+    if (!entered) return false;
+    workerToken = entered;
+    workerTokenAsked = false;
+    try {
+      window.sessionStorage.setItem(WORKER_TOKEN_STORAGE_KEY, entered);
+    } catch (_error) {
+      // The token still works for this page.
+    }
+    return true;
+  }
+
   async function fetchJson(url, options) {
-    const response = await fetch(url, options);
+    let response = await fetch(url, workerTokenHeaders(options));
+    if (response.status === 401 && askWorkerToken()) response = await fetch(url, workerTokenHeaders(options));
     const text = await response.text();
     const payload = text ? JSON.parse(text) : {};
     if (!response.ok) {

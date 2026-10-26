@@ -14,6 +14,8 @@ import {
   resolveInstallPaths,
   validateInstalledFiles,
 } from './agent-installer';
+import { ensurePrivateDir, restrictToOwner, writePrivateFileAtomic } from './private-files';
+import { adminUrlWithToken } from './worker-auth';
 
 export interface BootstrapOptions {
   antigravityConfigPath?: string;
@@ -30,7 +32,6 @@ export interface BootstrapOptions {
 export interface BootstrapResult {
   adminUrl: string;
   antigravityConfigPath?: string;
-  envBackupPath?: string;
   installValidationIssues: string[];
   logs: { stderrPath: string; stdoutPath: string } | null;
   mode: 'started-new-worker' | 'reused-existing-worker';
@@ -111,16 +112,18 @@ export function ensureBootstrapEnvFile(
     model?: string;
     port?: number;
   } = {}
-): { envPath: string; ready: boolean; created: boolean; backupPath?: string } {
+): { envPath: string; ready: boolean; created: boolean } {
   const envDir = path.join(homeDir, '.agentmem');
   const envPath = path.join(envDir, '.env');
-  fs.mkdirSync(envDir, { recursive: true });
+  ensurePrivateDir(envDir, true);
 
   let created = false;
   if (!fs.existsSync(envPath)) {
-    fs.writeFileSync(envPath, renderEnvTemplate(seed), 'utf8');
+    writePrivateFileAtomic(envPath, renderEnvTemplate(seed));
     created = true;
   }
+  // Files written by older versions may still be world-readable.
+  restrictToOwner(envPath, false);
 
   const original = fs.readFileSync(envPath, 'utf8');
   const existing = parseEnvText(original);
@@ -142,14 +145,10 @@ export function ensureBootstrapEnvFile(
     AGENTMEM_PORT: String(seed.port || Number(existing.AGENTMEM_PORT) || 38888),
   });
 
-  let backupPath: string | undefined;
+  // No backup copy: it would be one more file holding the key. The atomic write keeps either the
+  // old file or the new one, never a truncated mix.
   if (merged !== original) {
-    if (!created) {
-      // Keep the user's previous file next to it before changing anything.
-      backupPath = `${envPath}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      fs.copyFileSync(envPath, backupPath);
-    }
-    fs.writeFileSync(envPath, merged, 'utf8');
+    writePrivateFileAtomic(envPath, merged);
   }
 
   const parsed = parseEnvText(fs.readFileSync(envPath, 'utf8'));
@@ -161,7 +160,7 @@ export function ensureBootstrapEnvFile(
     !!parsed.AGENTMEM_LLM_MODEL &&
     parsed.AGENTMEM_LLM_MODEL !== ENV_PLACEHOLDER;
 
-  return { envPath, ready, created, backupPath };
+  return { envPath, ready, created };
 }
 
 function runCommand(command: string, args: string[], cwd: string, extraEnv: Record<string, string> = {}): Promise<void> {
@@ -274,7 +273,7 @@ export async function runWindowsBootstrap(options: BootstrapOptions): Promise<Bo
   }
 
   if (options.openBrowser !== false) {
-    await openBrowser(urls.adminUrl);
+    await openBrowser(adminUrlWithToken(urls.adminUrl));
   }
 
   const installPaths = resolveInstallPaths(repoRoot, homeDir);
@@ -288,7 +287,6 @@ export async function runWindowsBootstrap(options: BootstrapOptions): Promise<Bo
   return {
     adminUrl: urls.adminUrl,
     antigravityConfigPath: antigravityPath,
-    envBackupPath: envStatus.backupPath,
     installValidationIssues,
     logs,
     mode: initialState === 'reuse-existing' ? 'reused-existing-worker' : 'started-new-worker',

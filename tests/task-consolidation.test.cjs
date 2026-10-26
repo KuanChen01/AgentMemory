@@ -13,6 +13,7 @@ const { DatabaseManager } = require('../dist/services/db.js');
 const { classifyToolEvent, isReadOnlyCommand } = require('../dist/services/event-classifier.js');
 
 const { freePort } = require('./helpers/task-worker.cjs');
+const { registerWorker } = require('./helpers/worker-token.cjs');
 const TOKEN_CAP = 200_000;
 
 async function startStub() {
@@ -53,6 +54,7 @@ async function withWorker(run, extraEnv = {}) {
     worker.stdout.on('data', c => { log += c; if (String(c).includes('worker service running')) { clearTimeout(t); resolve(); } });
     worker.stderr.on('data', c => { log += c; });
   });
+  registerWorker(PORT, root);
   const base = `http://127.0.0.1:${PORT}`;
   const post = async (route, body) => (await fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(10000) })).json();

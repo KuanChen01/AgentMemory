@@ -8,6 +8,7 @@ import {
   probeWorkbenchOverview,
   waitForWorkbenchReady,
 } from '../services/workbench-launcher';
+import { adminUrlWithToken } from '../services/worker-auth';
 
 interface WorkbenchOptions {
   openBrowser: boolean;
@@ -110,7 +111,7 @@ async function main() {
   }
 
   if (options.openBrowser) {
-    await openAdminWorkbench(urls.adminUrl);
+    await openAdminWorkbench(adminUrlWithToken(urls.adminUrl));
   }
 
   const mode = initialState === 'reuse-existing' ? 'reused-existing-worker' : 'started-new-worker';
