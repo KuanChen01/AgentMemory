@@ -51,7 +51,7 @@ async function findFreePort() {
 
 async function runPowerShell(args, options = {}) {
   const child = spawn(
-    'pwsh',
+    options.shell || 'pwsh',
     ['-ExecutionPolicy', 'Bypass', '-File', powerShellScriptPath, ...args],
     {
       cwd: projectRoot,
@@ -176,6 +176,36 @@ test('workbench PowerShell script reports inactive open-admin without launching 
 
   assert.equal(result.stdout.includes('State : INACTIVE'), true);
   assert.equal(result.stdout.includes('当前未启动，未打开 /admin。'), true);
+});
+
+// start-workbench.cmd falls back to Windows PowerShell 5.1 when pwsh is missing. 5.1 reads BOM-less
+// scripts in the ANSI code page (936 on zh-CN Windows) and lacks ConvertFrom-Json -Depth.
+test('Windows PowerShell 5.1 runs the workbench script and prints Chinese status text', { skip: skipShell }, async () => {
+  const port = await findFreePort();
+  const result = await runPowerShell(['-Action', 'open-admin', '-Port', String(port)], { shell: 'powershell.exe' });
+
+  assert.equal(result.stdout.includes('AgentMemory Workbench 状态'), true, result.stdout);
+  assert.equal(result.stdout.includes('State : INACTIVE'), true);
+  assert.equal(result.stdout.includes('当前未启动，未打开 /admin。'), true);
+});
+
+test('Windows PowerShell 5.1 recognizes an active worker and no-ops start', { skip: skipShell }, async () => {
+  const server = http.createServer((req, res) => {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(createReusableOverviewPayload());
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const result = await runPowerShell(['-Action', 'start', '-Port', String(port), '-NoOpen'], { shell: 'powershell.exe' });
+    assert.equal(result.stdout.includes('State : ACTIVE'), true, result.stdout);
+    assert.equal(result.stdout.includes('当前已启动。'), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('start-workbench.cmd dispatches status mode and forwards --port', { skip: skipShell }, async () => {
