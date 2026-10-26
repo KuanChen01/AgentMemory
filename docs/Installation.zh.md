@@ -23,7 +23,7 @@ cd AgentMemory
 bootstrap 脚本会依次：
 
 1. 运行 `npm install --ignore-scripts` 和 `npm run build`。
-2. 创建或更新 `%USERPROFILE%\.agentmem\.env`。第一次运行时这个文件还不存在：bootstrap 会写入一个 key 为空的骨架，然后**报错停下**。填好其中三项 `AGENTMEM_LLM_*`（见[配置 LLM](#配置-llm)），再运行一次同样的命令。之后再运行时，bootstrap 只就地设置 key、URL、模型和端口，其余行全部保留。文件以原子方式替换，且只有你自己能读，不再写任何备份副本。（旧版本会在同目录留下 `.env.bak-<时间戳>` 备份，其中包含 API key。AgentMemory 不会自动删除它们；如果不需要，请自行删除。）
+2. 创建或更新 `%USERPROFILE%\.agentmem\.env`。第一次运行时这个文件还不存在：bootstrap 会写入一个 key 为空的骨架，然后**报错停下**。填好其中三项 `AGENTMEM_LLM_*`（见[配置 LLM](#配置-llm)），再运行一次同样的命令。之后再运行时，bootstrap 只就地设置 key、URL、模型和端口，其余行全部保留。文件以原子方式替换（macOS/Linux 上仅所有者可读），不再写任何备份副本。（旧版本会在同目录留下 `.env.bak-<时间戳>` 备份，其中包含 API key。AgentMemory 不会自动删除它们；如果不需要，请自行删除。）
 3. 运行 `npm link --ignore-scripts`，注册全局 `agentmem` 命令。
 4. 以严格模式配置全部五个 agent（见[安装器会改动什么](#安装器会改动什么)）。
 5. 复用已在运行的 worker 或启动一个新的，然后打开面板。

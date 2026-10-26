@@ -1,14 +1,14 @@
 # Leak risks: result (P1-P9)
 
-Branch `fix/leak-risks`, based on master `a5bdc5e`. Local commits only; nothing pushed.
+Branch `fix/leak-risks`, based on master `a5bdc5e`. Reviewed and pushed for a PR to master.
 
-**Owner decision:** the per-user worker access token (`~/.agentmem/worker-token`, `X-AgentMem-Token`, `agentmem admin-url`) and the Windows `icacls` ACL replacement were removed. The original model stays: any local process on the machine may query the worker. Only the LLM API key and custom LLM header values are secret. An old leftover `worker-token` file is ignored (not deleted, not required). Host/Origin checks, JSON-only bodies, key masking, error redaction, atomic `.env` writes, the hidden bootstrap key prompt, auto-recall switch respect, and POSIX owner-only files remain.
+**Owner decision:** the per-user worker access token (`~/.agentmem/worker-token`, `X-AgentMem-Token`, `agentmem admin-url`) and the Windows `icacls` ACL replacement were removed. The original model stays: any local process on the machine may query the worker. Only the LLM API key and custom LLM header values are treated as secret: they are masked in API responses and the admin UI, and LLM error text is redacted on a best-effort basis (by header name). An old leftover `worker-token` file is ignored (not deleted, not required). Host/Origin checks, JSON-only bodies, key masking, error redaction, atomic `.env` writes, the hidden bootstrap key prompt, auto-recall switch respect, and POSIX owner-only files remain.
 
 Checks run on Windows 11 (Node 24):
 
 - `npx tsc --noEmit`: clean
 - `npm run build`: clean
-- `node --test --test-concurrency=1 tests/*.test.cjs`: **521 tests, 521 pass, 0 fail** (baseline before the change: 506 pass). The 15 new tests are in `tests/leak-risks.test.cjs`.
+- `node --test --test-concurrency=1 tests/*.test.cjs`: after the token/ACL removal, **517 tests**: Windows 517 pass, 0 fail; Linux 494 pass, 0 fail, 23 Windows-only skipped. New tests are in `tests/leak-risks.test.cjs`.
 
 Tests only use temp dirs and ephemeral ports. None binds port 38888, and none touches the running worker or the real `~/.agentmem`.
 
@@ -128,14 +128,14 @@ New `tests/leak-risks.test.cjs` (token and Windows ACL cases removed by owner de
 
 | Problem | What the tests check |
 | --- | --- |
-| P1 | Header values are never returned and a masked round trip keeps them |
+| P1 | Header values are masked in the config API and a masked round trip keeps them |
 | P2 | Rebound `Host`, foreign `Origin` and `cross-site` are refused; same-origin and navigating to `/admin` work |
 | P3 | `text/plain` and form POSTs get 415; an empty or string-typed settings body gets 400 and capture stays off |
 | P4 | Reads off: no rewrite call and no state file; capture off: recall still injected, no state file; on: state file 0600 |
 | P5 | Atomic write leaves no temp file and gives 0600/0700; tightening an existing directory |
 | P6 | No backup is written, an old backup is untouched, `.env` is tightened to 0600; `.gitignore` covers `.env.bak-*` |
 | P7 | The baseline still has the full content for restore, and is 0600 inside 0700 directories |
-| P8 | A stub gateway echoes the key, the headers and the request: the error carries none of the secrets and is clipped; the malformed-headers error is checked too |
+| P8 | A stub gateway echoes the key, the headers and the request: the error carries none of the echoed key or auth header values and is clipped; the malformed-headers error is checked too |
 | P9 | The script has no `--api-key`, uses the environment variable and the secure prompt; docs have no `-ApiKey <key>` or `--api-key <key>` |
 
 Existing tests adapted:
@@ -152,3 +152,9 @@ On POSIX the mode assertions run.
 - **`apiKeyMasked`** still shows the first 4 and last 4 characters of the key in the admin API. This is unchanged pre-existing behaviour, and the audit did not list it.
 - **Existing hook tests** (`grok-hook`, `claude-hook-payload`, `hook-skip-capture`, `grok-build-agent-id`) spawn hooks against fake servers without `AGENTMEM_RUNTIME_DIR` and may use the real `~/.agentmem` auto-recall directory. The requests only reach the in-process fake server.
 - **Not run on real hosts:** the PowerShell scripts were not run against a live install (no live worker or real `~/.agentmem` may be used here). `script-encoding` and `workbench-orchestration` tests pass, and both scripts stay pure ASCII.
+
+## Known limits (tracked separately)
+
+- L03: the connection test (`/admin/api/llm-test`) still sends the saved key and headers to a caller-supplied `apiUrl`.
+- Header redaction in errors is selected by header name; a gateway echoing a value saved under another name, short values, or fetch header-validation exceptions can still expose it.
+- L05: captured tool output is stored and shown (for example by `/admin/api/work-evidence`) without credential redaction.

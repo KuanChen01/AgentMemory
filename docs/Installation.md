@@ -23,7 +23,7 @@ cd AgentMemory
 The bootstrap script:
 
 1. Runs `npm install --ignore-scripts` and `npm run build`.
-2. Creates or updates `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again. On later runs bootstrap only sets the key, URL, model and port, in place; every other line is kept. The file is replaced atomically and readable only by you; no backup copy is written. (Older versions saved `.env.bak-<timestamp>` copies next to it, which contain your API key. AgentMemory never deletes them; delete old ones yourself if you don't need them.)
+2. Creates or updates `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again. On later runs bootstrap only sets the key, URL, model and port, in place; every other line is kept. The file is replaced atomically (owner-only on macOS/Linux); no backup copy is written. (Older versions saved `.env.bak-<timestamp>` copies next to it, which contain your API key. AgentMemory never deletes them; delete old ones yourself if you don't need them.)
 3. Runs `npm link --ignore-scripts` so the global `agentmem` command works.
 4. Configures all five agents in strict mode (see [What the installer sets up](#what-the-installer-sets-up)).
 5. Reuses a running worker or starts one, and opens the workbench.
