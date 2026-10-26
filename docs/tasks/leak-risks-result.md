@@ -157,4 +157,4 @@ On POSIX the mode assertions run.
 
 - L03: the connection test (`/admin/api/llm-test`) still sends the saved key and headers to a caller-supplied `apiUrl`.
 - Header redaction in errors is selected by header name; a gateway echoing a value saved under another name, short values, or fetch header-validation exceptions can still expose it.
-- L05: captured tool output is stored and shown (for example by `/admin/api/work-evidence`) without credential redaction.
+- L05: addressed later on branch `fix/capture-secret-redaction`: captured tool calls and stored memories are redacted on a best-effort basis at ingest, and old tool rows on read from `/admin/api/work-evidence`. Its remaining known limits are listed in `CHANGELOG.md` under [Unreleased] > Security.
