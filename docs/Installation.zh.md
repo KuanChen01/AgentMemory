@@ -23,16 +23,18 @@ cd AgentMemory
 bootstrap 脚本会依次：
 
 1. 运行 `npm install --ignore-scripts` 和 `npm run build`。
-2. 创建或更新 `%USERPROFILE%\.agentmem\.env`。第一次运行时这个文件还不存在：bootstrap 会写入一个 key 为空的骨架，然后**报错停下**。填好其中三项 `AGENTMEM_LLM_*`（见[配置 LLM](#配置-llm)），再运行一次同样的命令。之后再运行时，bootstrap 只就地设置 key、URL、模型和端口，其余行全部保留；改动前会先把原文件备份为同目录下的 `.env.bak-<时间戳>`（输出中的 `envBackupPath`）。
+2. 创建或更新 `%USERPROFILE%\.agentmem\.env`。第一次运行时这个文件还不存在：bootstrap 会写入一个 key 为空的骨架，然后**报错停下**。填好其中三项 `AGENTMEM_LLM_*`（见[配置 LLM](#配置-llm)），再运行一次同样的命令。之后再运行时，bootstrap 只就地设置 key、URL、模型和端口，其余行全部保留。文件以原子方式替换，且只有你自己能读，不再写任何备份副本。（旧版本会在同目录留下 `.env.bak-<时间戳>` 备份，其中包含 API key。AgentMemory 不会自动删除它们；如果不需要，请自行删除。）
 3. 运行 `npm link --ignore-scripts`，注册全局 `agentmem` 命令。
 4. 以严格模式配置全部五个 agent（见[安装器会改动什么](#安装器会改动什么)）。
 5. 复用已在运行的 worker 或启动一个新的，然后打开面板。
 
-也可以直接传入 LLM 配置，省掉“停下再重跑”这一步：
+也可以省掉“停下再重跑”这一步：`.env` 里还没有 key 时，脚本会弹出隐藏输入的提示让你输入 key（直接回车可跳过），接口地址和模型可以直接传入：
 
 ```powershell
-.\bootstrap-second-machine.cmd -ApiKey <key> -ApiUrl <OpenAI 兼容地址> -Model <模型名>
+.\bootstrap-second-machine.cmd -ApiUrl <OpenAI 兼容地址> -Model <模型名>
 ```
+
+key 不会出现在命令行里（否则会留在 shell 历史和进程列表中），脚本通过环境变量把它交给 Node。（为兼容旧脚本仍接受 `-ApiKey`，但会给出警告。）
 
 其他参数：`-NoOpen`（不打开浏览器）、`-Port <n>`（worker 端口，默认 38888，会写入 `~/.agentmem/.env`）、`-AntigravityConfig <path>`（额外检查并去重的 Antigravity MCP 注册文件）。
 
@@ -62,7 +64,9 @@ worker 运行后，可以在面板的 **LLM 设置**里切换模型或接口地�
 
 ## 网络说明
 
-worker 只监听 `127.0.0.1`，所有接口（agent 读写记忆、`/shutdown`、管理面板）都会拒绝非本机请求；局域网里的其他电脑、容器和虚拟机都连不上它。worker 没有身份认证，因此不提供对外开放的设置。
+worker 只监听 `127.0.0.1`，所有接口（agent 读写记忆、`/shutdown`、管理面板）都会拒绝非本机请求；局域网里的其他电脑、容器和虚拟机都连不上它，也不提供对外开放的设置。
+
+在本机上它也只响应你自己：每个请求都必须带上 worker 保存在 `~/.agentmem/worker-token` 里的访问令牌（只有你的账户能读）。agent hooks、CLI 和启动器会自动读取它（MCP server 直接读数据库，不需要令牌）。同一台电脑上的其他账户、别人的进程以及网页（包括伪装成 `127.0.0.1` 的 DNS rebinding 页面）都会被拒绝。要更换令牌，删除该文件并重启 worker 即可。`~/.agentmem` 目录本身也只对你开放（macOS/Linux 上目录为 0700、文件为 0600；Windows 上沿用用户目录的私有权限）。
 
 ## 打开面板
 
@@ -72,7 +76,7 @@ worker 只监听 `127.0.0.1`，所有接口（agent 读写记忆、`/shutdown`�
 npm run workbench               # 同上
 ```
 
-面板地址：<http://127.0.0.1:38888/admin>。启动器默认使用 38888 端口；如果改过端口，用 `.\start-workbench.cmd start --port <n>`。
+启动器打开的 <http://127.0.0.1:38888/admin> 链接里带有你的访问令牌（`#token=...`）；页面只在当前浏览器标签页里保留它，并把它从地址栏移除。`agentmem admin-url` 在任何平台都会输出同样的链接，请不要分享。直接打开不带令牌的地址（书签、新标签页）时，页面会询问一次令牌：粘贴 `~/.agentmem/worker-token` 的内容即可。启动器默认使用 38888 端口；如果改过端口，用 `.\start-workbench.cmd start --port <n>`。
 
 ## macOS 和 Linux（少量测试）
 
@@ -84,7 +88,7 @@ agentmem install                # 配置五个 agent
 agentmem start                  # 前台运行 worker；agent 的 hooks 也会按需自动启动它
 ```
 
-LLM 可以在 `~/.agentmem/.env` 里配置，也可以在面板 <http://127.0.0.1:38888/admin> 的 **LLM 设置**里配置。
+LLM 可以在 `~/.agentmem/.env` 里配置，也可以在面板的 **LLM 设置**里配置；面板用 `agentmem admin-url` 输出的链接打开。
 
 ## 安装参数
 
@@ -92,7 +96,8 @@ LLM 可以在 `~/.agentmem/.env` 里配置，也可以在面板 <http://127.0.0.
 agentmem install                                # 配置全部五个 agent，配置失败的会报告出来
 agentmem install --strict                       # 任何一个 agent 配置失败就报错
 agentmem install --no-claude-capture            # Claude Code 不开工具调用自动捕获
-agentmem bootstrap-win --api-key <key> --api-url <OpenAI 兼容地址> --model <模型名>
+agentmem bootstrap-win --api-url <OpenAI 兼容地址> --model <模型名>
+agentmem admin-url                              # 输出带访问令牌的面板链接
 ```
 
 | 参数 | 作用 |
@@ -100,7 +105,7 @@ agentmem bootstrap-win --api-key <key> --api-url <OpenAI 兼容地址> --model <
 | `--strict` | 五个 agent 里任何一个配置失败就报错 |
 | `--claude-capture` / `--no-claude-capture` | 开启或关闭 Claude Code 的工具调用自动捕获 |
 | `--antigravity-config <path>` | 额外检查并去重的 Antigravity MCP 注册文件 |
-| `--api-key`、`--api-url`、`--model` | `bootstrap-win` 的 LLM 配置 |
+| `--api-url`、`--model` | `bootstrap-win` 的 LLM 配置（key 请写在 `.env`、面板或 bootstrap 脚本的隐藏输入里，不要放在命令行上） |
 | `--no-open`、`--port <n>` | `bootstrap-win`：不打开浏览器；使用另一个 worker 端口 |
 
 ## 卸载

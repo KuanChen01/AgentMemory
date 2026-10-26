@@ -139,6 +139,7 @@ Run these commands globally from any directory:
 *   **Start Worker Manually**: `agentmem start` (optional foreground control; lifecycle hooks safely auto-start the background worker when it is unavailable)
 *   **Stop Worker**: `agentmem stop` (sends a graceful shutdown trigger to the local worker)
 *   **Check Status**: `agentmem status` (verifies if the port `38888` is active)
+*   **Workbench Link**: `agentmem admin-url` (prints `/admin#token=...` with your worker access token; don't share it)
 *   **Print Version**: `agentmem version`
 *   **Run Setup**: `agentmem install` (updates Claude Code, OpenCode, Codex, Antigravity, and Grok settings)
 *   **Strict Setup**: `agentmem install --strict` (fails if any one of the five agents cannot be configured)
@@ -163,7 +164,9 @@ The bootstrap script runs `npm install --ignore-scripts`, `npm run build`, creat
 
 If `%USERPROFILE%\.agentmem\.env` is missing, bootstrap writes a blank scaffold and stops with an actionable error. Fill the `AGENTMEM_LLM_*` values, then rerun the command.
 
-If the file already exists, bootstrap only sets `AGENTMEM_LLM_API_KEY`, `AGENTMEM_LLM_API_URL`, `AGENTMEM_LLM_MODEL` and `AGENTMEM_PORT`. It changes those lines in place, adds any that are missing, and leaves every other line alone (comments, gateway headers, budgets, `AGENTMEM_DB_PATH` and other options). Before it changes anything it saves the previous file next to it as `.env.bak-<timestamp>`, and prints that path as `envBackupPath`. If nothing needs to change, the file is not rewritten and no backup is made.
+If the file already exists, bootstrap only sets `AGENTMEM_LLM_API_KEY`, `AGENTMEM_LLM_API_URL`, `AGENTMEM_LLM_MODEL` and `AGENTMEM_PORT`. It changes those lines in place, adds any that are missing, and leaves every other line alone (comments, gateway headers, budgets, `AGENTMEM_DB_PATH` and other options). It writes no backup copy, and the new file replaces the old one atomically (owner-only, 0600 on macOS/Linux), so an interrupted run never leaves a truncated `.env`. If nothing needs to change, the file is not rewritten. Older versions saved `.env.bak-<timestamp>` copies, which contain the API key; AgentMemory does not delete them, so remove old ones yourself if you don't need them.
+
+The bootstrap script never passes the key on a command line: when `.env` has no key it asks at a hidden prompt and hands the key to `agentmem bootstrap-win` in the `AGENTMEM_BOOTSTRAP_API_KEY` environment variable.
 
 ### 📦 Release Discipline
 
@@ -192,7 +195,9 @@ http://127.0.0.1:38888/admin
 
 The admin console is intentionally restricted to loopback clients. It is not exposed to non-local network addresses.
 
-The whole worker, not just `/admin`, is local-only: it listens on `127.0.0.1` only, and every route (`/context`, `/state`, `/search`, `/tools`, `/shutdown`, ...) rejects non-loopback clients. The worker has no authentication, so there is no setting to expose it on the LAN. Other machines, containers or VMs that reach this machine over the network cannot use it. Use `http://127.0.0.1:<port>`; `http://localhost:<port>` also works in browsers and Node clients that fall back to IPv4.
+The whole worker, not just `/admin`, is local-only: it listens on `127.0.0.1` only, and every route (`/context`, `/state`, `/search`, `/tools`, `/shutdown`, ...) rejects non-loopback clients. There is no setting to expose it on the LAN.
+
+Every route except the static `/admin` page also requires the owner's token in the `X-AgentMem-Token` header (`401` otherwise). The worker creates it at startup in `<AGENTMEM_RUNTIME_DIR or ~/.agentmem>/worker-token`, readable only by your account; hooks, the CLI and the launchers read it from there. Requests must be addressed to the worker's own origin (`Host` `127.0.0.1`/`localhost`/`[::1]` with its port, and the same `Origin` when a browser sends one; `403` otherwise), and request bodies must be JSON (`415` otherwise). Launchers open `/admin#token=<token>`; the page keeps the token in `sessionStorage` for that tab and strips it from the address bar, and asks for it once when it is missing. `agentmem admin-url` prints that link. Delete the file and restart the worker to rotate the token. The admin LLM config API shows custom header values as `••••`; sending `••••` back keeps the saved value. Other machines, containers or VMs that reach this machine over the network cannot use it. Use `http://127.0.0.1:<port>`; `http://localhost:<port>` also works in browsers and Node clients that fall back to IPv4.
 
 Windows local control now has two entrypoints:
 

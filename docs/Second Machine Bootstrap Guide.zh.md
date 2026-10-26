@@ -93,9 +93,9 @@ AGENTMEM_PORT=38888
 .\bootstrap-second-machine.cmd
 ```
 
-`.env` 已存在时，bootstrap 只就地更新上面这四项（缺少的补在末尾），其余行（注释、网关 headers、预算、`AGENTMEM_DB_PATH` 等）都保留。需要改动时会先备份为 `%USERPROFILE%\.agentmem\.env.bak-<时间戳>`，路径见输出的 `envBackupPath`；没有改动则不重写、不备份。
+`.env` 已存在时，bootstrap 只就地更新上面这四项（缺少的补在末尾），其余行（注释、网关 headers、预算、`AGENTMEM_DB_PATH` 等）都保留。文件以原子方式替换、只有你能读，不再生成备份；没有改动则不重写。旧版本留下的 `%USERPROFILE%\.agentmem\.env.bak-<时间戳>` 包含 API key，不会被自动删除，如不需要请自行删除。
 
-worker 只监听 `127.0.0.1`，所有接口都只接受本机访问；从局域网里的另一台电脑无法连接这台电脑的 worker。
+worker 只监听 `127.0.0.1`，所有接口都只接受本机访问；从局域网里的另一台电脑无法连接这台电脑的 worker。本机上它也只接受带 `~/.agentmem/worker-token` 访问令牌的请求，`start-workbench.cmd` 会自动带上令牌打开面板。
 
 ## Useful Variants
 
@@ -111,11 +111,10 @@ worker 只监听 `127.0.0.1`，所有接口都只接受本机访问；从局域�
 .\bootstrap-second-machine.cmd -AntigravityConfig "C:\Users\YourName\.gemini\antigravity-cli\mcp_config.json"
 ```
 
-首次执行时直接注入凭证：
+首次执行时直接配置接口和模型（`.env` 里还没有 key 时，脚本会用隐藏输入的提示询问 key；key 不要写在命令行上，否则会留在 shell 历史里）：
 
 ```powershell
 .\bootstrap-second-machine.cmd `
-  -ApiKey "your_real_key" `
   -ApiUrl "https://api.deepseek.com/v1" `
   -Model "deepseek-chat"
 ```

@@ -58,9 +58,11 @@ npm link --ignore-scripts
 agentmem install
 ```
 
-AgentMemory needs an OpenAI-compatible LLM endpoint to summarize what your agents do, cloud or local. On Windows, the first bootstrap run creates `~/.agentmem/.env` and stops so you can fill in the `AGENTMEM_LLM_*` values (or pass `-ApiKey`, `-ApiUrl` and `-Model`), then you run it again. On macOS and Linux, set the LLM in the workbench's **LLM Settings** or in `~/.agentmem/.env`.
+AgentMemory needs an OpenAI-compatible LLM endpoint to summarize what your agents do, cloud or local. On Windows, the first bootstrap run creates `~/.agentmem/.env` and stops so you can fill in the `AGENTMEM_LLM_*` values (or type the key at the hidden prompt and pass `-ApiUrl` and `-Model`), then you run it again. On macOS and Linux, set the LLM in the workbench's **LLM Settings** or in `~/.agentmem/.env`.
 
-Restart your agents when the install finishes, and open the workbench at <http://127.0.0.1:38888/admin> (on Windows: `.\start-workbench.cmd start`). From there you can switch the model or endpoint, replace the key and run a live connection test at any time.
+Restart your agents when the install finishes, and open the workbench with `.\start-workbench.cmd start` on Windows, or with the link printed by `agentmem admin-url` (it contains your personal access token; don't share it). The worker only answers requests that carry this token, so other accounts on the same computer and web pages can't read your memories; a plain <http://127.0.0.1:38888/admin> bookmark asks for the token once (the contents of `~/.agentmem/worker-token`). From the workbench you can switch the model or endpoint, replace the key and run a live connection test at any time.
+
+Upgrading from an older version: rebuild, restart the worker and your agents; nothing else changes. Older versions saved `.env.bak-<timestamp>` copies of `.env`, including the API key, in `~/.agentmem`. AgentMemory no longer creates them and never deletes them, so delete old ones yourself if you don't need them.
 
 All options, what the installer changes and how to undo it: see [Installation](docs/Installation.md).
 

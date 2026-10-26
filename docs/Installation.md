@@ -23,16 +23,18 @@ cd AgentMemory
 The bootstrap script:
 
 1. Runs `npm install --ignore-scripts` and `npm run build`.
-2. Creates or updates `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again. On later runs bootstrap only sets the key, URL, model and port, in place; every other line is kept. Before changing the file it saves the previous version as `.env.bak-<timestamp>` next to it (reported as `envBackupPath`).
+2. Creates or updates `%USERPROFILE%\.agentmem\.env`. On a first run the file does not exist yet: bootstrap writes a scaffold with an empty key and **stops with a message**. Fill in the three `AGENTMEM_LLM_*` values (see [Set up the LLM](#set-up-the-llm)) and run the same command again. On later runs bootstrap only sets the key, URL, model and port, in place; every other line is kept. The file is replaced atomically and readable only by you; no backup copy is written. (Older versions saved `.env.bak-<timestamp>` copies next to it, which contain your API key. AgentMemory never deletes them; delete old ones yourself if you don't need them.)
 3. Runs `npm link --ignore-scripts` so the global `agentmem` command works.
 4. Configures all five agents in strict mode (see [What the installer sets up](#what-the-installer-sets-up)).
 5. Reuses a running worker or starts one, and opens the workbench.
 
-You can skip the stop-and-rerun step by passing the LLM settings directly:
+You can skip the stop-and-rerun step: when `.env` has no key yet, the script asks for it at a hidden prompt (press Enter to skip), and you can pass the endpoint and model directly:
 
 ```powershell
-.\bootstrap-second-machine.cmd -ApiKey <key> -ApiUrl <openai-compatible-url> -Model <model>
+.\bootstrap-second-machine.cmd -ApiUrl <openai-compatible-url> -Model <model>
 ```
+
+The key is never put on a command line, where it would end up in your shell history and in process listings; the script hands it to Node in an environment variable. (`-ApiKey` is still accepted for old scripts, with a warning.)
 
 Other parameters: `-NoOpen` (don't open the browser), `-Port <n>` (worker port, default 38888, written to `~/.agentmem/.env`) and `-AntigravityConfig <path>` (an extra Antigravity MCP registry to check and de-duplicate).
 
@@ -62,7 +64,9 @@ Once the worker is running, open **LLM Settings** in the workbench to switch the
 
 ## Network note
 
-The worker listens on `127.0.0.1` only, and every endpoint (agent memory reads and writes, `/shutdown` and the admin workbench) rejects requests that do not come from this machine. Other computers, containers and VMs on your network cannot reach it, and there is no setting to expose it, because the worker has no authentication.
+The worker listens on `127.0.0.1` only, and every endpoint (agent memory reads and writes, `/shutdown` and the admin workbench) rejects requests that do not come from this machine. Other computers, containers and VMs on your network cannot reach it, and there is no setting to expose it.
+
+On this machine it answers only you: every request must carry the access token the worker keeps in `~/.agentmem/worker-token` (readable only by your account). The agent hooks, the CLI and the launchers read it automatically (the MCP server reads the database directly and needs no token). Other accounts on the computer, other people's processes and web pages (including DNS-rebinding pages that pretend to be `127.0.0.1`) are refused. To rotate the token, delete the file and restart the worker. `~/.agentmem` itself is owner-only (on macOS/Linux 0700 with 0600 files; on Windows it keeps your user profile's private permissions).
 
 ## Open the workbench
 
@@ -72,7 +76,7 @@ The worker listens on `127.0.0.1` only, and every endpoint (agent memory reads a
 npm run workbench               # same as above
 ```
 
-Then browse to <http://127.0.0.1:38888/admin>. The launcher defaults to port 38888; if you changed the port, pass it with `.\start-workbench.cmd start --port <n>`.
+The launcher opens <http://127.0.0.1:38888/admin> with your access token in the link (`#token=...`); the page keeps it for that browser tab only and removes it from the address bar. `agentmem admin-url` prints the same link on any platform; don't share it. If you open the plain address (a bookmark, a new tab), the page asks once for the token: paste the contents of `~/.agentmem/worker-token`. The launcher defaults to port 38888; if you changed the port, pass it with `.\start-workbench.cmd start --port <n>`.
 
 ## macOS and Linux (lightly tested)
 
@@ -84,7 +88,7 @@ agentmem install                # configures the five agents
 agentmem start                  # foreground worker; agent hooks also start it on demand
 ```
 
-Set the LLM in `~/.agentmem/.env` or in the workbench's **LLM Settings** at <http://127.0.0.1:38888/admin>.
+Set the LLM in `~/.agentmem/.env` or in the workbench's **LLM Settings**; open the workbench with the link printed by `agentmem admin-url`.
 
 ## Installer options
 
@@ -92,7 +96,8 @@ Set the LLM in `~/.agentmem/.env` or in the workbench's **LLM Settings** at <htt
 agentmem install                                # configure all five agents, report any that fail
 agentmem install --strict                       # fail if any agent cannot be configured
 agentmem install --no-claude-capture            # Claude Code without automatic tool capture
-agentmem bootstrap-win --api-key <key> --api-url <openai-compatible-url> --model <model>
+agentmem bootstrap-win --api-url <openai-compatible-url> --model <model>
+agentmem admin-url                              # print the workbench link with your access token
 ```
 
 | Flag | Meaning |
@@ -100,7 +105,7 @@ agentmem bootstrap-win --api-key <key> --api-url <openai-compatible-url> --model
 | `--strict` | Fail if any of the five agents cannot be configured |
 | `--claude-capture` / `--no-claude-capture` | Turn Claude Code's automatic tool capture on or off |
 | `--antigravity-config <path>` | An extra Antigravity MCP registry to check and de-duplicate |
-| `--api-key`, `--api-url`, `--model` | LLM settings for `bootstrap-win` |
+| `--api-url`, `--model` | LLM settings for `bootstrap-win` (set the key in `.env`, the workbench or the bootstrap script's hidden prompt, not on the command line) |
 | `--no-open`, `--port <n>` | `bootstrap-win`: don't open the browser; use another worker port |
 
 ## Uninstall
