@@ -153,9 +153,10 @@ export function isSecretFilePath(value: string): boolean {
 function readsSecretFile(command: string): boolean {
   return command.split(/[\r\n;&|]+/).some((segment) => {
     const tokens = segment.split(/[\s"'`<>()=,]+/).filter(Boolean);
-    // Skip `sudo` and PowerShell assignment targets ($x = Get-Content .env).
-    while (tokens.length && /^(?:sudo|\$.*)$/.test(tokens[0])) tokens.shift();
-    return tokens.length > 1 && READ_VERB.test(tokens[0]) && tokens.slice(1).some(isSecretFilePath);
+    // Skip `sudo` and PowerShell assignment targets ($x = Get-Content .env). Advance an index: shift() is O(n) per call.
+    let start = 0;
+    while (start < tokens.length && /^(?:sudo|\$.*)$/.test(tokens[start])) start++;
+    return tokens.length - start > 1 && READ_VERB.test(tokens[start]) && tokens.slice(start + 1).some(isSecretFilePath);
   });
 }
 

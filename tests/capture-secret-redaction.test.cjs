@@ -221,6 +221,25 @@ test('redaction is idempotent and linear on large adversarial input', () => {
   }
 });
 
+test('secret-file command detection is linear on long commands and argv lists', () => {
+  const commands = {
+    '$var run': '$x '.repeat(200000),
+    'sudo run': 'sudo '.repeat(200000),
+    'argv of $vars': Array(200000).fill('$x'),
+    'many segments': '$x | '.repeat(200000),
+  };
+  for (const [label, command] of Object.entries(commands)) {
+    const started = Date.now();
+    const r = redactToolEvent(JSON.stringify({ command }), 'ok', []);
+    const ms = Date.now() - started;
+    assert.equal(r.output, 'ok', label);
+    assert.ok(ms < 1500, `${label}: ${ms}ms`);
+  }
+  // Skipping a long run of prefixes still finds the reader behind them.
+  const read = redactToolEvent(JSON.stringify({ command: `${'$x '.repeat(200000)}Get-Content .env` }), 'TOKEN=abc', []);
+  assert.equal(read.output, SECRET_FILE_OMITTED);
+});
+
 test('worker: captured credentials never reach the buffer, the model prompt, the evidence API or stored memory', async () => {
   await withWorker(async ({ post, get, idle, stub, dbPath }) => {
     // The model echoes a credential back: the stored memory must not keep it.
