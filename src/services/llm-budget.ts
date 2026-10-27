@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-export type LlmTask = 'observation' | 'daily_digest' | 'query_rewrite' | 'connection_test';
+export type LlmTask = 'observation' | 'daily_digest' | 'query_rewrite';
 
 export const MIN_OUTPUT_BUDGET = 256;
 export const MAX_OUTPUT_BUDGET = 8192;
@@ -26,7 +26,7 @@ export function llmBudgetOptions(apiUrl: string, model: string, task: LlmTask, e
   const budget = readLlmBudgetConfig(env);
   const max_tokens = task === 'observation' || task === 'daily_digest'
     ? (budget.outputBudgetEnabled ? (task === 'daily_digest' ? budget.digestMaxTokens : budget.observationMaxTokens) : undefined)
-    : task === 'query_rewrite' ? 80 : 8;
+    : 80;
   let officialDeepSeek = false;
   try { officialDeepSeek = new URL(apiUrl).hostname === 'api.deepseek.com'; } catch { /* Invalid URL handled by caller. */ }
   return {

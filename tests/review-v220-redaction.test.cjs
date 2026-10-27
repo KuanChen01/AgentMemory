@@ -1,17 +1,15 @@
-// v2.2.0 review fixes: home-summary read gate, redacted stored errors, llm-test header secrets, JSON credentials.
+// v2.2.0 review fixes: home-summary read gate, redacted stored errors, header secrets, JSON credentials.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
 const { randomUUID } = require('node:crypto');
 
 const { DatabaseManager } = require('../dist/services/db.js');
 const { sanitizeText, isSensitiveFactKey } = require('../dist/services/pipeline-query.js');
-const { testLlmConnection, llmHeaderSecrets, redactLlmTestPayload } = require('../dist/services/llm-config.js');
+const { llmHeaderSecrets } = require('../dist/services/llm-config.js');
 const { withWorker } = require('./helpers/task-worker.cjs');
 
 // Fixture-only credential shapes; none is a real key.
 const FAKE_KEY = 'sk-fixtureonly0123456789';
-const FAKE_HEADER = 'hdr-fixture-Zq9-value';
 
 async function openDb(dbPath, run) {
   const previous = process.env.AGENTMEM_DB_PATH;
@@ -157,30 +155,6 @@ test('project detail redacts a scalar value under a sensitive fact key', async (
   }
 });
 
-test('llm-test redacts custom auth header values and redacts before it clips', async () => {
-  const server = http.createServer(async (req, res) => {
-    for await (const _ of req) { /* drain */ }
-    res.statusCode = 401;
-    // Echo the header near the 500-character clip so a clip-then-redact would leave a fragment.
-    res.end(`${'p'.repeat(490)} bad ${req.headers['x-api-token']} ${req.headers.authorization}`);
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const url = `http://127.0.0.1:${server.address().port}/v1`;
-  try {
-    const result = await testLlmConnection({
-      apiUrl: url, model: 'stub', apiKey: FAKE_KEY,
-      headers: JSON.stringify({ 'X-Api-Token': FAKE_HEADER, Authorization: `Bearer ${FAKE_HEADER}-auth` }),
-    });
-    assert.equal(result.ok, false);
-    assert.ok(result.error.length <= 500);
-    assert.doesNotMatch(result.error, /hdr-fix|fixture|Zq9/);
-
-    const badJson = await testLlmConnection({ apiUrl: url, model: 'stub', apiKey: FAKE_KEY, headers: `{"Authorization": "Bearer ${FAKE_HEADER}"` });
-    assert.equal(badJson.ok, false);
-    assert.doesNotMatch(String(badJson.error), /hdr-fix|Zq9/);
-  } finally {
-    await new Promise((r) => server.close(r));
-  }
+test('llmHeaderSecrets extracts auth-named header values and Bearer credentials', () => {
   assert.deepEqual(llmHeaderSecrets({ 'Content-Type': 'application/json', Authorization: 'Bearer abc123' }), ['Bearer abc123', 'abc123']);
-  assert.deepEqual(redactLlmTestPayload({ error: 'x abc123 y' }, 'k', {}, ['abc123']), { error: 'x •••• y' });
 });

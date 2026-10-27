@@ -15,7 +15,7 @@ const SECRET = 'sk-test-FIXTURE-key-9f3a2c';
 const MASKED = 'sk-t...3a2c';
 const HOSTILE = '<img src=x onerror=alert(1)>';
 const POLICY_IDS = ['readToggle', 'writeToggle', 'readPolicyState', 'writePolicyState', 'readPolicyMeta', 'writePolicyMeta'];
-const LEGACY_IDS = ['llmApiUrlInput', 'llmModelInput', 'llmApiKeyInput', 'llmSaveButton', 'llmTestButton', 'llmTestResult', 'releaseCheckButton', 'releaseCheckCard', 'dailyDigestCard', 'llmSettingsPanel'];
+const LEGACY_IDS = ['llmApiUrlInput', 'llmModelInput', 'llmApiKeyInput', 'llmSaveButton', 'releaseCheckButton', 'releaseCheckCard', 'dailyDigestCard', 'llmSettingsPanel'];
 
 function uiClientFunction(name) {
   const start = uiScript.indexOf(`function ${name}(`);
@@ -139,7 +139,7 @@ function settingsHarness() {
     elements[id] = el;
     return el;
   };
-  for (const id of ['settingsView', 'readPolicyCard', 'writePolicyCard', 'readToggle', 'writeToggle', 'readPolicyState', 'writePolicyState', 'readPolicyMeta', 'writePolicyMeta', 'setReadChanged', 'setWriteChanged', 'setPolicyNote', 'setReadRow', 'setWriteRow', 'setLlmCard', 'setLlmApiUrl', 'setLlmModel', 'setLlmHeaders', 'setLlmDisableJson', 'setLlmKeyMasked', 'setLlmKeyInput', 'setLlmKeyChip', 'setLlmReplaceKey', 'setLlmKeyHint', 'setLlmBudget', 'setLlmEnvPath', 'setLlmNote', 'setLlmSave', 'setLlmTest', 'setLlmTestChip', 'setLlmTestedAt', 'setDigestCard', 'setDigestZone', 'setDigestZoneText', 'setDigestZoneWrap', 'setDigestEnabled', 'setDigestTime', 'setDigestLookback', 'setDigestSave', 'setDigestNext', 'setDigestInfo', 'setVersion', 'setLatest', 'setReleaseChip', 'setReleaseNote', 'setReleaseCheck', 'setReleaseLink', 'setReleaseCommands', 'setReleaseCode', 'setReleaseCopy', 'setUpdated', 'setConfirm', 'setConfirmText', 'setConfirmGo', 'setConfirmCancel', 'runtimeStatusLine']) make(id);
+  for (const id of ['settingsView', 'readPolicyCard', 'writePolicyCard', 'readToggle', 'writeToggle', 'readPolicyState', 'writePolicyState', 'readPolicyMeta', 'writePolicyMeta', 'setReadChanged', 'setWriteChanged', 'setPolicyNote', 'setReadRow', 'setWriteRow', 'setLlmCard', 'setLlmApiUrl', 'setLlmModel', 'setLlmHeaders', 'setLlmDisableJson', 'setLlmKeyMasked', 'setLlmKeyInput', 'setLlmKeyChip', 'setLlmReplaceKey', 'setLlmKeyHint', 'setLlmBudget', 'setLlmEnvPath', 'setLlmNote', 'setLlmSave', 'setDigestCard', 'setDigestZone', 'setDigestZoneText', 'setDigestZoneWrap', 'setDigestEnabled', 'setDigestTime', 'setDigestLookback', 'setDigestSave', 'setDigestNext', 'setDigestInfo', 'setVersion', 'setLatest', 'setReleaseChip', 'setReleaseNote', 'setReleaseCheck', 'setReleaseLink', 'setReleaseCommands', 'setReleaseCode', 'setReleaseCopy', 'setUpdated', 'setConfirm', 'setConfirmText', 'setConfirmGo', 'setConfirmCancel', 'runtimeStatusLine']) make(id);
   elements.readPolicyCard.badge = make('readPolicyBadge');
   elements.writePolicyCard.badge = make('writePolicyBadge');
   elements.readToggle.checked = true;
@@ -164,7 +164,7 @@ function settingsHarness() {
     overview: { policy: { readEnabled: true, writeEnabled: true, updatedAt: '2026-10-22 09:14:00' }, release: { version: '2.1.1' } },
     releaseCheck: null,
     settings: {
-      llm: null, llmLoading: false, llmSaving: false, llmError: '', llmSaveError: '', llmSaved: false, llmFormKey: '', llmTest: null, llmTesting: false, keyEditing: false,
+      llm: null, llmLoading: false, llmSaving: false, llmError: '', llmSaveError: '', llmSaved: false, llmFormKey: '', keyEditing: false,
       digest: null, digestLoading: false, digestSaving: false, digestError: '', digestSaveError: '', digestFormKey: '',
       policyError: '', loadedAt: 0, confirm: '', copiedAt: 0, section: 'setSwitchesCard',
     },
@@ -196,9 +196,6 @@ function settingsHarness() {
     setLlmEnvPath: elements.setLlmEnvPath,
     setLlmNote: elements.setLlmNote,
     setLlmSave: elements.setLlmSave,
-    setLlmTest: elements.setLlmTest,
-    setLlmTestChip: elements.setLlmTestChip,
-    setLlmTestedAt: elements.setLlmTestedAt,
     setDigestCard: elements.setDigestCard,
     setDigestZone: elements.setDigestZone,
     setDigestZoneText: elements.setDigestZoneText,
@@ -300,7 +297,7 @@ function renderLlmConfig() {
   els.llmHeadersInput.value = state.llmConfig.headers || "";
 }
 ${[
-  'setText', 'setAttr', 'setHidden', 'setClass', 'parseTimestamp', 'formatUiDate', 'statusVariantClass', 'statusChip', 'applyChipMarkup', 'formatClock', 'formatShortDate', 'formatDuration', 'formatSettingsStamp', 'syncSelect', 'getSettingsTimeZones', 'settingsZonesAvailable', 'renderSettings', 'renderSettingsLlm', 'renderSettingsLlmTest', 'renderSettingsDigest', 'renderSettingsDayOptions', 'renderSettingsAbout', 'getSettingsReleasePresentation', 'settingsRedacted', 'settingsTypedKey', 'settingsHttpUrl', 'settingsLlmPayload', 'settingsLlmProblem', 'settingsLlmTestView', 'saveSettingsLlm', 'loadSettingsLlm', 'loadSettingsDigest', 'showSettingsView', 'runSettingsLlmTest', 'settingsDigestPayload', 'settingsDigestProblem', 'saveSettingsDigest', 'renderSettingsUpdated', 'savePolicy', 'onPolicyToggleClick', 'onPolicyToggleChange', 'confirmSettingsSwitchOff', 'cancelSettingsConfirm', 'setSettingsConfirm', 'commitPolicySave', 'policyToggleKind', 'policyToggleKey', 'savedPolicyEnabled', 'getDisplayedPolicy', 'renderPolicyCard', 'renderPolicyNote', 'getPolicyMeta', 'bindSettingsEvents',
+  'setText', 'setAttr', 'setHidden', 'setClass', 'parseTimestamp', 'formatUiDate', 'statusVariantClass', 'statusChip', 'applyChipMarkup', 'formatClock', 'formatShortDate', 'formatDuration', 'formatSettingsStamp', 'syncSelect', 'getSettingsTimeZones', 'settingsZonesAvailable', 'renderSettings', 'renderSettingsLlm', 'renderSettingsDigest', 'renderSettingsDayOptions', 'renderSettingsAbout', 'getSettingsReleasePresentation', 'settingsRedacted', 'settingsTypedKey', 'settingsHttpUrl', 'settingsLlmPayload', 'settingsLlmProblem', 'saveSettingsLlm', 'loadSettingsLlm', 'loadSettingsDigest', 'showSettingsView', 'settingsDigestPayload', 'settingsDigestProblem', 'saveSettingsDigest', 'renderSettingsUpdated', 'savePolicy', 'onPolicyToggleClick', 'onPolicyToggleChange', 'confirmSettingsSwitchOff', 'cancelSettingsConfirm', 'setSettingsConfirm', 'commitPolicySave', 'policyToggleKind', 'policyToggleKey', 'savedPolicyEnabled', 'getDisplayedPolicy', 'renderPolicyCard', 'renderPolicyNote', 'getPolicyMeta', 'bindSettingsEvents',
 ].map((name) => uiClientFunction(name)).join('\n')}
 bindSettingsEvents();
 `;
@@ -367,8 +364,7 @@ test('every Settings i18n key exists in en and zh-CN with the same placeholders'
   assert.equal(en['settings.confirmReadOff'], 'Turn off reading? Agents stop getting startup context and search results until you turn it back on.');
   assert.equal(en['settings.confirmWriteOff'], 'Turn off writing? New observations and state updates are dropped until you turn it back on.');
   assert.equal(en['settings.digestOff'], 'Scheduler is off. No nightly digests are built.');
-  assert.equal(en['settings.llmConnected'], 'Connected · {latency} ms');
-  assert.equal(en['settings.llmFailed'], 'Failed · {error}');
+  assert.equal(en['settings.llmUrlChangeHint'], 'Changing the URL requires entering the API key again.');
   assert.equal(en['settings.policySaveFailed'], 'Could not save that change. The previous setting is still in place.');
 });
 
@@ -387,7 +383,6 @@ test('Settings client wiring keeps legacy panels and does not check for updates 
   assert.match(bind, /onPolicyToggleClick/);
   assert.match(bind, /onPolicyToggleChange\(toggle\)/);
   assert.match(bind, /llmSaveButton[\s\S]{0,200}saveLlmSettings\(\)/);
-  assert.match(bind, /llmTestButton[\s\S]{0,200}runLlmConnectionTest\(\)/);
   assert.match(bind, /releaseCheckButton[\s\S]{0,240}loadReleaseCheck\(\)/);
   assert.match(uiClientFunction('applyLocale'), /renderSettings\(\)/);
   assert.doesNotMatch(uiScript, /usesActivityBackdrop|data-act-bg/);
@@ -557,7 +552,6 @@ test('the LLM card shows only the masked key and omits apiKey unless a new one w
   h.elements.setLlmDisableJson.checked = true;
   let pending = h.run('saveSettingsLlm()');
   assert.equal(h.elements.setLlmSave.disabled, true);
-  assert.equal(h.elements.setLlmTest.disabled, true);
   body = plain(h.posts[0].body);
   assert.equal(h.posts[0].url, '/admin/api/llm-config');
   assert.equal(h.posts[0].method, 'POST');
@@ -596,64 +590,6 @@ test('the LLM card shows only the masked key and omits apiKey unless a new one w
   assert.equal(h.elements.setLlmKeyInput.hidden, true);
   assert.equal(domSurface(h.elements, true).includes(SECRET), false);
   assert.equal(h.state.settings.llm.apiUrl, 'https://api.example.com/v1');
-});
-
-test('Test connection renders Connected, Failed and a thrown error, and the button stays disabled while it runs', async () => {
-  const h = settingsHarness();
-  h.run('renderSettingsLlmTest()');
-  assert.equal(h.elements.setLlmTest.disabled, true);
-  h.state.settings.llm = llmConfig();
-  h.state.settings.llmTesting = true;
-  h.run('renderSettingsLlm()');
-  assert.equal(h.elements.setLlmTest.disabled, true);
-  h.state.settings.llmTesting = false;
-  h.run('renderSettingsLlm()');
-  h.elements.setLlmApiUrl.value = 'https://api.example.com/v1';
-  h.elements.setLlmModel.value = 'demo-model';
-  let pending = h.run('runSettingsLlmTest()');
-  assert.equal(h.elements.setLlmTest.disabled, true);
-  assert.equal(h.elements.setLlmTest.textContent, en['settings.llmTesting']);
-  assert.equal(h.posts[0].url, '/admin/api/llm-test');
-  assert.equal(h.posts[0].method, 'POST');
-  assert.equal(Object.hasOwn(plain(h.posts[0].body), 'apiKey'), false);
-  assert.deepEqual(plain(h.posts[0].body), { apiUrl: 'https://api.example.com/v1', model: 'demo-model', headers: '' });
-  h.posts[0].resolve({ ok: true, latencyMs: 412, testedAt: new Date().toISOString(), requestUrl: 'https://api.example.com/v1', model: 'demo-model' });
-  await pending;
-  assert.equal(h.elements.setLlmTestChip.textContent, 'Connected · 412 ms');
-  assert.match(h.elements.setLlmTestChip.className, /is-ok/);
-  assert.equal(h.elements.setLlmTestedAt.textContent, en['settings.testedNow']);
-  assert.equal(h.elements.setLlmTest.disabled, false);
-
-  h.state.settings.llmTest = { ok: true, latencyMs: 12, status: 200, error: '', requestUrl: '', testedAt: new Date(Date.now() - 2.5 * 60000).toISOString() };
-  h.run('renderSettingsLlmTest()');
-  assert.equal(h.elements.setLlmTestedAt.textContent, 'Tested 2 min ago');
-
-  h.state.settings.keyEditing = true;
-  h.elements.setLlmKeyInput.value = SECRET;
-  h.posts.length = 0;
-  pending = h.run('runSettingsLlmTest()');
-  assert.equal(plain(h.posts[0].body).apiKey, SECRET);
-  h.posts[0].resolve({ ok: false, error: 'unauthorized', status: 401, latencyMs: 20, testedAt: new Date().toISOString(), requestUrl: `https://api.example.com/${SECRET}` });
-  await pending;
-  assert.equal(h.elements.setLlmTestChip.textContent, 'Failed · 401 unauthorized');
-  assert.match(h.elements.setLlmTestChip.className, /is-err/);
-  assert.equal(h.elements.setLlmTestChip.attrs.title.includes(SECRET), false);
-
-  h.posts.length = 0;
-  pending = h.run('runSettingsLlmTest()');
-  h.posts[0].resolve({ ok: false, error: '401 Unauthorized: invalid API key', status: 401, latencyMs: 238, testedAt: new Date().toISOString() });
-  await pending;
-  assert.equal(h.elements.setLlmTestChip.textContent, 'Failed · 401 Unauthorized: invalid API key');
-
-  h.posts.length = 0;
-  pending = h.run('runSettingsLlmTest()');
-  h.posts[0].reject(Object.assign(new Error(`Request failed (503) ${SECRET}`), { status: 503 }));
-  await pending;
-  assert.match(h.elements.setLlmTestChip.textContent, /Failed/);
-  assert.match(h.elements.setLlmTestChip.textContent, /503/);
-  assert.match(h.elements.setLlmTestChip.className, /is-err/);
-  assert.equal(h.elements.setLlmTestChip.textContent.includes(SECRET), false);
-  assert.equal(h.elements.setLlmTest.disabled, false);
 });
 
 test('the digest card fills the scheduler, posts the save body, and falls back to a time-zone text field', async () => {
@@ -865,21 +801,15 @@ test('a settings GET that finishes after a save does not restore the old LLM or 
   assert.equal(JSON.stringify(h.state.settings.llm).includes(SECRET), false);
 });
 
-test('a locale switch during a connection test re-enables the LLM form, and save and test do not overlap', async () => {
+test('a locale switch during an LLM save keeps the form locked until the save finishes', async () => {
   const h = settingsHarness();
   h.state.settings.llm = llmConfig();
   h.run('renderSettingsLlm()');
   h.elements.setLlmApiUrl.value = 'https://api.example.com/v1';
   h.elements.setLlmModel.value = 'demo-model';
-  const pending = h.run('runSettingsLlmTest()');
+  const pending = h.run('saveSettingsLlm()');
   assert.equal(h.elements.setLlmApiUrl.disabled, true);
   assert.equal(h.elements.setLlmSave.disabled, true);
-  assert.equal(h.elements.setLlmTest.disabled, true);
-  const postsDuringTest = h.posts.length;
-  await h.run('saveSettingsLlm()');
-  assert.equal(h.posts.length, postsDuringTest);
-  assert.equal(h.posts.some((entry) => entry.url === '/admin/api/llm-config'), false);
-
   h.state.locale = 'zh-CN';
   h.run('renderSettings()');
   assert.equal(h.elements.setLlmApiUrl.disabled, true);
@@ -887,55 +817,14 @@ test('a locale switch during a connection test re-enables the LLM form, and save
   assert.equal(h.elements.setLlmHeaders.disabled, true);
   assert.equal(h.elements.setLlmDisableJson.disabled, true);
   assert.equal(h.elements.setLlmSave.disabled, true);
-  h.posts[0].resolve({ ok: true, latencyMs: 10, testedAt: new Date().toISOString(), requestUrl: 'https://api.example.com/v1' });
+  h.posts[0].resolve({ success: true, config: llmConfig() });
+  await new Promise((resolve) => setImmediate(resolve));
+  h.posts[1].resolve({ config: llmConfig() });
   await pending;
   assert.equal(h.elements.setLlmApiUrl.disabled, false);
   assert.equal(h.elements.setLlmModel.disabled, false);
   assert.equal(h.elements.setLlmHeaders.disabled, false);
   assert.equal(h.elements.setLlmDisableJson.disabled, false);
-  assert.equal(h.elements.setLlmSave.disabled, false);
-  assert.equal(h.elements.setLlmTest.disabled, false);
-
-  h.state.locale = 'en';
-  h.posts.length = 0;
-  const savePending = h.run('saveSettingsLlm()');
-  assert.equal(h.elements.setLlmTest.disabled, true);
-  const blocked = h.run('runSettingsLlmTest()');
-  await blocked;
-  assert.equal(h.posts.some((entry) => entry.url === '/admin/api/llm-test'), false);
-  h.posts[0].resolve({ success: true, config: llmConfig() });
-  await new Promise((resolve) => setImmediate(resolve));
-  h.posts[1].resolve({ config: llmConfig() });
-  await savePending;
-  assert.equal(h.elements.setLlmSave.disabled, false);
-  assert.equal(h.elements.setLlmTest.disabled, false);
-});
-
-test('Test connection redacts a typed key shorter than 8 characters', async () => {
-  const h = settingsHarness();
-  const shortKey = 'k7';
-  assert.equal(shortKey.length < 8, true);
-  h.state.settings.llm = llmConfig();
-  h.run('renderSettingsLlm()');
-  h.elements.setLlmApiUrl.value = 'https://api.example.com/v1';
-  h.elements.setLlmModel.value = 'demo-model';
-  h.state.settings.keyEditing = true;
-  h.elements.setLlmKeyInput.value = `  ${shortKey}  `;
-  const pending = h.run('runSettingsLlmTest()');
-  assert.equal(plain(h.posts[0].body).apiKey, shortKey);
-  h.posts[0].resolve({
-    ok: false,
-    error: `401 invalid ${shortKey}`,
-    status: 401,
-    requestUrl: `https://api.example.com/${shortKey}`,
-    testedAt: new Date().toISOString(),
-  });
-  await pending;
-  assert.equal(h.elements.setLlmTestChip.textContent.includes(shortKey), false);
-  assert.match(h.elements.setLlmTestChip.textContent, /••••/);
-  assert.equal(h.elements.setLlmTestChip.attrs.title.includes(shortKey), false);
-  assert.match(h.elements.setLlmTestChip.attrs.title, /••••/);
-  assert.equal(domSurface(h.elements, false).includes(shortKey), false);
   assert.equal(h.elements.setLlmSave.disabled, false);
 });
 

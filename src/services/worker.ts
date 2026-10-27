@@ -43,11 +43,10 @@ import {
 } from './runtime-policy';
 import {
   getAgentMemoryEnvPath,
+  LlmConfigValidationError,
   loadAgentMemoryEnv,
   readLlmConfig,
-  redactLlmTestPayload,
   saveLlmConfig,
-  testLlmConnection,
 } from './llm-config';
 import { buildReleaseManifest } from './release';
 import { checkLatestRelease } from './release-check';
@@ -1565,27 +1564,11 @@ app.post('/admin/api/llm-config', adminOnlyGuard, async (req, res) => {
       savedAt: new Date().toISOString(),
     });
   } catch (err: any) {
+    if (err instanceof LlmConfigValidationError) {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('Error saving LLM config:', err);
     res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/admin/api/llm-test', adminOnlyGuard, async (req, res) => {
-  const body = req.body || {};
-  const apiKey = typeof body.apiKey === 'string' ? body.apiKey : undefined;
-  try {
-    const result = await testLlmConnection({
-      apiKey,
-      apiUrl: typeof body.apiUrl === 'string' ? body.apiUrl : undefined,
-      headers: typeof body.headers === 'string' ? body.headers : undefined,
-      model: typeof body.model === 'string' ? body.model : undefined,
-    });
-    // Redact the key that was sent (typed, or the saved key when the field is empty) from every text field.
-    res.json(redactLlmTestPayload(result, apiKey));
-  } catch (err: any) {
-    const failure = redactLlmTestPayload({ error: err.message }, apiKey);
-    console.error('Error testing LLM connection:', failure.error);
-    res.status(500).json(failure);
   }
 });
 

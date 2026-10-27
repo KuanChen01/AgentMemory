@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import dotenv from 'dotenv';
-import { llmBudgetOptions, recordLlmUsage, readLlmBudgetConfig, MIN_OUTPUT_BUDGET, MAX_OUTPUT_BUDGET } from './llm-budget';
+import { readLlmBudgetConfig, MIN_OUTPUT_BUDGET, MAX_OUTPUT_BUDGET } from './llm-budget';
 import { ensurePrivateDir, writePrivateFileAtomic } from './private-files';
 import { sanitizeText } from './redact';
 
@@ -36,15 +36,12 @@ export interface LlmConfigUpdate {
   digestMaxTokens?: number;
 }
 
-export interface LlmConnectionTestResult {
-  contentPreview?: string;
-  error?: string;
-  latencyMs: number;
-  model: string;
-  ok: boolean;
-  requestUrl: string;
-  status?: number;
-  testedAt: string;
+/** User-input mistakes on save (URL-change rule, budget, headers). The admin route maps this to HTTP 400. */
+export class LlmConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LlmConfigValidationError';
+  }
 }
 
 export function getAgentMemoryEnvPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -60,6 +57,27 @@ function maskApiKey(apiKey?: string): string {
 function normalizeApiUrl(value?: string): string {
   const trimmed = String(value || '').trim();
   return trimmed || DEFAULT_LLM_API_URL;
+}
+
+function stripTrailingSlashes(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+// Same endpoint: scheme/host compared case-insensitively, trailing slashes ignored.
+function canonicalApiUrl(value: string): string {
+  const normalized = stripTrailingSlashes(normalizeApiUrl(value));
+  try {
+    const url = new URL(normalized);
+    const path = url.pathname.replace(/\/+$/, '');
+    return `${url.protocol.toLowerCase()}//${url.hostname.toLowerCase()}${url.port ? `:${url.port}` : ''}${path}${url.search}${url.hash}`;
+  } catch {
+    return normalized.toLowerCase();
+  }
+}
+
+function llmApiUrlChanged(updateUrl: string | undefined, currentUrl: string): boolean {
+  if (updateUrl === undefined) return false;
+  return canonicalApiUrl(updateUrl) !== canonicalApiUrl(currentUrl);
 }
 
 function normalizeModel(value?: string): string {
@@ -160,11 +178,6 @@ function applyConfigToProcessEnv(snapshot: Pick<LlmConfigSnapshot, 'apiUrl' | 'd
 // value: fetch rejects non-Latin-1 header values.
 export const SAVED_HEADER_PLACEHOLDER = '••••';
 
-function savedHeadersText(env: NodeJS.ProcessEnv = process.env): string {
-  const parsed = parseEnvText(readEnvText(getAgentMemoryEnvPath(env)));
-  return normalizeHeaders(parsed.AGENTMEM_LLM_HEADERS || env.AGENTMEM_LLM_HEADERS);
-}
-
 function maskHeaderValues(headersText: string): string {
   if (!headersText) return '';
   try {
@@ -185,7 +198,7 @@ export function restoreSavedHeaderValues(headersText: string, savedText: string)
   for (const [name, value] of Object.entries(next)) {
     if (value !== SAVED_HEADER_PLACEHOLDER) continue;
     const savedName = Object.keys(saved).find((key) => key.toLowerCase() === name.toLowerCase());
-    if (savedName === undefined) throw new Error(`Enter a value for the ${name} header: there is no saved value to keep.`);
+    if (savedName === undefined) throw new LlmConfigValidationError(`Enter a value for the ${name} header: there is no saved value to keep.`);
     next[name] = saved[savedName];
   }
   return JSON.stringify(next);
@@ -221,20 +234,41 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
   const envPath = getAgentMemoryEnvPath();
   const currentText = readEnvText(envPath);
   const current = parseEnvText(currentText);
+  const currentApiUrl = normalizeApiUrl(current.AGENTMEM_LLM_API_URL ?? process.env.AGENTMEM_LLM_API_URL);
+  const urlChanged = llmApiUrlChanged(update.apiUrl, currentApiUrl);
+  const currentApiKey = current.AGENTMEM_LLM_API_KEY || process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY || '';
+  const submittedKey = typeof update.apiKey === 'string' ? update.apiKey.trim() : '';
+  if (urlChanged && currentApiKey && !submittedKey) {
+    throw new LlmConfigValidationError(
+      'Changing the API URL requires entering the API key again, so the saved key is never sent to a new address. The saved configuration was not changed.'
+    );
+  }
+  const savedHeaders = normalizeHeaders(current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS);
+  if (urlChanged) {
+    const submittedHeaders = update.headers;
+    if (typeof submittedHeaders === 'string' && submittedHeaders.includes(SAVED_HEADER_PLACEHOLDER)) {
+      throw new LlmConfigValidationError('Changing the API URL requires entering the custom header values again.');
+    }
+    if (submittedHeaders === undefined && savedHeaders) {
+      throw new LlmConfigValidationError('Changing the API URL requires entering the custom header values again.');
+    }
+  }
   const nextApiUrl = normalizeApiUrl(update.apiUrl ?? current.AGENTMEM_LLM_API_URL ?? process.env.AGENTMEM_LLM_API_URL);
   const nextModel = normalizeModel(update.model ?? current.AGENTMEM_LLM_MODEL ?? process.env.AGENTMEM_LLM_MODEL);
-  const nextHeaders = restoreSavedHeaderValues(
-    normalizeHeaders(update.headers ?? current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS),
-    normalizeHeaders(current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS));
+  const nextHeaders = urlChanged
+    ? normalizeHeaders(update.headers ?? '')
+    : restoreSavedHeaderValues(
+        normalizeHeaders(update.headers ?? current.AGENTMEM_LLM_HEADERS ?? process.env.AGENTMEM_LLM_HEADERS),
+        savedHeaders);
   const nextDisableJsonMode = update.disableJsonMode ?? String(current.AGENTMEM_LLM_DISABLE_JSON_MODE ?? process.env.AGENTMEM_LLM_DISABLE_JSON_MODE ?? 'false').toLowerCase() === 'true';
   const currentBudget = readLlmBudgetConfig({ ...process.env, ...current });
   if (update.outputBudgetEnabled !== undefined && typeof update.outputBudgetEnabled !== 'boolean') {
-    throw new Error('outputBudgetEnabled must be a boolean.');
+    throw new LlmConfigValidationError('outputBudgetEnabled must be a boolean.');
   }
   const validateBudget = (value: number | undefined, fallback: number, label: string) => {
     if (value === undefined) return fallback;
     if (!Number.isInteger(value) || value < MIN_OUTPUT_BUDGET || value > MAX_OUTPUT_BUDGET) {
-      throw new Error(`${label} must be an integer from ${MIN_OUTPUT_BUDGET} to ${MAX_OUTPUT_BUDGET}.`);
+      throw new LlmConfigValidationError(`${label} must be an integer from ${MIN_OUTPUT_BUDGET} to ${MAX_OUTPUT_BUDGET}.`);
     }
     return value;
   };
@@ -243,9 +277,9 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
     observationMaxTokens: validateBudget(update.observationMaxTokens, currentBudget.observationMaxTokens, 'observationMaxTokens'),
     digestMaxTokens: validateBudget(update.digestMaxTokens, currentBudget.digestMaxTokens, 'digestMaxTokens'),
   };
-  const nextApiKey = typeof update.apiKey === 'string' && update.apiKey.trim()
-    ? update.apiKey.trim()
-    : current.AGENTMEM_LLM_API_KEY || process.env.AGENTMEM_LLM_API_KEY || '';
+  const nextApiKey = submittedKey
+    ? submittedKey
+    : (urlChanged ? '' : current.AGENTMEM_LLM_API_KEY || process.env.AGENTMEM_LLM_API_KEY || '');
   parseCustomHeaders(nextHeaders);
 
   const updates: Record<string, string | undefined> = {
@@ -275,45 +309,12 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
   return readLlmConfig();
 }
 
-function buildChatCompletionsUrl(apiUrl: string): string {
-  return `${apiUrl.replace(/\/+$/, '')}/chat/completions`;
-}
-
-// The key a connection test actually sends: a nonempty typed key, otherwise the saved env key.
-export function effectiveLlmTestApiKey(apiKey?: unknown, env: NodeJS.ProcessEnv = process.env): string {
-  if (typeof apiKey === 'string' && apiKey.trim()) return apiKey.trim();
-  return env.AGENTMEM_LLM_API_KEY || env.DEEPSEEK_API_KEY || '';
-}
-
 // Replace every occurrence of a nonempty key. Length does not matter: a short typed key is still a secret.
 export function redactLlmSecret(text: string, secret?: string): string {
   const raw = String(text ?? '');
   const key = String(secret ?? '');
   if (!key || raw.indexOf(key) < 0) return raw;
   return raw.split(key).join('••••');
-}
-
-const LLM_TEST_REDACTED_FIELDS = ['error', 'message', 'detail', 'contentPreview', 'requestUrl'] as const;
-
-export function redactLlmTestPayload<T extends Record<string, any>>(
-  payload: T,
-  apiKey?: unknown,
-  env: NodeJS.ProcessEnv = process.env,
-  extraSecrets: string[] = [],
-): T {
-  const secrets = [effectiveLlmTestApiKey(apiKey, env), ...extraSecrets]
-    .filter((s) => typeof s === 'string' && s.length > 0)
-    // Longest first, so a key that contains another key is replaced whole.
-    .sort((a, b) => b.length - a.length);
-  if (secrets.length === 0 || !payload || typeof payload !== 'object') return payload;
-  const next: Record<string, any> = { ...payload };
-  for (const field of LLM_TEST_REDACTED_FIELDS) {
-    if (typeof next[field] !== 'string') continue;
-    let text = next[field] as string;
-    for (const secret of secrets) text = redactLlmSecret(text, secret);
-    next[field] = text;
-  }
-  return next as T;
 }
 
 const LLM_AUTH_HEADER = /auth|key|token|secret|cookie|session|signature|password/i;
@@ -358,112 +359,12 @@ function parseCustomHeaders(headersText: string): Record<string, string> {
     parsed = JSON.parse(headersText);
   } catch {
     // The engine's parse message quotes the input, which may hold a credential.
-    throw new Error('AGENTMEM_LLM_HEADERS must be valid JSON.');
+    throw new LlmConfigValidationError('AGENTMEM_LLM_HEADERS must be valid JSON.');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('AGENTMEM_LLM_HEADERS must be a JSON object.');
+    throw new LlmConfigValidationError('AGENTMEM_LLM_HEADERS must be a JSON object.');
   }
   return Object.fromEntries(
     Object.entries(parsed).map(([key, value]) => [key, String(value)])
   );
-}
-
-export async function testLlmConnection(
-  override: LlmConfigUpdate = {}
-): Promise<LlmConnectionTestResult> {
-  const saved = readLlmConfig();
-  const apiUrl = normalizeApiUrl(override.apiUrl || saved.apiUrl);
-  const model = normalizeModel(override.model || saved.model);
-  const apiKey = effectiveLlmTestApiKey(override.apiKey);
-  const savedHeaders = savedHeadersText();
-  const headersText = restoreSavedHeaderValues(normalizeHeaders(override.headers ?? savedHeaders), savedHeaders);
-  const requestUrl = buildChatCompletionsUrl(apiUrl);
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  let headerSecrets: string[] = [];
-  const seal = (result: LlmConnectionTestResult): LlmConnectionTestResult =>
-    redactLlmTestPayload(result, apiKey, process.env, headerSecrets);
-
-  try {
-    if (!apiKey && !isLocalEndpoint(apiUrl)) {
-      return seal({
-        error: 'AGENTMEM_LLM_API_KEY is required for non-local endpoints.',
-        latencyMs: Date.now() - startedAt,
-        model,
-        ok: false,
-        requestUrl,
-        testedAt: new Date().toISOString(),
-      });
-    }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...parseCustomHeaders(headersText),
-    };
-    if (!headers.Authorization && !headers.authorization && apiKey) {
-      headers.Authorization = `Bearer ${apiKey}`;
-    }
-    headerSecrets = llmHeaderSecrets(headers);
-    const allSecrets = [apiKey, ...headerSecrets];
-
-    const response = await fetch(requestUrl, {
-      body: JSON.stringify({
-        ...llmBudgetOptions(apiUrl, model, 'connection_test'),
-        messages: [
-          { role: 'system', content: 'Reply with exactly: ok' },
-          { role: 'user', content: 'Connection test.' },
-        ],
-        model,
-        temperature: 0,
-      }),
-      headers,
-      method: 'POST',
-      signal: controller.signal,
-    });
-
-    const text = await response.text();
-    const latencyMs = Date.now() - startedAt;
-    if (!response.ok) {
-      return seal({
-        error: redactThenClip(text, 500, allSecrets) || response.statusText,
-        latencyMs,
-        model,
-        ok: false,
-        requestUrl,
-        status: response.status,
-        testedAt: new Date().toISOString(),
-      });
-    }
-
-    let contentPreview = redactThenClip(text, 160, allSecrets);
-    try {
-      const payload = JSON.parse(text);
-      recordLlmUsage('connection_test', payload, latencyMs);
-      contentPreview = redactThenClip(String(payload.choices?.[0]?.message?.content || contentPreview), 160, allSecrets);
-    } catch (_error) {
-      // Keep the raw preview when the provider returns non-JSON success content.
-    }
-
-    return seal({
-      contentPreview,
-      latencyMs,
-      model,
-      ok: true,
-      requestUrl,
-      status: response.status,
-      testedAt: new Date().toISOString(),
-    });
-  } catch (error: any) {
-    return seal({
-      error: error.name === 'AbortError' ? 'Connection test timed out after 15 seconds.' : error.message,
-      latencyMs: Date.now() - startedAt,
-      model,
-      ok: false,
-      requestUrl,
-      testedAt: new Date().toISOString(),
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
 }
