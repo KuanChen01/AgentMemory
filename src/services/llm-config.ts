@@ -234,7 +234,7 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
   const envPath = getAgentMemoryEnvPath();
   const currentText = readEnvText(envPath);
   const current = parseEnvText(currentText);
-  const currentApiUrl = normalizeApiUrl(current.AGENTMEM_LLM_API_URL ?? process.env.AGENTMEM_LLM_API_URL);
+  const currentApiUrl = normalizeApiUrl(current.AGENTMEM_LLM_API_URL || process.env.AGENTMEM_LLM_API_URL || process.env.DEEPSEEK_API_URL);
   const urlChanged = llmApiUrlChanged(update.apiUrl, currentApiUrl);
   const currentApiKey = current.AGENTMEM_LLM_API_KEY || process.env.AGENTMEM_LLM_API_KEY || process.env.DEEPSEEK_API_KEY || '';
   const submittedKey = typeof update.apiKey === 'string' ? update.apiKey.trim() : '';
@@ -253,7 +253,7 @@ export function saveLlmConfig(update: LlmConfigUpdate): LlmConfigSnapshot {
       throw new LlmConfigValidationError('Changing the API URL requires entering the custom header values again.');
     }
   }
-  const nextApiUrl = normalizeApiUrl(update.apiUrl ?? current.AGENTMEM_LLM_API_URL ?? process.env.AGENTMEM_LLM_API_URL);
+  const nextApiUrl = normalizeApiUrl(update.apiUrl ?? currentApiUrl);
   const nextModel = normalizeModel(update.model ?? current.AGENTMEM_LLM_MODEL ?? process.env.AGENTMEM_LLM_MODEL);
   const nextHeaders = urlChanged
     ? normalizeHeaders(update.headers ?? '')

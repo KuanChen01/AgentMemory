@@ -200,3 +200,14 @@ test('POST /admin/api/llm-config rejects a URL change without a key with 400 and
     assert.match(fs.readFileSync(envPath, 'utf8'), new RegExp(`AGENTMEM_LLM_API_KEY=${NEW_KEY}`));
   });
 });
+
+test('legacy DEEPSEEK_API_URL counts as the current URL: same URL keeps the key, a different URL is rejected', () => {
+  withIsolatedLlmEnv(() => {
+    process.env.DEEPSEEK_API_URL = CURRENT_URL;
+    process.env.DEEPSEEK_API_KEY = SAVED_KEY;
+    const snapshot = saveLlmConfig({ apiUrl: CURRENT_URL, model: 'new-model' });
+    assert.equal(snapshot.apiUrl, CURRENT_URL);
+    assert.equal(snapshot.hasApiKey, true);
+    assert.throws(() => saveLlmConfig({ apiUrl: OTHER_URL, model: 'new-model' }), LlmConfigValidationError);
+  });
+});
