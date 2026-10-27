@@ -147,7 +147,7 @@ On POSIX the mode assertions run.
 
 ## Deferred or not fixed
 
-- **Out of scope, untouched as instructed:** credentials carried over when the LLM or embedding endpoint changes, including the connection test sending the saved key to a typed URL (now only the owner can trigger it); redaction inside captured tool events; case-insensitive project path matching in `db.ts`; fixture usernames.
+- **Out of scope, untouched as instructed:** credentials carried over when the embedding endpoint changes; redaction inside captured tool events; case-insensitive project path matching in `db.ts`; fixture usernames. The LLM URL-change carry-over (including the former connection-test endpoint) is resolved separately.
 - **Residual P1:** any local process on the machine may query the worker (owner decision). Port squatting remains if another local process binds 38888 first.
 - **`apiKeyMasked`** still shows the first 4 and last 4 characters of the key in the admin API. This is unchanged pre-existing behaviour, and the audit did not list it.
 - **Existing hook tests** (`grok-hook`, `claude-hook-payload`, `hook-skip-capture`, `grok-build-agent-id`) spawn hooks against fake servers without `AGENTMEM_RUNTIME_DIR` and may use the real `~/.agentmem` auto-recall directory. The requests only reach the in-process fake server.
@@ -155,6 +155,6 @@ On POSIX the mode assertions run.
 
 ## Known limits (tracked separately)
 
-- L03: the connection test (`/admin/api/llm-test`) still sends the saved key and headers to a caller-supplied `apiUrl`.
+- L03: resolved — the connection-test endpoint was removed, and a saved API key / header secret is never carried to a different URL.
 - Header redaction in errors is selected by header name; a gateway echoing a value saved under another name, short values, or fetch header-validation exceptions can still expose it.
 - L05: addressed later on branch `fix/capture-secret-redaction`: captured tool calls and stored memories are redacted on a best-effort basis at ingest, and old tool rows on read from `/admin/api/work-evidence`. Its remaining known limits are listed in `CHANGELOG.md` under [Unreleased] > Security.

@@ -60,7 +60,7 @@ AGENTMEM_LLM_DISABLE_JSON_MODE=false
 AGENTMEM_PORT=38888
 ```
 
-worker 运行后，可以在面板的 **LLM 设置**里切换模型或接口地址、保留或更换 key，并做实时连接测试，改动会保存到同一个 `.env`。全部配置项见[完整参考文档](./Reference.zh.md)，成本相关见 [LLM 成本控制](./LLM%20Cost%20Controls.md)。
+worker 运行后，可以在面板的 **LLM 设置**里切换模型或接口地址、保留或更换 key；更改接口地址时需要重新输入 key。改动会保存到同一个 `.env`。全部配置项见[完整参考文档](./Reference.zh.md)，成本相关见 [LLM 成本控制](./LLM%20Cost%20Controls.md)。
 
 ## 网络说明
 

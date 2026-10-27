@@ -1,6 +1,6 @@
 # LLM Cost Controls
 
-AgentMemory tool summaries, daily digests, Chinese query rewrites and connection tests explicitly disable thinking on the official `api.deepseek.com` endpoint. Provider extensions are omitted for other OpenAI-compatible endpoints. This is important for `deepseek-flash`, whose provider default enables paid reasoning.
+AgentMemory tool summaries, daily digests and Chinese query rewrites explicitly disable thinking on the official `api.deepseek.com` endpoint. Provider extensions are omitted for other OpenAI-compatible endpoints. This is important for `deepseek-flash`, whose provider default enables paid reasoning.
 
 ## Optional output budgets
 
@@ -11,11 +11,10 @@ AgentMemory tool summaries, daily digests, Chinese query rewrites and connection
 | Tool observation | 1024 |
 | Daily digest | 3072 |
 | Query rewrite | 80 |
-| Connection test | 8 |
 
 For file-based configuration, set `AGENTMEM_OUTPUT_BUDGET_ENABLED=true` alongside `AGENTMEM_OBSERVATION_MAX_TOKENS` and `AGENTMEM_DIGEST_MAX_TOKENS`, then restart. Merely setting the numeric values does not enable limits. The panel validates integer values from 256 to 8192 before saving; invalid saves leave the previous configuration intact. Invalid manually edited numeric values use the default and larger values are capped when limits are enabled. An output with `finish_reason=length` is not parsed as a complete observation/digest and is not retried with a larger paid request. Existing raw failure fallback remains available. A successful tool execution with an unavailable or truncated summary can therefore produce no observation; the panel describes this risk. Provider limits can still produce `length` when custom budgets are off.
 
-To observe costs without a custom summary output limit, leave the budget switch off. Non-thinking requests and metering remain enabled. Query rewrites (80 tokens) and connection tests (8 tokens) keep their pre-existing small task limits; the switch controls memory summaries only. Raw input character limits remain separate and unchanged.
+To observe costs without a custom summary output limit, leave the budget switch off. Non-thinking requests and metering remain enabled. Query rewrites (80 tokens) keep their pre-existing small task limit; the switch controls memory summaries only. Raw input character limits remain separate and unchanged.
 
 Raw tool input/output retain their existing 10000/20000 character defaults, configurable with `AGENTMEM_TOOL_INPUT_MAX_CHARS` (1000–30000) and `AGENTMEM_TOOL_OUTPUT_MAX_CHARS` (1000–60000). Oversized text keeps its beginning and end with a truncation marker so final verification results survive. All middle content is outside the model's evidence.
 
