@@ -4,6 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+require('./helpers/isolate-runtime.cjs');
 process.env.AGENTMEM_LLM_RETRY_BASE_MS = '1';
 const llm = require('../dist/services/llm-client.js');
 const { interpretWorkMemory } = require('../dist/services/work-memory.js');
@@ -102,4 +103,60 @@ test('429 is retried; a timeout is not', async () => {
 test('SQLITE_BUSY subtypes count as locked', async () => {
   let n = 0;
   assert.equal(await initializeWithLockRetry(async () => { if (++n < 2) throw Object.assign(new Error('x'), { code: 'SQLITE_BUSY_SNAPSHOT' }); return 1; }, 2000, 1), 1);
+});
+
+test('cross-origin 307 does not forward Authorization or custom headers', async () => {
+  const FAKE_KEY = 'sk-fixture-redirect-key-aaaa';
+  const FAKE_HEADER = 'gw-fixture-redirect-bbbb';
+  let secondHits = 0;
+  let secondHeaders;
+  const second = await server((req, res) => {
+    secondHits++;
+    secondHeaders = { ...req.headers };
+    res.end('should-not-run');
+  });
+  const first = await server((_req, res) => {
+    res.statusCode = 307;
+    res.setHeader('Location', `http://127.0.0.1:${second.address().port}/v1/chat/completions?key=${FAKE_KEY}&h=${FAKE_HEADER}`);
+    res.end();
+  });
+  try {
+    const error = await llm.callLlmJson('observation', 's', 'u', {
+      apiKey: FAKE_KEY, apiUrl: `http://127.0.0.1:${first.address().port}/v1`, model: 'm',
+      headers: { 'X-Gateway': FAKE_HEADER }, disableJsonMode: false,
+    }).catch((e) => e);
+    assert.equal(secondHits, 0);
+    assert.equal(secondHeaders, undefined);
+    assert.match(error.message, /different origin/);
+    assert.doesNotMatch(error.message, new RegExp(FAKE_KEY));
+    assert.doesNotMatch(error.message, new RegExp(FAKE_HEADER));
+  } finally {
+    first.close();
+    second.close();
+  }
+});
+
+test('same-origin 307 still completes the LLM request with auth headers', async () => {
+  let seenAuth;
+  let seenGw;
+  const s = await server((req, res) => {
+    if (req.url === '/v1/chat/completions') {
+      res.statusCode = 307;
+      res.setHeader('Location', '/v1/chat/completions-final');
+      return res.end();
+    }
+    seenAuth = req.headers.authorization;
+    seenGw = req.headers['x-gateway'];
+    reply(res, '{"ok":true}');
+  });
+  try {
+    assert.deepEqual(await llm.callLlmJson('observation', 's', 'u', {
+      apiKey: 'k', apiUrl: `http://127.0.0.1:${s.address().port}/v1`, model: 'm',
+      headers: { 'X-Gateway': 'gw-same-origin' }, disableJsonMode: false,
+    }), { ok: true });
+    assert.equal(seenAuth, 'Bearer k');
+    assert.equal(seenGw, 'gw-same-origin');
+  } finally {
+    s.close();
+  }
 });

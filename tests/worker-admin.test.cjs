@@ -1,4 +1,5 @@
 const { skipShell, skipDrive } = require('./helpers/platform.cjs');
+require('./helpers/isolate-runtime.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

@@ -1,9 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+require('./helpers/isolate-runtime.cjs');
 const { llmBudgetOptions, boundToolText, recordLlmUsage } = require('../dist/services/llm-budget');
+const { callLlmJson } = require('../dist/services/llm-client');
 const { skipRawToolLog } = require('../dist/services/tool-log-policy');
 
 test('DeepSeek budgets disable paid reasoning without sending provider extensions elsewhere', () => {
@@ -70,4 +73,42 @@ test('usage ledger preserves missing metrics as unknown and excludes content and
     assert.equal(rows[1].completion_tokens, null);
     assert.doesNotMatch(text, /sensitive-key|private-content/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('callLlmJson usage logs go to AGENTMEM_RUNTIME_DIR, never HOME/USERPROFILE/.agentmem/logs', async () => {
+  const trapHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-trap-home-'));
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-runtime-'));
+  const saved = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    AGENTMEM_RUNTIME_DIR: process.env.AGENTMEM_RUNTIME_DIR,
+  };
+  process.env.HOME = trapHome;
+  process.env.USERPROFILE = trapHome;
+  process.env.AGENTMEM_RUNTIME_DIR = runtime;
+  const s = http.createServer((_req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({
+      choices: [{ message: { content: '{"ok":true}' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+    }));
+  });
+  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));
+  try {
+    assert.deepEqual(await callLlmJson('observation', 's', 'u', {
+      apiKey: 'k', apiUrl: `http://127.0.0.1:${s.address().port}/v1`, model: 'm',
+      headers: {}, disableJsonMode: false,
+    }), { ok: true });
+    assert.equal(fs.existsSync(path.join(trapHome, '.agentmem')), false);
+    const files = fs.readdirSync(path.join(runtime, 'logs'));
+    assert.ok(files.some((name) => name.startsWith('llm-usage-')));
+  } finally {
+    s.close();
+    if (saved.HOME === undefined) delete process.env.HOME; else process.env.HOME = saved.HOME;
+    if (saved.USERPROFILE === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = saved.USERPROFILE;
+    if (saved.AGENTMEM_RUNTIME_DIR === undefined) delete process.env.AGENTMEM_RUNTIME_DIR;
+    else process.env.AGENTMEM_RUNTIME_DIR = saved.AGENTMEM_RUNTIME_DIR;
+    fs.rmSync(trapHome, { recursive: true, force: true });
+    fs.rmSync(runtime, { recursive: true, force: true });
+  }
 });

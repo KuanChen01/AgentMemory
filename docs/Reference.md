@@ -94,6 +94,7 @@ AGENTMEM_LLM_DISABLE_JSON_MODE=false
 
 # Optional: Custom JSON headers required by your proxy or gateway
 # AGENTMEM_LLM_HEADERS={"X-Custom-Auth":"value"}
+# EMBEDDING_API_KEY is required only when EMBEDDING_API_URL is a different origin from the LLM API.
 
 # Local service port
 AGENTMEM_PORT=38888

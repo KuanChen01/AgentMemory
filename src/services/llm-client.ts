@@ -64,6 +64,35 @@ export function isTransientFetchError(error: any): boolean {
   return false;
 }
 
+function urlOrigin(value: string): string {
+  try { return new URL(value).origin; } catch { return ''; }
+}
+
+function redirectTarget(requestUrl: string, response: Response): string | undefined {
+  if (![301, 302, 303, 307, 308].includes(response.status)) return;
+  const location = response.headers.get('location');
+  if (!location) return;
+  try { return new URL(location, requestUrl).href; } catch { return; }
+}
+
+// Cross-origin redirects must not carry Authorization or custom auth headers (fetch would forward custom headers).
+async function fetchFollowingSameOrigin(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  let current = url;
+  for (let hops = 0; ; hops++) {
+    const response = await fetch(current, { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+    const next = redirectTarget(current, response);
+    if (!next) return response;
+    await response.body?.cancel().catch(() => undefined);
+    if (hops >= 5) throw new Error('LLM request exceeded the redirect limit');
+    const fromOrigin = urlOrigin(current);
+    const toOrigin = urlOrigin(next);
+    if (!fromOrigin || !toOrigin || fromOrigin !== toOrigin) {
+      throw new Error(`LLM request was redirected to a different origin (${toOrigin || 'invalid'}); the API key and custom headers were not forwarded`);
+    }
+    current = next;
+  }
+}
+
 export interface RetryOptions { timeoutMs: number; retries?: number; baseDelayMs?: number; }
 /** fetch with a per-attempt timeout; retries transient network errors and HTTP 429/5xx with exponential backoff. */
 export async function fetchWithRetry(url: string, init: RequestInit, opts: RetryOptions): Promise<Response> {
@@ -73,7 +102,7 @@ export async function fetchWithRetry(url: string, init: RequestInit, opts: Retry
   for (let attempt = 0; ; attempt++) {
     let failure: any;
     try {
-      const response = await fetch(url, { ...init, signal: AbortSignal.timeout(opts.timeoutMs) });
+      const response = await fetchFollowingSameOrigin(url, init, opts.timeoutMs);
       if (response.ok || attempt >= retries || !(response.status === 429 || response.status >= 500)) return response;
       await response.body?.cancel().catch(() => undefined);
       failure = new Error(`HTTP ${response.status}`);

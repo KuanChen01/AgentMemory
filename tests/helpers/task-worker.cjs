@@ -1,4 +1,5 @@
 // Shared isolated worker fixture: a fresh free port per worker, temp DB, local record/replay LLM stub. No real API calls.
+require('./isolate-runtime.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
