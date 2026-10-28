@@ -64,7 +64,7 @@ export function isTransientFetchError(error: any): boolean {
   return false;
 }
 
-export interface RetryOptions { timeoutMs: number; retries?: number; baseDelayMs?: number; }
+export interface RetryOptions { timeoutMs: number; retries?: number; baseDelayMs?: number; noRedirects?: boolean; }
 /** fetch with a per-attempt timeout; retries transient network errors and HTTP 429/5xx with exponential backoff. */
 export async function fetchWithRetry(url: string, init: RequestInit, opts: RetryOptions): Promise<Response> {
   const retries = opts.retries ?? 2;
@@ -73,7 +73,14 @@ export async function fetchWithRetry(url: string, init: RequestInit, opts: Retry
   for (let attempt = 0; ; attempt++) {
     let failure: any;
     try {
-      const response = await fetch(url, { ...init, signal: AbortSignal.timeout(opts.timeoutMs) });
+      const response = await fetch(url, opts.noRedirects
+        ? { ...init, redirect: 'manual', signal: AbortSignal.timeout(opts.timeoutMs) }
+        : { ...init, signal: AbortSignal.timeout(opts.timeoutMs) });
+      // Not transient: isTransientFetchError is false for this message, so it is not retried. The text stays generic.
+      if (opts.noRedirects && response.status >= 300 && response.status < 400) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error('LLM endpoint returned a redirect; redirects are not followed when custom headers are configured. Set the final URL directly.');
+      }
       if (response.ok || attempt >= retries || !(response.status === 429 || response.status >= 500)) return response;
       await response.body?.cancel().catch(() => undefined);
       failure = new Error(`HTTP ${response.status}`);
@@ -97,8 +104,9 @@ export async function callLlmJson(kind: 'observation' | 'daily_digest', system: 
   if (!settings.disableJsonMode) body.response_format = { type: 'json_object' };
   for (let attempt = 0; ; attempt++) {
     const startedAt = Date.now();
+    // Undici already drops Authorization on a cross-origin redirect, but it forwards settings.headers.
     const response = await fetchWithRetry(`${settings.apiUrl}/chat/completions`, { method: 'POST', headers,
-      body: JSON.stringify(body) }, { timeoutMs: 90000 });
+      body: JSON.stringify(body) }, Object.keys(settings.headers || {}).length > 0 ? { timeoutMs: 90000, noRedirects: true } : { timeoutMs: 90000 });
     if (!response.ok) throw new Error(`LLM API error: ${response.status} - ${llmErrorExcerpt(await response.text(), headers, settings.apiKey)}`);
     const data: any = await response.json();
     recordLlmUsage(kind, data, Date.now() - startedAt);

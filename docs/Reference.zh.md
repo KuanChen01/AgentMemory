@@ -94,6 +94,7 @@ AGENTMEM_LLM_DISABLE_JSON_MODE=false
 
 # 可选：针对中转网关或订阅令牌池的自定义 JSON 请求头
 # AGENTMEM_LLM_HEADERS={"X-Custom-Auth":"value"}
+# 仅当 EMBEDDING_API_URL 与 LLM API 不同源时需要设置 EMBEDDING_API_KEY。
 
 # 本地后台服务监听端口
 AGENTMEM_PORT=38888
