@@ -105,19 +105,20 @@ test('SQLITE_BUSY subtypes count as locked', async () => {
   assert.equal(await initializeWithLockRetry(async () => { if (++n < 2) throw Object.assign(new Error('x'), { code: 'SQLITE_BUSY_SNAPSHOT' }); return 1; }, 2000, 1), 1);
 });
 
-test('cross-origin 307 does not forward Authorization or custom headers', async () => {
+const REDIRECT_REFUSED = 'LLM endpoint returned a redirect; redirects are not followed when custom headers are configured. Set the final URL directly.';
+
+test('custom headers reject a cross-origin 307 without leaking the target', async () => {
   const FAKE_KEY = 'sk-fixture-redirect-key-aaaa';
   const FAKE_HEADER = 'gw-fixture-redirect-bbbb';
+  let firstHits = 0;
   let secondHits = 0;
-  let secondHeaders;
-  const second = await server((req, res) => {
-    secondHits++;
-    secondHeaders = { ...req.headers };
-    res.end('should-not-run');
-  });
+  const second = await server((_req, res) => { secondHits++; res.end('should-not-run'); });
+  const secondPort = second.address().port;
+  const location = `http://user:pass@127.0.0.1:${secondPort}/v1/chat/completions?key=${FAKE_KEY}&h=${FAKE_HEADER}`;
   const first = await server((_req, res) => {
+    firstHits++;
     res.statusCode = 307;
-    res.setHeader('Location', `http://127.0.0.1:${second.address().port}/v1/chat/completions?key=${FAKE_KEY}&h=${FAKE_HEADER}`);
+    res.setHeader('Location', location);
     res.end();
   });
   try {
@@ -125,38 +126,65 @@ test('cross-origin 307 does not forward Authorization or custom headers', async 
       apiKey: FAKE_KEY, apiUrl: `http://127.0.0.1:${first.address().port}/v1`, model: 'm',
       headers: { 'X-Gateway': FAKE_HEADER }, disableJsonMode: false,
     }).catch((e) => e);
+    assert.equal(error.message, REDIRECT_REFUSED);
+    assert.equal(firstHits, 1);
     assert.equal(secondHits, 0);
-    assert.equal(secondHeaders, undefined);
-    assert.match(error.message, /different origin/);
-    assert.doesNotMatch(error.message, new RegExp(FAKE_KEY));
-    assert.doesNotMatch(error.message, new RegExp(FAKE_HEADER));
+    assert.equal(error.message.includes(FAKE_KEY), false);
+    assert.equal(error.message.includes(FAKE_HEADER), false);
+    assert.equal(error.message.includes('user:pass'), false);
+    assert.equal(error.message.includes(String(secondPort)), false);
+    assert.equal(error.message.includes(location), false);
   } finally {
     first.close();
     second.close();
   }
 });
 
-test('same-origin 307 still completes the LLM request with auth headers', async () => {
-  let seenAuth;
-  let seenGw;
+test('custom headers reject a same-origin 307 and do not hit the target', async () => {
+  let targetHits = 0;
   const s = await server((req, res) => {
     if (req.url === '/v1/chat/completions') {
       res.statusCode = 307;
       res.setHeader('Location', '/v1/chat/completions-final');
       return res.end();
     }
-    seenAuth = req.headers.authorization;
-    seenGw = req.headers['x-gateway'];
+    targetHits++;
     reply(res, '{"ok":true}');
   });
   try {
-    assert.deepEqual(await llm.callLlmJson('observation', 's', 'u', {
+    const error = await llm.callLlmJson('observation', 's', 'u', {
       apiKey: 'k', apiUrl: `http://127.0.0.1:${s.address().port}/v1`, model: 'm',
       headers: { 'X-Gateway': 'gw-same-origin' }, disableJsonMode: false,
-    }), { ok: true });
-    assert.equal(seenAuth, 'Bearer k');
-    assert.equal(seenGw, 'gw-same-origin');
+    }).catch((e) => e);
+    assert.equal(error.message, REDIRECT_REFUSED);
+    assert.equal(targetHits, 0);
   } finally {
     s.close();
+  }
+});
+
+test('without custom headers a cross-origin 307 is followed and Authorization is stripped', async () => {
+  let secondHits = 0;
+  let secondAuth;
+  const second = await server((req, res) => {
+    secondHits++;
+    secondAuth = req.headers.authorization;
+    reply(res, '{"ok":true}');
+  });
+  const first = await server((_req, res) => {
+    res.statusCode = 307;
+    res.setHeader('Location', `http://127.0.0.1:${second.address().port}/v1/chat/completions`);
+    res.end();
+  });
+  try {
+    assert.deepEqual(await llm.callLlmJson('observation', 's', 'u', {
+      apiKey: 'sk-fixture-follow-key', apiUrl: `http://127.0.0.1:${first.address().port}/v1`, model: 'm',
+      headers: {}, disableJsonMode: false,
+    }), { ok: true });
+    assert.equal(secondHits, 1);
+    assert.equal(secondAuth, undefined);
+  } finally {
+    first.close();
+    second.close();
   }
 });

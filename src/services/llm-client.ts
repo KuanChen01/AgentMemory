@@ -64,36 +64,7 @@ export function isTransientFetchError(error: any): boolean {
   return false;
 }
 
-function urlOrigin(value: string): string {
-  try { return new URL(value).origin; } catch { return ''; }
-}
-
-function redirectTarget(requestUrl: string, response: Response): string | undefined {
-  if (![301, 302, 303, 307, 308].includes(response.status)) return;
-  const location = response.headers.get('location');
-  if (!location) return;
-  try { return new URL(location, requestUrl).href; } catch { return; }
-}
-
-// Cross-origin redirects must not carry Authorization or custom auth headers (fetch would forward custom headers).
-async function fetchFollowingSameOrigin(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-  let current = url;
-  for (let hops = 0; ; hops++) {
-    const response = await fetch(current, { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
-    const next = redirectTarget(current, response);
-    if (!next) return response;
-    await response.body?.cancel().catch(() => undefined);
-    if (hops >= 5) throw new Error('LLM request exceeded the redirect limit');
-    const fromOrigin = urlOrigin(current);
-    const toOrigin = urlOrigin(next);
-    if (!fromOrigin || !toOrigin || fromOrigin !== toOrigin) {
-      throw new Error(`LLM request was redirected to a different origin (${toOrigin || 'invalid'}); the API key and custom headers were not forwarded`);
-    }
-    current = next;
-  }
-}
-
-export interface RetryOptions { timeoutMs: number; retries?: number; baseDelayMs?: number; }
+export interface RetryOptions { timeoutMs: number; retries?: number; baseDelayMs?: number; noRedirects?: boolean; }
 /** fetch with a per-attempt timeout; retries transient network errors and HTTP 429/5xx with exponential backoff. */
 export async function fetchWithRetry(url: string, init: RequestInit, opts: RetryOptions): Promise<Response> {
   const retries = opts.retries ?? 2;
@@ -102,7 +73,14 @@ export async function fetchWithRetry(url: string, init: RequestInit, opts: Retry
   for (let attempt = 0; ; attempt++) {
     let failure: any;
     try {
-      const response = await fetchFollowingSameOrigin(url, init, opts.timeoutMs);
+      const response = await fetch(url, opts.noRedirects
+        ? { ...init, redirect: 'manual', signal: AbortSignal.timeout(opts.timeoutMs) }
+        : { ...init, signal: AbortSignal.timeout(opts.timeoutMs) });
+      // Not transient: isTransientFetchError is false for this message, so it is not retried. The text stays generic.
+      if (opts.noRedirects && response.status >= 300 && response.status < 400) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error('LLM endpoint returned a redirect; redirects are not followed when custom headers are configured. Set the final URL directly.');
+      }
       if (response.ok || attempt >= retries || !(response.status === 429 || response.status >= 500)) return response;
       await response.body?.cancel().catch(() => undefined);
       failure = new Error(`HTTP ${response.status}`);
@@ -126,8 +104,9 @@ export async function callLlmJson(kind: 'observation' | 'daily_digest', system: 
   if (!settings.disableJsonMode) body.response_format = { type: 'json_object' };
   for (let attempt = 0; ; attempt++) {
     const startedAt = Date.now();
+    // Undici already drops Authorization on a cross-origin redirect, but it forwards settings.headers.
     const response = await fetchWithRetry(`${settings.apiUrl}/chat/completions`, { method: 'POST', headers,
-      body: JSON.stringify(body) }, { timeoutMs: 90000 });
+      body: JSON.stringify(body) }, Object.keys(settings.headers || {}).length > 0 ? { timeoutMs: 90000, noRedirects: true } : { timeoutMs: 90000 });
     if (!response.ok) throw new Error(`LLM API error: ${response.status} - ${llmErrorExcerpt(await response.text(), headers, settings.apiKey)}`);
     const data: any = await response.json();
     recordLlmUsage(kind, data, Date.now() - startedAt);
