@@ -1095,27 +1095,8 @@ ${WALLPAPER_CSS}
     opacity: 0.65;
   }
 
-  .llmControlCard,
-  .llmTestCard {
+  .llmControlCard {
     min-width: 0;
-  }
-
-  .llmTestResult {
-    border-radius: var(--card-radius);
-    padding: 14px;
-    background: rgba(255, 255, 255, 0.36);
-    border: 1px solid rgba(255, 255, 255, 0.68);
-    overflow-wrap: anywhere;
-  }
-
-  .llmTestResult.success {
-    background: rgba(20, 133, 93, 0.08);
-    border-color: rgba(20, 133, 93, 0.20);
-  }
-
-  .llmTestResult.error {
-    background: rgba(185, 59, 66, 0.08);
-    border-color: rgba(185, 59, 66, 0.22);
   }
 
   .hidden {
@@ -11174,8 +11155,7 @@ ${WALLPAPER_CSS}
   .devToolsView .recordItem,
   .devToolsView pre,
   .devToolsView .mono,
-  .devToolsView table,
-  .devToolsView .llmTestResult {
+  .devToolsView table {
     border: 1px solid var(--shell-line);
     border-radius: 14px;
     background: var(--chip-fill);
@@ -11185,7 +11165,6 @@ ${WALLPAPER_CSS}
 
   .devToolsView pre,
   .devToolsView .mono,
-  .devToolsView .llmTestResult,
   .devToolsView table {
     padding: 12px 14px;
   }

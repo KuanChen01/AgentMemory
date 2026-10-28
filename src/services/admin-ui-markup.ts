@@ -1070,6 +1070,7 @@ function renderSettingsView(): string {
               <label class="setField">
                 <span class="setLabel" data-i18n="settings.llmEndpoint">Endpoint</span>
                 <input class="setInput" id="setLlmApiUrl" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+                <p class="setHint" data-i18n="settings.llmUrlChangeHint">Changing the URL requires entering the API key again.</p>
               </label>
               <label class="setField">
                 <span class="setLabel" data-i18n="settings.llmModel">Model</span>
@@ -1104,9 +1105,6 @@ function renderSettingsView(): string {
             </details>
             <div class="setFoot">
               <p class="setNote" id="setLlmNote" role="status" aria-live="polite"></p>
-              <span class="setChip statusChip is-neutral" id="setLlmTestChip" hidden></span>
-              <span class="setMuted" id="setLlmTestedAt"></span>
-              <button class="sklAction is-outline setButton" id="setLlmTest" type="button" data-i18n="settings.llmTest">Test connection</button>
               <button class="sklAction is-primary setButton" id="setLlmSave" type="button" data-i18n="settings.llmSave">Save</button>
             </div>
           </section>
@@ -1526,10 +1524,9 @@ export function renderAdminWorkbenchMarkup(): string {
         <div class="panelHeader">
           <div>
             <div class="sectionEyebrow" data-i18n="llm.section">LLM Settings</div>
-            <h2 class="panelTitle" data-i18n="llm.title">Model routing and live connection test</h2>
+            <h2 class="panelTitle" data-i18n="llm.title">Model routing</h2>
             <p class="panelLead" data-i18n="llm.lead">
-              Switch the summarization model used by the worker, update the OpenAI-compatible endpoint,
-              and run a small chat-completions test before trusting new settings.
+              Switch the summarization model used by the worker and update the OpenAI-compatible endpoint.
             </p>
           </div>
           <div id="llmStatusLine" class="statusLine">
@@ -1553,6 +1550,7 @@ export function renderAdminWorkbenchMarkup(): string {
               <label>
                 <span class="fieldLabel" data-i18n="llm.apiUrl">API Base URL</span>
                 <input id="llmApiUrlInput" class="textInput" type="url" data-i18n-placeholder="llm.placeholderApiUrl" placeholder="https://api.deepseek.com/v1" />
+                <p class="finePrint" data-i18n="llm.urlChangeHint">Changing the URL requires entering the API key again.</p>
               </label>
               <label>
                 <span class="fieldLabel" data-i18n="llm.modelName">Model</span>
@@ -1601,18 +1599,6 @@ export function renderAdminWorkbenchMarkup(): string {
               </div>
             </div>
           </section>
-
-          <aside class="card llmTestCard">
-            <div class="metaLabel" data-i18n="llm.connectionTest">Connection Test</div>
-            <h3 class="policyTitle" style="margin-top: 10px;" data-i18n="llm.testTitle">Verify this model before the next summary job</h3>
-            <p class="panelLead" style="margin-top: 8px;" data-i18n="llm.testLead">
-              Sends a tiny chat-completions request using the form values currently shown here. The test does not write observations.
-            </p>
-            <button id="llmTestButton" class="button primary" type="button" style="margin-top: 18px;" data-i18n="llm.runTest">Test Connection</button>
-            <div id="llmTestResult" class="llmTestResult emptyState" style="margin-top: 16px;" data-i18n="llm.noTestYet">
-              No connection test has been run yet.
-            </div>
-          </aside>
         </div>
       </section>
 

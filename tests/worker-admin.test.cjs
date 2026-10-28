@@ -142,41 +142,6 @@ async function startWorkerWithEnv(dbPath, port, extraEnv) {
   return child;
 }
 
-async function startMockLlmServer() {
-  const requests = [];
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => {
-      body += chunk;
-    });
-    req.on('end', () => {
-      requests.push({
-        body: body ? JSON.parse(body) : {},
-        headers: req.headers,
-        url: req.url,
-      });
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: 'ok',
-            },
-          },
-        ],
-      }));
-    });
-  });
-
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  return {
-    close: () => new Promise((resolve) => server.close(resolve)),
-    requests,
-    url: `http://127.0.0.1:${address.port}/v1`,
-  };
-}
-
 async function startMockObservationSummaryServer(observationPayload) {
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -484,7 +449,7 @@ test('worker serves admin UI and admin APIs', { skip: skipDrive }, async () => {
     assert.match(adminHtml, /id="proceduralPostTaskReviewList"/);
     assert.match(adminHtml, /llmSettingsPanel/);
     assert.match(adminHtml, /id="llmModelInput"/);
-    assert.match(adminHtml, /id="llmTestButton"/);
+    assert.equal(adminHtml.includes('id="llm' + 'TestButton"'), false);
     assert.match(adminHtml, /projectContextPanel/);
     assert.match(adminHtml, /searchDiagnosticsPanel/);
     assert.match(adminHtml, /id="localeToggle"/);
@@ -683,7 +648,7 @@ test('worker normalizes admin release-check network errors without breaking the 
   }
 });
 
-test('worker admin LLM settings save model and test local connection', async () => {
+test('worker admin LLM settings save model and endpoint', async () => {
   const dbPath = makeDbPath();
   const port = await makePort();
   const envPath = path.join(os.tmpdir(), `agentmemory-worker-llm-${randomUUID()}.env`);
@@ -695,10 +660,10 @@ test('worker admin LLM settings save model and test local connection', async () 
     '',
   ].join('\n'));
   await seedDatabase(dbPath);
-  const mockLlm = await startMockLlmServer();
   const child = await startWorkerWithEnv(dbPath, port, {
     AGENTMEM_ENV_PATH: envPath,
   });
+  const nextApiUrl = 'https://llm.example.test/v1';
 
   try {
     const configResponse = await fetch(`http://127.0.0.1:${port}/admin/api/llm-config`);
@@ -714,7 +679,8 @@ test('worker admin LLM settings save model and test local connection', async () 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        apiUrl: mockLlm.url,
+        apiKey: 'secret-token-1234',
+        apiUrl: nextApiUrl,
         disableJsonMode: true,
         headers: '{"X-Test-Header":"agentmemory"}',
         model: 'mock-chat-model',
@@ -726,7 +692,7 @@ test('worker admin LLM settings save model and test local connection', async () 
     assert.equal(saveResponse.status, 200);
     const savePayload = await saveResponse.json();
     assert.equal(savePayload.success, true);
-    assert.equal(savePayload.config.apiUrl, mockLlm.url);
+    assert.equal(savePayload.config.apiUrl, nextApiUrl);
     assert.equal(savePayload.config.model, 'mock-chat-model');
     assert.equal(savePayload.config.disableJsonMode, true);
     assert.equal(savePayload.config.hasApiKey, true);
@@ -736,27 +702,16 @@ test('worker admin LLM settings save model and test local connection', async () 
 
     const envText = fs.readFileSync(envPath, 'utf8');
     assert.match(envText, /AGENTMEM_LLM_API_KEY=secret-token-1234/);
-    assert.match(envText, new RegExp(`AGENTMEM_LLM_API_URL=${mockLlm.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(envText, /AGENTMEM_LLM_API_URL=https:\/\/llm\.example\.test\/v1/);
     assert.match(envText, /AGENTMEM_LLM_MODEL=mock-chat-model/);
     assert.match(envText, /AGENTMEM_LLM_DISABLE_JSON_MODE=true/);
 
-    const testResponse = await fetch(`http://127.0.0.1:${port}/admin/api/llm-test`, {
+    const gone = await fetch(`http://127.0.0.1:${port}/admin/api/llm-test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiUrl: mockLlm.url,
-        headers: '{"X-Test-Header":"agentmemory"}',
-        model: 'mock-chat-model',
-      }),
+      body: JSON.stringify({ apiUrl: nextApiUrl, model: 'mock-chat-model' }),
     });
-    assert.equal(testResponse.status, 200);
-    const testPayload = await testResponse.json();
-    assert.equal(testPayload.ok, true);
-    assert.equal(testPayload.model, 'mock-chat-model');
-    assert.equal(testPayload.status, 200);
-    assert.equal(mockLlm.requests.at(-1).url, '/v1/chat/completions');
-    assert.equal(mockLlm.requests.at(-1).body.model, 'mock-chat-model');
-    assert.equal(mockLlm.requests.at(-1).headers['x-test-header'], 'agentmemory');
+    assert.equal(gone.status, 404);
     const settingsUrl = `http://127.0.0.1:${port}/admin/api/llm-config`;
     const postSettings = (body) => fetch(settingsUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const invalidResponse = await postSettings({ observationMaxTokens: 0 });
@@ -774,7 +729,6 @@ test('worker admin LLM settings save model and test local connection', async () 
     assert.match(fs.readFileSync(envPath, 'utf8'), /AGENTMEM_OUTPUT_BUDGET_ENABLED=false/);
   } finally {
     await stopWorker(child, port);
-    await mockLlm.close();
     cleanupDb(dbPath);
     fs.rmSync(envPath, { force: true });
   }

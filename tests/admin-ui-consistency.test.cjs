@@ -122,15 +122,12 @@ test('Activity, Pipeline, Digests, Projects and Skills empty states use renderEm
 });
 
 test('Settings chips and the Activity drawer use statusChip', () => {
-  for (const name of ['renderSettingsLlm', 'renderSettingsLlmTest', 'renderSettingsAbout', 'renderDrawerTask', 'renderMemoryDrawerBody']) {
+  for (const name of ['renderSettingsLlm', 'renderSettingsAbout', 'renderDrawerTask', 'renderMemoryDrawerBody']) {
     assert.match(uiClientFunction(name), /statusChip\(/, name);
   }
   const llm = uiClientFunction('renderSettingsLlm');
   assert.match(llm, /is-ok/);
   assert.match(llm, /is-warn/);
-  const testChip = uiClientFunction('renderSettingsLlmTest');
-  assert.match(testChip, /is-ok/);
-  assert.match(testChip, /is-err/);
   const about = uiClientFunction('renderSettingsAbout');
   assert.match(about, /is-ok|is-warn|view\.tone/);
 });

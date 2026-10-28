@@ -396,9 +396,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     selectedId: null,
     isSavingPolicy: false,
     isSavingLlm: false,
-    isTestingLlm: false,
     llmConfig: null,
-    llmTestResult: null,
     releaseCheck: null,
     contextPayload: null,
     digestSchedulerPayload: null,
@@ -622,8 +620,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       signatures: {},
     },
     // Settings: its own copies of llm-config and digest-scheduler (the legacy panels keep theirs). llmError and
-    // digestError hold a failed load; llmSaveError and digestSaveError are inline write failures; llmTest is the
-    // last test result; keyEditing shows the empty Replace-key input; confirm is "read" or "write" while the
+    // digestError hold a failed load; llmSaveError and digestSaveError are inline write failures;
+    // keyEditing shows the empty Replace-key input; confirm is "read" or "write" while the
     // switch-off confirm is open. policyError is the calm note after a switch save fails. llmLoadSeq and
     // digestLoadSeq identify the newest load; a save bumps them so an older GET cannot restore the form.
     settings: {
@@ -634,8 +632,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       llmSaveError: "",
       llmSaved: false,
       llmFormKey: "",
-      llmTest: null,
-      llmTesting: false,
       keyEditing: false,
       llmLoadSeq: 0,
       digest: null,
@@ -742,8 +738,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     llmSaveStatus: document.getElementById("llmSaveStatus"),
     llmReloadButton: document.getElementById("llmReloadButton"),
     llmSaveButton: document.getElementById("llmSaveButton"),
-    llmTestButton: document.getElementById("llmTestButton"),
-    llmTestResult: document.getElementById("llmTestResult"),
     ledgerStatusLine: document.getElementById("ledgerStatusLine"),
     readPolicyCard: document.getElementById("readPolicyCard"),
     writePolicyCard: document.getElementById("writePolicyCard"),
@@ -1079,9 +1073,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setLlmBudget: document.getElementById("setLlmBudget"),
     setLlmEnvPath: document.getElementById("setLlmEnvPath"),
     setLlmNote: document.getElementById("setLlmNote"),
-    setLlmTestChip: document.getElementById("setLlmTestChip"),
-    setLlmTestedAt: document.getElementById("setLlmTestedAt"),
-    setLlmTest: document.getElementById("setLlmTest"),
     setLlmSave: document.getElementById("setLlmSave"),
     setDigestCard: document.getElementById("setDigestCard"),
     setDigestEnabled: document.getElementById("setDigestEnabled"),
@@ -1444,7 +1435,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderMemoryDrawer();
     renderProceduralWorkspace();
     renderLlmConfig();
-    renderLlmTestResult();
     renderDailyDigestScheduler();
     renderDailyDigest();
     renderProjectContext();
@@ -1798,7 +1788,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       ? t("llm.budgetActive", { observation: config.observationMaxTokens, digest: config.digestMaxTokens })
       : t("llm.budgetOff");
 
-    if (!state.isSavingLlm && !state.isTestingLlm) {
+    if (!state.isSavingLlm) {
       els.llmApiUrlInput.value = config.apiUrl || "";
       els.llmModelInput.value = config.model || "";
       els.llmHeadersInput.value = config.headers || "";
@@ -1810,7 +1800,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     renderLlmBudgetFields();
     els.llmSaveButton.disabled = state.isSavingLlm;
     els.llmReloadButton.disabled = state.isSavingLlm;
-    els.llmTestButton.disabled = state.isSavingLlm || state.isTestingLlm;
     if (state.isSavingLlm) {
       els.llmSaveStatus.textContent = t("common.saving");
     }
@@ -1818,7 +1807,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
 
   function renderLlmBudgetFields() {
     const enabled = els.llmOutputBudgetEnabledInput.checked;
-    const busy = state.isSavingLlm || state.isTestingLlm;
+    const busy = state.isSavingLlm;
     els.llmOutputBudgetEnabledInput.disabled = busy;
     els.llmObservationMaxTokensInput.disabled = !enabled || busy;
     els.llmDigestMaxTokensInput.disabled = !enabled || busy;
@@ -1845,28 +1834,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       payload.apiKey = apiKey;
     }
     return payload;
-  }
-
-  function renderLlmTestResult() {
-    const result = state.llmTestResult;
-    if (!result) {
-      els.llmTestResult.className = "llmTestResult emptyState";
-      els.llmTestResult.textContent = state.isTestingLlm ? t("llm.testing") : t("llm.noTestYet");
-      return;
-    }
-
-    const statusLine = result.ok
-      ? t("llm.testPassed", { latency: String(result.latencyMs || 0) })
-      : t("llm.testFailed", { latency: String(result.latencyMs || 0) });
-    const details = [
-      '<div class="' + statusVariantClass(result.ok ? 'success' : 'error') + '">' + escapeHtml(statusLine) + '</div>',
-      '<div class="finePrint" style="margin-top: 10px;">' + escapeHtml(t("llm.testEndpoint", { endpoint: result.requestUrl || "" })) + '</div>',
-      result.status ? '<div class="finePrint">' + escapeHtml(t("llm.testStatus", { status: String(result.status) })) + '</div>' : '',
-      result.contentPreview ? '<div class="finePrint">' + escapeHtml(t("llm.testResponse", { response: result.contentPreview })) + '</div>' : '',
-      result.error ? '<div class="finePrint">' + escapeHtml(t("llm.testError", { error: result.error })) + '</div>' : '',
-    ];
-    els.llmTestResult.className = "llmTestResult " + (result.ok ? "success" : "error");
-    els.llmTestResult.innerHTML = details.join("");
   }
 
   function getLocalDateInputValue(date) {
@@ -10117,44 +10084,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
-  async function runLlmConnectionTest() {
-    const payloadToTest = getLlmFormPayload(true);
-    state.isTestingLlm = true;
-    state.llmTestResult = null;
-    renderLlmConfig();
-    renderLlmTestResult();
-    setStoredStatusLine("llm", els.llmStatusLine, "llm.testing", {}, "warning");
-    try {
-      state.llmTestResult = await fetchJson("/admin/api/llm-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payloadToTest),
-      });
-      state.isTestingLlm = false;
-      renderLlmConfig();
-      renderLlmTestResult();
-      setRawStatusLine(
-        "llm",
-        els.llmStatusLine,
-        state.llmTestResult.ok
-          ? t("llm.testPassed", { latency: String(state.llmTestResult.latencyMs || 0) })
-          : t("llm.testFailed", { latency: String(state.llmTestResult.latencyMs || 0) }),
-        state.llmTestResult.ok ? "" : "error"
-      );
-    } catch (error) {
-      state.isTestingLlm = false;
-      state.llmTestResult = {
-        error: error.message || t("llm.testFailed", { latency: "0" }),
-        latencyMs: 0,
-        ok: false,
-        requestUrl: "",
-      };
-      renderLlmConfig();
-      renderLlmTestResult();
-      setRawStatusLine("llm", els.llmStatusLine, error.message || t("llm.testFailed", { latency: "0" }), "error");
-    }
-  }
-
   async function loadRecords(statusKey) {
     if (statusKey) {
       setStoredStatusLine("ledger", els.listStatus, statusKey, {}, "");
@@ -11508,22 +11437,9 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return "";
   }
 
-  // Keep only the fields the chip renders, with the typed key scrubbed out of every string.
-  function settingsLlmTestView(result, secret) {
-    if (!result) return null;
-    return {
-      ok: !!result.ok,
-      latencyMs: result.latencyMs,
-      status: result.status,
-      error: settingsRedacted(result.error || "", secret),
-      requestUrl: settingsRedacted(result.requestUrl || "", secret),
-      testedAt: result.testedAt || "",
-    };
-  }
-
   async function saveSettingsLlm() {
     const set = state.settings;
-    if (set.llmSaving || set.llmTesting || !set.llm) return;
+    if (set.llmSaving || !set.llm) return;
     const body = settingsLlmPayload();
     const problem = settingsLlmProblem(body);
     set.llmSaved = false;
@@ -11564,38 +11480,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       set.llmSaveError = settingsRedacted(error && error.message ? error.message : "", secret) || t("settings.saveFailed", { error: "" });
     } finally {
       set.llmSaving = false;
-      renderSettingsLlm();
-    }
-  }
-
-  // A real outbound call: the form's endpoint and model, the saved key unless a new one was typed.
-  async function runSettingsLlmTest() {
-    const set = state.settings;
-    if (set.llmTesting || set.llmSaving || !set.llm) return;
-    set.llmTesting = true;
-    renderSettingsLlm();
-    const typed = settingsTypedKey();
-    const body = {
-      apiUrl: els.setLlmApiUrl.value.trim(),
-      model: els.setLlmModel.value.trim(),
-      headers: els.setLlmHeaders.value.trim(),
-    };
-    if (set.keyEditing && typed.trim()) body.apiKey = typed.trim();
-    try {
-      set.llmTest = settingsLlmTestView(await fetchJson("/admin/api/llm-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }), typed);
-    } catch (error) {
-      set.llmTest = settingsLlmTestView({
-        ok: false,
-        error: error && error.message ? error.message : String(error || ""),
-        status: error && error.status,
-        testedAt: new Date().toISOString(),
-      }, typed);
-    } finally {
-      set.llmTesting = false;
       renderSettingsLlm();
     }
   }
@@ -11653,7 +11537,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setHidden(els.setLlmKeyChip, !config || set.keyEditing);
     setText(els.setLlmReplaceKey, set.keyEditing ? t("settings.confirmCancel") : t(hasKey ? "settings.llmReplaceKey" : "settings.llmSetKey"));
     setAttr(els.setLlmReplaceKey, "aria-expanded", set.keyEditing ? "true" : "false");
-    const locked = !!(set.llmSaving || set.llmTesting || !config);
+    const locked = !!(set.llmSaving || !config);
     els.setLlmReplaceKey.disabled = locked;
     if (els.setLlmKeyInput) els.setLlmKeyInput.disabled = !!set.llmSaving;
     setText(els.setLlmKeyHint, t("settings.llmKeyLocal"));
@@ -11676,41 +11560,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     [els.setLlmApiUrl, els.setLlmModel, els.setLlmHeaders, els.setLlmDisableJson, els.setLlmSave].forEach((control) => {
       if (control && control.disabled !== locked) control.disabled = locked;
     });
-    renderSettingsLlmTest();
-  }
-
-  function renderSettingsLlmTest() {
-    const set = state.settings;
-    if (els.setLlmTest) {
-      setText(els.setLlmTest, set.llmTesting ? t("settings.llmTesting") : t("settings.llmTest"));
-      setAttr(els.setLlmTest, "aria-busy", set.llmTesting ? "true" : "");
-      els.setLlmTest.disabled = !!(set.llmTesting || set.llmSaving || !set.llm);
-    }
-    if (!els.setLlmTestChip) return;
-    const result = set.llmTest;
-    setHidden(els.setLlmTestChip, !result || set.llmTesting);
-    if (result) {
-      const error = String(result.error || "").trim();
-      const label = result.ok
-        ? t("settings.llmConnected", { latency: String(Math.round(Number(result.latencyMs) || 0)) })
-        : result.status && error.indexOf(String(result.status)) !== 0
-          ? t("settings.llmFailedStatus", { status: String(result.status), error: error })
-          : t("settings.llmFailed", { error: error || String(result.status || "") });
-      setText(els.setLlmTestChip, label);
-      applyChipMarkup(els.setLlmTestChip, statusChip(label, result.ok ? "success" : "danger", "setChip setTestChip " + (result.ok ? "is-ok" : "is-err")));
-      setAttr(els.setLlmTestChip, "title", settingsRedacted(result.ok ? String(result.requestUrl || "") : error, settingsTypedKey()));
-    }
-    const testedAt = result ? parseTimestamp(result.testedAt) : null;
-    let tested = "";
-    if (set.llmTesting) {
-      tested = "";
-    } else if (testedAt) {
-      const minutes = Math.floor((Date.now() - testedAt.getTime()) / 60000);
-      tested = minutes < 1 ? t("settings.testedNow") : minutes < 60 ? t("settings.testedMinutes", { n: minutes }) : t("settings.testedAt", { time: formatSettingsStamp(testedAt) });
-    } else if (state.settings.llm) {
-      tested = t("settings.llmNotTested");
-    }
-    setText(els.setLlmTestedAt, tested);
   }
 
   function renderSettingsDayOptions() {
@@ -12097,9 +11946,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     [els.setDigestEnabled, els.setDigestLookback, els.setDigestZone].forEach((input) => {
       if (input) input.addEventListener("change", clearDigestError);
     });
-    els.setLlmTest.addEventListener("click", () => {
-      void runSettingsLlmTest();
-    });
     els.setReleaseCheck.addEventListener("click", () => {
       if (!state.isCheckingRelease) void loadReleaseCheck();
     });
@@ -12311,7 +12157,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
     if (state.activeView === "settingsView") {
       // The overview poll already refreshed the switches; keep the relative times honest.
-      renderSettingsLlmTest();
       renderSettingsDigest();
       return;
     }
@@ -12438,9 +12283,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       await saveLlmSettings();
     });
     els.llmOutputBudgetEnabledInput.addEventListener("change", renderLlmBudgetFields);
-    els.llmTestButton.addEventListener("click", async () => {
-      await runLlmConnectionTest();
-    });
     els.releaseCheckButton.addEventListener("click", async () => {
       await loadReleaseCheck();
     });

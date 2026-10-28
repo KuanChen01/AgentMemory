@@ -215,7 +215,7 @@ The page provides:
 
 *   **Runtime** for global `readEnabled` / `writeEnabled` control, project inventory, daily digest status / manual run / scheduler settings, workbench posture, and a read-only GitHub Release update check with manual upgrade guidance
 *   **Procedural Skills** for reviewing digest `skill_candidates`, promoting them to draft, flipping lifecycle status, recording success/failure/rejected/skipped feedback, inspecting feedback history, evidence, lifecycle, recommendation signals, and the latest automatic post-task review artifacts next to task-level query validation
-*   **LLM Settings** for switching `AGENTMEM_LLM_MODEL`, updating the OpenAI-compatible API base URL, preserving or replacing the API key, and running a live connection test
+*   **LLM Settings** for switching `AGENTMEM_LLM_MODEL`, updating the OpenAI-compatible API base URL, and preserving or replacing the API key
 *   **Project Context** for the current `ProjectContextView`, recent daily digests, rendered startup text, bounded context package metrics, temporal slice diagnostics, and policy decision trace
 *   **State Lab** for explicit structured state reads and writes
 *   **Search Diagnostics** for raw hybrid search scores (`hybrid_score`, `fts_score`, `vector_score`) and low-signal title visibility
@@ -287,8 +287,7 @@ The workbench also exposes loopback-only admin APIs for the UI:
 *   `POST /admin/api/digest-scheduler` saves scheduler `enabled`, `schedule_time`, `time_zone`, and `lookback_days`, then applies the new timer to the running worker
 *   `GET /admin/api/release-check` compares the current checkout against the latest published GitHub Release and returns manual upgrade guidance for either git checkouts or source archives
 *   `GET /admin/api/llm-config` returns a sanitized LLM config snapshot without exposing the full API key
-*   `POST /admin/api/llm-config` persists model, API URL, JSON-mode, headers, and optional API key changes to `~/.agentmem/.env` and updates the running worker process
-*   `POST /admin/api/llm-test` sends a small OpenAI-compatible `chat/completions` request with the current form values and returns pass/fail diagnostics
+*   `POST /admin/api/llm-config` persists model, API URL, JSON-mode, headers, and optional API key changes to `~/.agentmem/.env` and updates the running worker process. Changing the API URL requires re-entering the API key and any custom header values; otherwise the save is rejected with HTTP 400 and nothing is written.
 
 #### Runtime policy semantics
 
@@ -313,7 +312,7 @@ Daily digest reads use the same read gate as startup context, and manual digest 
 4. Use the Runtime release card to compare the current checkout with the latest GitHub Release and choose the recommended manual upgrade path
 5. Use Runtime daily digest controls to inspect the latest per-project digest, manually run one for a selected local date, or change the automatic scheduler's enabled state, run time, time zone, and catch-up window
 6. Use `Procedural Skills` to review digest candidates, promote the reusable ones to draft, flip `enabled/disabled/retired`, record operator feedback, inspect automatic post-task reviews, and run a validation query that shows matched skill titles plus the current `rollout_stage`
-7. Use `LLM Settings` to switch models or endpoints, save the env-file change, and test the connection before the next summary job
+7. Use `LLM Settings` to switch models or endpoints and save the env-file change
 8. Use `Project Context`, `State Lab`, and `Search Diagnostics` to inspect startup context quality, structured state, and current hybrid ranking behavior
 9. Use `Observation Ledger` to drill into the raw observation history when needed
 10. Use `agentmem status` to confirm reachability and inspect the last runtime state. `agentmem stop` is still available, but the next managed lifecycle hook will start the worker again unless `AGENTMEM_HOOK_AUTOSTART=false` is set

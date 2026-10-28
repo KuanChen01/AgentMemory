@@ -60,7 +60,7 @@ AGENTMEM_LLM_DISABLE_JSON_MODE=false
 AGENTMEM_PORT=38888
 ```
 
-Once the worker is running, open **LLM Settings** in the workbench to switch the model or endpoint, keep or replace the key and run a live connection test. Changes are saved to the same `.env` file. See the [full reference](./Reference.md) for every setting and the [LLM cost controls](./LLM%20Cost%20Controls.md).
+Once the worker is running, open **LLM Settings** in the workbench to switch the model or endpoint and keep or replace the key. Changing the API URL requires re-entering the key. Changes are saved to the same `.env` file. See the [full reference](./Reference.md) for every setting and the [LLM cost controls](./LLM%20Cost%20Controls.md).
 
 ## Network note
 

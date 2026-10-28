@@ -60,7 +60,7 @@ agentmem install
 
 AgentMemory 需要一个 OpenAI 兼容的 LLM 接口来总结 agent 的工作，云端或本地都可以。Windows 上第一次运行 bootstrap 会生成 `~/.agentmem/.env` 并停下来，填好其中的 `AGENTMEM_LLM_*` 后再运行一次即可（也可以在隐藏输入的提示里直接输入 key，并传 `-ApiUrl`、`-Model`）。macOS / Linux 上可以在面板的 **LLM 设置**里配置，或者直接编辑 `~/.agentmem/.env`。
 
-装好后重启各个 agent，在 <http://127.0.0.1:38888/admin> 打开面板（Windows 上也可以运行 `.\start-workbench.cmd start`）。之后随时可以在面板里切换模型或接口地址、更换 key，并做一次实时连接测试。
+装好后重启各个 agent，在 <http://127.0.0.1:38888/admin> 打开面板（Windows 上也可以运行 `.\start-workbench.cmd start`）。之后随时可以在面板里切换模型或接口地址、更换 key。
 
 从旧版本升级：重新构建，重启 worker 和各个 agent 即可，其余不变。旧版本会在 `~/.agentmem` 里保存 `.env.bak-<时间戳>` 备份，其中包含 API key。新版本不再生成这类备份，也不会自动删除旧的；如果不需要，请自行删除。
 

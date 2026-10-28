@@ -215,7 +215,7 @@ Windows 下现在有两个本机控制入口：
 
 *   **Runtime**：管理全局 `readEnabled` / `writeEnabled`，展示 project / agent 覆盖面，查看/手动运行每日总结并调整 scheduler 设置，同时提供只读的 GitHub Release 更新检查与手动升级指引
 *   **Procedural Skills**：查看 digest `skill_candidates`，将可复用条目提升为 draft，切换 `enabled / disabled / retired` 生命周期状态，记录 success / failure / rejected / skipped 反馈，并在任务级 query 校验旁直接查看 feedback history、evidence、lifecycle、recommendation signals，以及最新自动生成的 post-task review artifacts
-*   **LLM Settings**：切换 `AGENTMEM_LLM_MODEL`，更新 OpenAI-compatible API base URL，保留或替换 API key，并运行实时连接测试
+*   **LLM Settings**：切换 `AGENTMEM_LLM_MODEL`，更新 OpenAI-compatible API base URL，以及保留或替换 API key
 *   **Project Context**：查看当前 `ProjectContextView`、最近每日总结、渲染后的 startup 文本，以及 bounded context package、temporal slice diagnostics 与 policy decision trace 指标
 *   **State Lab**：显式读取和写入 structured state
 *   **Search Diagnostics**：直接查看 hybrid search 的 `hybrid_score`、`fts_score`、`vector_score` 和低信号标题标记
@@ -287,8 +287,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 *   `POST /admin/api/digest-scheduler`：保存 scheduler 的 `enabled`、`schedule_time`、`time_zone` 和 `lookback_days`，并立即应用到当前 worker 的 timer
 *   `GET /admin/api/release-check`：对比当前 checkout 与最新正式 GitHub Release，并返回适用于 git checkout 或源码归档的手动升级指引
 *   `GET /admin/api/llm-config`：返回已脱敏的 LLM 配置快照，不暴露完整 API key
-*   `POST /admin/api/llm-config`：把 model、API URL、JSON mode、headers 和可选 API key 变更持久化到 `~/.agentmem/.env`，并同步更新当前 worker 进程
-*   `POST /admin/api/llm-test`：用当前表单值发送一个很小的 OpenAI-compatible `chat/completions` 请求，并返回连接测试结果
+*   `POST /admin/api/llm-config`：把 model、API URL、JSON mode、headers 和可选 API key 变更持久化到 `~/.agentmem/.env`，并同步更新当前 worker 进程。更改 API URL 时必须重新输入 API key 和自定义 header 值，否则保存会被拒绝（HTTP 400）且不会写入任何内容。
 
 #### 运行时策略语义
 
@@ -313,7 +312,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 4. 在 Runtime 面板的 release 卡片中对比当前 checkout 与最新正式 GitHub Release，并选择推荐的手动升级路径
 5. 在 Runtime 面板的每日总结卡片中查看最近项目 digest、为指定本地日期手动运行一次总结，或调整自动 scheduler 的启停、运行时间、时区和 catch-up 窗口
 6. 在 `Procedural Skills` 中评审 digest 候选技能，把可复用条目提升为 draft，切换 `enabled / disabled / retired`，记录操作反馈，检查自动生成的 post-task reviews，并运行验证查询以确认命中的 skill titles 与当前 `rollout_stage`
-7. 在 `LLM Settings` 中切换模型或 endpoint，保存 env 文件变更，并在下一次摘要任务前测试连接
+7. 在 `LLM Settings` 中切换模型或 endpoint，并保存 env 文件变更
 8. 在 `Project Context`、`State Lab`、`Search Diagnostics` 中检查 startup context 质量、structured state 和当前 hybrid ranking 行为
 9. 如需深挖原始 observation，再切到 `Observation Ledger`
 10. 使用 `agentmem status` 检查 worker 是否可达并查看最近运行状态。仍可用 `agentmem stop` 停止服务；若未设置 `AGENTMEM_HOOK_AUTOSTART=false`，下一次受管 lifecycle hook 会再次自动拉起 worker

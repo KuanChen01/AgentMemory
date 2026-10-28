@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const dotenv = require('dotenv');
-const { effectiveLlmTestApiKey, loadAgentMemoryEnv, redactLlmTestPayload } = require('../dist/services/llm-config');
+const { loadAgentMemoryEnv } = require('../dist/services/llm-config');
 
 test('startup decodes saved JSON values, preserves overrides and accepts dotenv syntax', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmem-env-'));
@@ -32,53 +32,4 @@ test('startup decodes saved JSON values, preserves overrides and accepts dotenv 
   } finally {
     fs.unlinkSync(file); fs.rmdirSync(root);
   }
-});
-
-test('llm-test redacts a saved key echoed by an error', () => {
-  const saved = 'sk-saved-ECHO-key-9981';
-  const payload = redactLlmTestPayload({
-    ok: false,
-    status: 401,
-    latencyMs: 18,
-    error: `unauthorized ${saved} and again ${saved}`,
-    message: `provider said ${saved}`,
-    detail: saved,
-    contentPreview: `echo ${saved}`,
-    requestUrl: `https://api.example/v1/${saved}`,
-    model: 'demo-model',
-    testedAt: '2026-10-24T00:00:00.000Z',
-  }, undefined, { AGENTMEM_LLM_API_KEY: saved });
-  assert.equal(JSON.stringify(payload).includes(saved), false);
-  assert.match(payload.error, /unauthorized •••• and again ••••/);
-  assert.equal(payload.message, 'provider said ••••');
-  assert.equal(payload.detail, '••••');
-  assert.equal(payload.contentPreview, 'echo ••••');
-  assert.equal(payload.requestUrl, 'https://api.example/v1/••••');
-  assert.equal(payload.model, 'demo-model');
-  assert.equal(payload.status, 401);
-  assert.equal(payload.testedAt, '2026-10-24T00:00:00.000Z');
-  const whitespace = redactLlmTestPayload({ error: `leak ${saved}` }, '   ', { AGENTMEM_LLM_API_KEY: saved });
-  assert.equal(whitespace.error.includes(saved), false);
-});
-
-test('llm-test redacts a typed key shorter than 8 characters', () => {
-  const saved = 'sk-saved-ECHO-key-9981';
-  const shortKey = 'k7';
-  assert.equal(shortKey.length < 8, true);
-  assert.equal(effectiveLlmTestApiKey(`  ${shortKey}  `, { AGENTMEM_LLM_API_KEY: saved }), shortKey);
-  const payload = redactLlmTestPayload({
-    ok: false,
-    error: `bad key ${shortKey} saved=${saved}`,
-    message: shortKey,
-    detail: `see ${shortKey}`,
-    contentPreview: shortKey,
-    requestUrl: `https://api.example/${shortKey}`,
-  }, `  ${shortKey}  `, { AGENTMEM_LLM_API_KEY: saved });
-  const encoded = JSON.stringify(payload);
-  assert.equal(encoded.includes(shortKey), false);
-  assert.equal(payload.error, `bad key •••• saved=${saved}`);
-  assert.equal(payload.message, '••••');
-  assert.equal(payload.detail, 'see ••••');
-  assert.equal(payload.contentPreview, '••••');
-  assert.equal(payload.requestUrl, 'https://api.example/••••');
 });
