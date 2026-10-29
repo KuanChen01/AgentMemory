@@ -1,4 +1,4 @@
-import { ADMIN_UI_WALLPAPERS } from './admin-ui-theme';
+import { ADMIN_UI_GLASS_COLORS, ADMIN_UI_WALLPAPERS } from './admin-ui-theme';
 
 // 24px line icons (1.6 stroke), inlined so the page stays asset-free.
 export const ADMIN_UI_ICONS: Record<string, string> = {
@@ -162,6 +162,8 @@ function renderBackgroundPopover(): string {
             <span class="bgThumb" data-wall="${preset.id}">${thumbPanes}</span>
             <span class="bgTileLabel" data-i18n="${preset.key}">${preset.label}</span>
           </button>`).join('');
+  const glassSwatches = ADMIN_UI_GLASS_COLORS.map((color) => `
+            <button class="bgTint" type="button" data-glass-color="${color.hex}" aria-pressed="false" style="--tint-chip: ${color.hex}" data-i18n-aria-label="${color.key}" data-i18n-title="${color.key}" aria-label="${color.label}" title="${color.label}"></button>`).join('');
   return `
     <section class="bgPopover" id="bgPopover" role="dialog" aria-labelledby="bgPopoverTitle" hidden>
       <header class="bgHead">
@@ -203,6 +205,15 @@ function renderBackgroundPopover(): string {
             <button class="bgSegment" type="button" data-bg-tone="auto" aria-pressed="true" data-i18n="theme.toneAuto">Auto</button>
             <button class="bgSegment" type="button" data-bg-tone="light" aria-pressed="false" data-i18n="theme.toneLight">Light</button>
             <button class="bgSegment" type="button" data-bg-tone="dark" aria-pressed="false" data-i18n="theme.toneDark">Dark</button>
+          </div>
+        </div>
+        <div class="bgField">
+          <span class="bgFieldLabel" id="bgGlassColorLabel" data-i18n="theme.glassColor">Glass color</span>
+          <div class="bgTints" id="bgGlassColorControl" role="group" aria-labelledby="bgGlassColorLabel">
+            <button class="bgTint is-default" type="button" data-glass-color="" aria-pressed="true" data-i18n-aria-label="theme.glassColorDefault" data-i18n-title="theme.glassColorDefault" aria-label="Default" title="Default"></button>${glassSwatches}
+            <label class="bgTint bgTintCustom" data-i18n-title="theme.glassColorCustom" title="Custom color">
+              <input id="bgGlassColorInput" type="color" value="#ffffff" data-i18n-aria-label="theme.glassColorCustom" aria-label="Custom color" />
+            </label>
           </div>
         </div>${renderRange('bgBlur', 'theme.blur', 'Wallpaper blur', 0, 40)}${renderRange('bgDim', 'theme.dim', 'Dim', 0, 60)}${renderRange('bgOpacity', 'theme.opacity', 'Glass opacity', 10, 80)}
       </div>

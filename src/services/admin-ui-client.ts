@@ -14,8 +14,9 @@ export const ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY = 'am.bg';
 export const ADMIN_UI_THEME_DEFAULTS = {
   v: 1,
   mode: 'auto',
-  light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
-  dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+  // glassColor null keeps the tone's built-in tint (white on light glass, deep blue on dark glass).
+  light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null },
+  dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null },
   // Which set owns the v2.2.1 IndexedDB "custom" image. null until that record is seen.
   legacyImageSlot: null,
 };
@@ -56,7 +57,9 @@ export function renderAdminThemeBootScript(): string {
         dim: clampInt(source.dim, 0, 60, fallback.dim),
         opacity: clampInt(source.opacity, 10, 80, fallback.opacity),
         customLuma: source.customLuma !== null && source.customLuma !== undefined && isFinite(luma) ? Math.min(1, Math.max(0, luma)) : null,
-        customColor: /^#[0-9a-f]{6}$/i.test(String(source.customColor || "")) ? String(source.customColor) : null
+        customColor: /^#[0-9a-f]{6}$/i.test(String(source.customColor || "")) ? String(source.customColor) : null,
+        // Only a "#rrggbb" string counts; anything else (numbers, objects that cannot be stringified) drops this one field.
+        glassColor: typeof source.glassColor === "string" && /^#[0-9a-f]{6}$/i.test(source.glassColor) ? source.glassColor.toLowerCase() : null
       };
     }
     function normalize(raw) {
@@ -116,7 +119,8 @@ export function renderAdminThemeBootScript(): string {
           dim: oldBg.dim,
           opacity: oldBg.opacity,
           customLuma: null,
-          customColor: null
+          customColor: null,
+          glassColor: null
         };
         if (preset === "mist") settings.light.wallpaper = "mist";
         else if (preset === "graphite") settings.dark.wallpaper = "graphite";
@@ -171,6 +175,10 @@ export function renderAdminThemeBootScript(): string {
         return false;
       }
     }
+    // A picked glass color is painted as is, on both stops: what the picker shows is what the glass is tinted with.
+    function glassRgb(hex) {
+      return [1, 3, 5].map(function (at) { return parseInt(hex.slice(at, at + 2), 16); }).join(", ");
+    }
     function apply(settings) {
       var normalized = normalize(settings);
       var mode = resolveMode(normalized, systemPrefersDark());
@@ -184,6 +192,13 @@ export function renderAdminThemeBootScript(): string {
       root.style.setProperty("--glass-scale", String(Math.round((set.opacity / DEFAULTS.light.opacity) * 1000) / 1000));
       if (set.customColor) root.style.setProperty("--bg-custom-color", set.customColor);
       else root.style.removeProperty("--bg-custom-color");
+      if (set.glassColor) {
+        root.style.setProperty("--glass-tint-top", glassRgb(set.glassColor));
+        root.style.setProperty("--glass-tint-bottom", glassRgb(set.glassColor));
+      } else {
+        root.style.removeProperty("--glass-tint-top");
+        root.style.removeProperty("--glass-tint-bottom");
+      }
       root.style.setProperty("color-scheme", mode);
     }
     function read() {
@@ -228,6 +243,7 @@ export function renderAdminThemeBootScript(): string {
       resolveMode: resolveMode,
       activeSet: activeSet,
       resolveTone: resolveTone,
+      glassRgb: glassRgb,
       apply: apply,
       read: read
     };
@@ -840,6 +856,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     bgUploadButton: document.getElementById("bgUploadButton"),
     bgUploadInput: document.getElementById("bgUploadInput"),
     bgToneButtons: Array.from(document.querySelectorAll("[data-bg-tone]")),
+    bgGlassColorButtons: Array.from(document.querySelectorAll("[data-glass-color]")),
+    bgGlassColorInput: document.getElementById("bgGlassColorInput"),
     bgBlurInput: document.getElementById("bgBlurInput"),
     bgBlurValue: document.getElementById("bgBlurValue"),
     bgDimInput: document.getElementById("bgDimInput"),
@@ -10818,6 +10836,22 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.bgToneButtons.forEach((button) => {
       setAttr(button, "aria-pressed", button.getAttribute("data-bg-tone") === set.tone ? "true" : "false");
     });
+    // "" is the Default swatch. A color no swatch carries lights up the custom picker instead.
+    const glassColor = set.glassColor || "";
+    let presetColor = false;
+    els.bgGlassColorButtons.forEach((button) => {
+      const pressed = button.getAttribute("data-glass-color") === glassColor;
+      if (pressed) presetColor = true;
+      setAttr(button, "aria-pressed", pressed ? "true" : "false");
+    });
+    if (els.bgGlassColorInput) {
+      const picker = els.bgGlassColorInput.parentElement;
+      const fallback = bg.api.resolveTone(set) === "dark" ? "#28305a" : "#ffffff";
+      if (els.bgGlassColorInput.value !== (glassColor || fallback)) els.bgGlassColorInput.value = glassColor || fallback;
+      picker.classList.toggle("is-selected", !presetColor);
+      if (presetColor) picker.style.removeProperty("--tint-chip");
+      else picker.style.setProperty("--tint-chip", glassColor);
+    }
     syncRange(els.bgBlurInput, els.bgBlurValue, set.blur, set.blur + "px");
     syncRange(els.bgDimInput, els.bgDimValue, set.dim, set.dim + "%");
     syncRange(els.bgOpacityInput, els.bgOpacityValue, set.opacity, set.opacity + "%");
@@ -11257,6 +11291,14 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     els.bgToneButtons.forEach((button) => {
       button.addEventListener("click", () => updateTheme({ set: { tone: button.getAttribute("data-bg-tone") } }, true));
     });
+    els.bgGlassColorButtons.forEach((button) => {
+      button.addEventListener("click", () => updateTheme({ set: { glassColor: button.getAttribute("data-glass-color") || null } }, true));
+    });
+    if (els.bgGlassColorInput) {
+      // Live while picking; written to storage once the picker settles, like the sliders.
+      els.bgGlassColorInput.addEventListener("input", () => updateTheme({ set: { glassColor: els.bgGlassColorInput.value } }, false));
+      els.bgGlassColorInput.addEventListener("change", () => updateTheme({ set: { glassColor: els.bgGlassColorInput.value } }, true));
+    }
     [[els.bgBlurInput, "blur"], [els.bgDimInput, "dim"], [els.bgOpacityInput, "opacity"]].forEach(([input, field]) => {
       if (!input) return;
       // Live while dragging; written to storage once the value settles.
@@ -11280,6 +11322,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           opacity: defaults.opacity,
           customLuma: null,
           customColor: null,
+          glassColor: defaults.glassColor,
         },
       }, true);
       setBackgroundStatus("theme.resetDone", false);

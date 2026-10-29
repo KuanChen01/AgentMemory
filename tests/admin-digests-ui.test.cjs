@@ -217,7 +217,7 @@ test('Digests joins the shared glass tokens in light and dark and docks the draw
   assert.match(ADMIN_UI_THEME, /html\[data-glass="dark"\] \.digestsView \{\s*--d-glass:/);
   // New fills follow the Background opacity slider.
   const digestTokens = ADMIN_UI_THEME.slice(ADMIN_UI_THEME.indexOf('  .digestsView {\n    --d-glass:'));
-  assert.match(digestTokens, /--d-glass: linear-gradient\(180deg, rgba\(255, 255, 255, calc\(0\.58 \* var\(--glass-scale\)\)\)/);
+  assert.match(digestTokens, /--d-glass: linear-gradient\(180deg, rgba\(var\(--glass-tint-top, 255, 255, 255\), calc\(0\.58 \* var\(--glass-scale\)\)\)/);
   assert.match(digestTokens, /--d-well: linear-gradient\(180deg, rgba\(255, 255, 255, calc\(0\.42 \* var\(--glass-scale\)\)\)/);
   assert.match(ADMIN_UI_THEME, /@media \(min-width: 1440px\) \{\s*\.digestsView\.is-drawer-open \.digList,/);
 });

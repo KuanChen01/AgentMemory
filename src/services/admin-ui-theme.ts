@@ -35,6 +35,17 @@ export const ADMIN_UI_WALLPAPERS: AdminUiWallpaper[] = [
   },
 ];
 
+// Glass tint swatches. A set stores the picked hex (null = the tone's built-in tint); the boot script keeps
+// its hue but holds its lightness on the glass tone's side, so tone alone still decides text contrast.
+export const ADMIN_UI_GLASS_COLORS: Array<{ id: string; key: string; label: string; hex: string }> = [
+  { id: 'blue', key: 'theme.glassColorBlue', label: 'Blue', hex: '#4f86f7' },
+  { id: 'violet', key: 'theme.glassColorViolet', label: 'Violet', hex: '#8b6cf0' },
+  { id: 'rose', key: 'theme.glassColorRose', label: 'Rose', hex: '#e8628f' },
+  { id: 'amber', key: 'theme.glassColorAmber', label: 'Amber', hex: '#e9a23b' },
+  { id: 'mint', key: 'theme.glassColorMint', label: 'Mint', hex: '#3fb98a' },
+  { id: 'slate', key: 'theme.glassColorSlate', label: 'Slate', hex: '#7a8599' },
+];
+
 function renderWallpaperLayers(wallpaper: AdminUiWallpaper): string {
   const blobs = wallpaper.blobs.map(({ size, at, rgb, alpha }) =>
     `radial-gradient(${size} at ${at}, rgba(${rgb.join(', ')}, ${alpha.toFixed(2)}), rgba(${rgb.join(', ')}, 0) 74%)`);
@@ -93,9 +104,11 @@ export const ADMIN_UI_THEME = `
     --kind-context: #8e6cf6;
     --kind-legacy: #a7adb8;
     /* Translucent glass. Every shell surface reads these, so the background picker can retune them live:
-       --glass-scale comes from the Glass opacity slider, and html[data-glass="dark"] swaps the tint and text. */
-    --glass-rgb-top: 255, 255, 255;
-    --glass-rgb-bottom: 255, 255, 255;
+       --glass-scale comes from the Glass opacity slider, and html[data-glass="dark"] swaps the tint and text.
+       A picked Glass color sets --glass-tint-top/bottom inline on <html>; every glass fill (here and the views'
+       --a-glass, --a-card-fill, --d-glass) reads them with its own stock tint as the fallback. */
+    --glass-rgb-top: var(--glass-tint-top, 255, 255, 255);
+    --glass-rgb-bottom: var(--glass-tint-bottom, 255, 255, 255);
     --glass-a-top: 0.30;
     --glass-a-bottom: 0.16;
     --glass-scale: 1;
@@ -2512,8 +2525,8 @@ ${WALLPAPER_CSS}
   /* Dark glass (dark presets, dark uploads, or the Dark tone): the same surfaces with a deep-blue tint and
      light text. Developer tools reads these tokens too. */
   html[data-glass="dark"] {
-    --glass-rgb-top: 40, 48, 90;
-    --glass-rgb-bottom: 20, 24, 56;
+    --glass-rgb-top: var(--glass-tint-top, 40, 48, 90);
+    --glass-rgb-bottom: var(--glass-tint-bottom, 20, 24, 56);
     --glass-a-top: 0.34;
     --glass-a-bottom: 0.22;
     --glass-specular:
@@ -2606,9 +2619,9 @@ ${WALLPAPER_CSS}
   .pipelineView,
   .digestsView {
     position: relative;
-    --a-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.62 * var(--glass-scale))), rgba(255, 255, 255, calc(0.40 * var(--glass-scale))));
+    --a-glass: linear-gradient(180deg, rgba(var(--glass-tint-top, 255, 255, 255), calc(0.62 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 255, 255, 255), calc(0.40 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.05), 0 18px 40px -22px rgba(70, 80, 180, 0.38);
-    --a-card-fill: linear-gradient(180deg, rgba(255, 255, 255, calc(0.26 * var(--glass-scale))), rgba(255, 255, 255, calc(0.12 * var(--glass-scale))));
+    --a-card-fill: linear-gradient(180deg, rgba(var(--glass-tint-top, 255, 255, 255), calc(0.26 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 255, 255, 255), calc(0.12 * var(--glass-scale))));
     --a-card-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.04), 0 12px 26px -16px rgba(70, 80, 180, 0.28);
     --a-card-hover-shadow: var(--glass-edge), 0 2px 4px rgba(60, 70, 150, 0.05), 0 18px 34px -16px rgba(70, 80, 180, 0.38);
     --a-control-fill: linear-gradient(180deg, rgba(255, 255, 255, calc(0.62 * var(--glass-scale))), rgba(255, 255, 255, calc(0.42 * var(--glass-scale))));
@@ -2670,9 +2683,9 @@ ${WALLPAPER_CSS}
   html[data-glass="dark"] .pipelineView,
   html[data-glass="dark"] .digestsView {
     --a-well-blur: blur(22px) saturate(160%);
-    --a-glass: linear-gradient(180deg, rgba(30, 42, 88, calc(0.50 * var(--glass-scale))), rgba(12, 18, 46, calc(0.46 * var(--glass-scale))));
+    --a-glass: linear-gradient(180deg, rgba(var(--glass-tint-top, 30, 42, 88), calc(0.50 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 12, 18, 46), calc(0.46 * var(--glass-scale))));
     --a-glass-shadow: var(--glass-edge), 0 22px 48px -20px rgba(0, 0, 0, 0.70);
-    --a-card-fill: linear-gradient(180deg, rgba(30, 42, 88, calc(0.62 * var(--glass-scale))), rgba(14, 20, 50, calc(0.58 * var(--glass-scale))));
+    --a-card-fill: linear-gradient(180deg, rgba(var(--glass-tint-top, 30, 42, 88), calc(0.62 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 14, 20, 50), calc(0.58 * var(--glass-scale))));
     --a-card-shadow: var(--glass-edge), 0 16px 30px -18px rgba(0, 0, 0, 0.80);
     --a-card-hover-shadow: var(--glass-edge), 0 0 0 1px rgba(110, 160, 255, 0.18), 0 20px 36px -18px rgba(0, 0, 0, 0.85);
     --a-control-fill: linear-gradient(180deg, rgba(40, 52, 100, calc(0.55 * var(--glass-scale))), rgba(20, 28, 64, calc(0.45 * var(--glass-scale))));
@@ -4352,8 +4365,10 @@ ${WALLPAPER_CSS}
     margin-top: 14px;
   }
 
+  /* The dark sidebar keeps its own fixed alphas (not --glass-a-* or the opacity slider) but takes its tint from
+     --glass-rgb-*, so a picked glass color reaches it too. */
   html[data-glass="dark"] .sidebar.glassSurface {
-    background: linear-gradient(180deg, rgba(40, 48, 90, 0.34), rgba(20, 24, 56, 0.22));
+    background: linear-gradient(180deg, rgba(var(--glass-rgb-top), 0.34), rgba(var(--glass-rgb-bottom), 0.22));
     box-shadow: var(--glass-shadow);
   }
 
@@ -4754,7 +4769,7 @@ ${WALLPAPER_CSS}
     --m-legacy-dot: #f5a524;
     --a-legacy-fill: var(--m-legacy-fill);
     --a-legacy-ink: var(--m-legacy-ink);
-    --m-group-fill: linear-gradient(180deg, rgba(255, 255, 255, calc(0.50 * var(--glass-scale))), rgba(255, 255, 255, calc(0.30 * var(--glass-scale))));
+    --m-group-fill: linear-gradient(180deg, rgba(var(--glass-tint-top, 255, 255, 255), calc(0.50 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 255, 255, 255), calc(0.30 * var(--glass-scale))));
     --m-group-shadow: var(--glass-edge), 0 1px 2px rgba(60, 70, 150, 0.04), 0 16px 34px -22px rgba(70, 80, 180, 0.40);
     --m-row-line: rgba(40, 50, 110, 0.07);
     --m-row-hover: rgba(255, 255, 255, 0.46);
@@ -4784,7 +4799,7 @@ ${WALLPAPER_CSS}
     --m-legacy-fill: rgba(255, 176, 50, 0.20);
     --m-legacy-ink: #ffc76a;
     --m-legacy-dot: #ffb340;
-    --m-group-fill: linear-gradient(180deg, rgba(28, 40, 86, calc(0.56 * var(--glass-scale))), rgba(12, 18, 46, calc(0.50 * var(--glass-scale))));
+    --m-group-fill: linear-gradient(180deg, rgba(var(--glass-tint-top, 28, 40, 86), calc(0.56 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 12, 18, 46), calc(0.50 * var(--glass-scale))));
     --m-group-shadow: var(--glass-edge), 0 20px 40px -22px rgba(0, 0, 0, 0.80);
     --m-row-line: rgba(255, 255, 255, 0.07);
     --m-row-hover: rgba(255, 255, 255, 0.05);
@@ -6586,6 +6601,57 @@ ${WALLPAPER_CSS}
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
   }
 
+  .bgTints {
+    grid-column: 2 / 4;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .bgTint {
+    position: relative;
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--tint-chip, transparent);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+  }
+
+  /* Default follows the glass tone, so its chip shows both built-in tints. */
+  .bgTint.is-default {
+    --tint-chip: linear-gradient(135deg, #ffffff 50%, #28305a 50%);
+  }
+
+  .bgTintCustom {
+    --tint-chip: conic-gradient(#ff5f6d, #ffc371, #7ee8a2, #5aa0ff, #b388ff, #ff5f6d);
+    overflow: hidden;
+  }
+
+  .bgTintCustom input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .bgTint[aria-pressed="true"],
+  .bgTintCustom.is-selected {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92), 0 0 0 4px #2a6bff;
+  }
+
+  .bgTint:focus-visible,
+  .bgTintCustom:focus-within {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92), 0 0 0 4px rgba(10, 132, 255, 0.55);
+  }
+
   .bgRange {
     --fill: 0%;
     width: 100%;
@@ -6909,7 +6975,7 @@ ${WALLPAPER_CSS}
   .skillsView,
   .projectsView,
   .digestsView {
-    --d-glass: linear-gradient(180deg, rgba(255, 255, 255, calc(0.58 * var(--glass-scale))), rgba(248, 250, 255, calc(0.38 * var(--glass-scale))));
+    --d-glass: linear-gradient(180deg, rgba(var(--glass-tint-top, 255, 255, 255), calc(0.58 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 248, 250, 255), calc(0.38 * var(--glass-scale))));
     --d-rim: linear-gradient(168deg, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.86) 12%, rgba(255, 255, 255, 0.40) 34%, rgba(190, 198, 238, 0.28) 62%, rgba(210, 216, 248, 0.34) 86%, rgba(255, 255, 255, 0.88) 100%);
     --d-edge:
       inset 0 1.5px 0 rgba(255, 255, 255, 0.95),
@@ -6957,7 +7023,7 @@ ${WALLPAPER_CSS}
   html[data-glass="dark"] .skillsView,
   html[data-glass="dark"] .projectsView,
   html[data-glass="dark"] .digestsView {
-    --d-glass: linear-gradient(180deg, rgba(32, 44, 92, calc(0.52 * var(--glass-scale))), rgba(12, 18, 46, calc(0.48 * var(--glass-scale))));
+    --d-glass: linear-gradient(180deg, rgba(var(--glass-tint-top, 32, 44, 92), calc(0.52 * var(--glass-scale))), rgba(var(--glass-tint-bottom, 12, 18, 46), calc(0.48 * var(--glass-scale))));
     --d-rim: linear-gradient(168deg, rgba(222, 232, 255, 0.62) 0%, rgba(196, 212, 255, 0.38) 12%, rgba(150, 175, 255, 0.14) 36%, rgba(100, 128, 230, 0.08) 64%, rgba(120, 150, 240, 0.14) 86%, rgba(170, 196, 255, 0.42) 100%);
     --d-edge:
       inset 0 1.5px 0 rgba(226, 234, 255, 0.20),
