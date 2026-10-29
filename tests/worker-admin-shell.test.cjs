@@ -10,7 +10,7 @@ const { randomUUID } = require('node:crypto');
 const { renderAdminPageHtml } = require('../dist/services/admin-ui.js');
 const { ADMIN_UI_TRANSLATIONS } = require('../dist/services/admin-ui-copy.js');
 const { ADMIN_UI_NAV_ITEMS, ADMIN_UI_DEV_PANELS, ADMIN_UI_HEALTH_CHECKS, ADMIN_UI_ICONS } = require('../dist/services/admin-ui-markup.js');
-const { ADMIN_UI_THEME, ADMIN_UI_WALLPAPERS } = require('../dist/services/admin-ui-theme.js');
+const { ADMIN_UI_THEME, ADMIN_UI_WALLPAPERS, ADMIN_UI_GLASS_COLORS } = require('../dist/services/admin-ui-theme.js');
 const {
   ADMIN_UI_THEME_STORAGE_KEY,
   ADMIN_UI_LEGACY_BACKGROUND_STORAGE_KEY,
@@ -1037,8 +1037,8 @@ test('theme settings persist under am.theme and apply in <head> before first pai
   assert.deepEqual(ADMIN_UI_THEME_DEFAULTS, {
     v: 1,
     mode: 'auto',
-    light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
-    dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null },
+    dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null },
     legacyImageSlot: null,
   });
   const head = html.slice(0, html.indexOf('<body>'));
@@ -1113,8 +1113,8 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
   })), {
     v: 1,
     mode: 'auto',
-    light: { wallpaper: 'mist', tone: 'auto', blur: 40, dim: 0, opacity: 10, customLuma: null, customColor: null },
-    dark: { wallpaper: 'graphite', tone: 'dark', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    light: { wallpaper: 'mist', tone: 'auto', blur: 40, dim: 0, opacity: 10, customLuma: null, customColor: null, glassColor: null },
+    dark: { wallpaper: 'graphite', tone: 'dark', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null },
     legacyImageSlot: null,
   });
 
@@ -1122,32 +1122,32 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
   const mist = migrated({ preset: 'mist', blur: 20, dim: 10, opacity: 40 });
   assert.equal(mist.legacySlot, null);
   assert.equal(mist.settings.mode, 'auto');
-  assert.deepEqual(mist.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 20, dim: 10, opacity: 40, customLuma: null, customColor: null });
+  assert.deepEqual(mist.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 20, dim: 10, opacity: 40, customLuma: null, customColor: null, glassColor: null });
   assert.deepEqual(mist.settings.dark, defaults.dark);
 
   const graphite = migrated({ preset: 'graphite', blur: 4 });
   assert.equal(graphite.legacySlot, null);
   assert.equal(graphite.settings.mode, 'auto');
-  assert.deepEqual(graphite.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 4, dim: 0, opacity: 30, customLuma: null, customColor: null });
+  assert.deepEqual(graphite.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 4, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null });
   assert.deepEqual(graphite.settings.light, defaults.light);
 
   const aurora = migrated({ preset: 'aurora', blur: 18, dim: 6, opacity: 50 });
   assert.equal(aurora.legacySlot, null);
   assert.equal(aurora.settings.mode, 'auto');
-  assert.deepEqual(aurora.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 18, dim: 6, opacity: 50, customLuma: null, customColor: null });
+  assert.deepEqual(aurora.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 18, dim: 6, opacity: 50, customLuma: null, customColor: null, glassColor: null });
   assert.deepEqual(aurora.settings.dark, defaults.dark);
 
   const night = migrated({ preset: 'night', blur: 8, opacity: 22 });
   assert.equal(night.legacySlot, null);
   assert.equal(night.settings.mode, 'auto');
-  assert.deepEqual(night.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 8, dim: 0, opacity: 22, customLuma: null, customColor: null });
+  assert.deepEqual(night.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 8, dim: 0, opacity: 22, customLuma: null, customColor: null, glassColor: null });
   assert.deepEqual(night.settings.light, defaults.light);
 
   const customDark = migrated({ preset: 'custom', customLuma: 0.2, customColor: '#112233', blur: 3 });
   assert.equal(customDark.legacySlot, 'dark');
   assert.equal(customDark.settings.legacyImageSlot, 'dark');
   assert.equal(customDark.settings.mode, 'dark');
-  assert.deepEqual(customDark.settings.dark, { wallpaper: 'custom', tone: 'auto', blur: 3, dim: 0, opacity: 30, customLuma: 0.2, customColor: '#112233' });
+  assert.deepEqual(customDark.settings.dark, { wallpaper: 'custom', tone: 'auto', blur: 3, dim: 0, opacity: 30, customLuma: 0.2, customColor: '#112233', glassColor: null });
   assert.deepEqual(customDark.settings.light, defaults.light);
 
   const customLight = migrated({ preset: 'custom', customLuma: 0.8 });
@@ -1163,8 +1163,8 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
   assert.equal(parked.legacySlot, null);
   assert.equal(parked.settings.legacyImageSlot, 'dark');
   assert.equal(parked.settings.mode, 'auto');
-  assert.deepEqual(parked.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 20, dim: 10, opacity: 40, customLuma: null, customColor: null });
-  assert.deepEqual(parked.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: 0.2, customColor: null });
+  assert.deepEqual(parked.settings.light, { wallpaper: 'mist', tone: 'auto', blur: 20, dim: 10, opacity: 40, customLuma: null, customColor: null, glassColor: null });
+  assert.deepEqual(parked.settings.dark, { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: 0.2, customColor: null, glassColor: null });
   const parkedColor = plain(api.migrateLegacy({ preset: 'aurora' }, { luma: null, color: '#abcdef' }));
   assert.equal(parkedColor.settings.legacyImageSlot, 'light');
   assert.equal(parkedColor.settings.mode, 'auto');
@@ -1176,7 +1176,7 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
   const toneWins = migrated({ preset: 'aurora', tone: 'dark', blur: 7 });
   assert.equal(toneWins.legacySlot, null);
   assert.equal(toneWins.settings.mode, 'auto');
-  assert.deepEqual(toneWins.settings.dark, { wallpaper: 'graphite', tone: 'dark', blur: 7, dim: 0, opacity: 30, customLuma: null, customColor: null });
+  assert.deepEqual(toneWins.settings.dark, { wallpaper: 'graphite', tone: 'dark', blur: 7, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null });
   assert.deepEqual(toneWins.settings.light, defaults.light);
 
   const mistTone = migrated({ preset: 'mist', tone: 'dark', blur: 4 });
@@ -1184,7 +1184,7 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
   assert.equal(mistTone.settings.mode, 'auto');
   assert.equal(mistTone.settings.light.wallpaper, 'mist');
   assert.equal(mistTone.settings.light.blur, 12);
-  assert.deepEqual(mistTone.settings.dark, { wallpaper: 'graphite', tone: 'dark', blur: 4, dim: 0, opacity: 30, customLuma: null, customColor: null });
+  assert.deepEqual(mistTone.settings.dark, { wallpaper: 'graphite', tone: 'dark', blur: 4, dim: 0, opacity: 30, customLuma: null, customColor: null, glassColor: null });
 
   for (const junk of [null, 'nope', [], { preset: 'nope', tone: 'neon' }]) {
     const result = migrated(junk);
@@ -1207,6 +1207,190 @@ test('theme normalize and legacy migration keep both sets and never drop stored 
   assert.equal(plain(api.normalize({ legacyImageSlot: 'dark', mode: 'light' })).legacyImageSlot, 'dark');
   assert.equal(plain(api.normalize({ legacyImageSlot: 'nope' })).legacyImageSlot, null);
   assert.equal(defaults.legacyImageSlot, null);
+});
+
+function contrast(rgbText, hexText) {
+  const lum = (parts) => {
+    const linear = parts.map((part) => {
+      const v = part / 255;
+      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  };
+  const tint = rgbText.split(',').map(Number);
+  const text = [1, 3, 5].map((at) => parseInt(hexText.slice(at, at + 2), 16));
+  const [a, b] = [lum(tint), lum(text)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05);
+}
+
+test('Theme panel has a per-set glass color row next to Glass tone, with Reset restoring it', () => {
+  const popover = html.slice(html.indexOf('id="bgPopover"'), html.indexOf('</section>', html.indexOf('id="bgPopover"')));
+  const control = elementTag('bgGlassColorControl');
+  assert.match(control, /role="group"/);
+  assert.match(control, /aria-labelledby="bgGlassColorLabel"/);
+  assert.match(elementTag('bgGlassColorLabel'), /data-i18n="theme\.glassColor"/);
+  // Between Glass tone and the sliders.
+  const at = (needle) => popover.indexOf(needle);
+  assert.ok(at('id="bgToneControl"') < at('id="bgGlassColorControl"'));
+  assert.ok(at('id="bgGlassColorControl"') < at('id="bgBlurInput"'));
+  assert.deepEqual([...popover.matchAll(/data-glass-color="([^"]*)"/g)].map((match) => match[1]),
+    ['', ...ADMIN_UI_GLASS_COLORS.map((color) => color.hex)]);
+  for (const color of ADMIN_UI_GLASS_COLORS) assert.match(color.hex, /^#[0-9a-f]{6}$/);
+  const picker = elementTag('bgGlassColorInput');
+  assert.match(picker, /type="color"/);
+  assert.match(picker, /data-i18n-aria-label="theme\.glassColorCustom"/);
+  // No new sliders: the row is swatches plus one native picker.
+  assert.equal((popover.match(/type="range"/g) || []).length, 3);
+
+  const keys = ['theme.glassColor', 'theme.glassColorDefault', 'theme.glassColorCustom', ...ADMIN_UI_GLASS_COLORS.map((color) => color.key)];
+  for (const locale of ['en', 'zh-CN']) {
+    for (const key of keys) assert.ok(ADMIN_UI_TRANSLATIONS[locale][key], `${locale} ${key}`);
+  }
+  assert.equal(ADMIN_UI_TRANSLATIONS['zh-CN']['theme.glassColor'], '玻璃颜色');
+
+  assert.match(script, /bgGlassColorButtons: Array\.from\(document\.querySelectorAll\("\[data-glass-color\]"\)\)/);
+  assert.match(script, /updateTheme\(\{ set: \{ glassColor: button\.getAttribute\("data-glass-color"\) \|\| null \} \}, true\)/);
+  assert.match(script, /glassColor: defaults\.glassColor,/);
+  assert.match(ADMIN_UI_THEME, /\.bgTint\[aria-pressed="true"\]/);
+});
+
+test('glass color is stored per set, applied in <head>, and old am.theme values default to the built-in tint', () => {
+  // Saved before this field existed: normalizes to null, paints the stock look, rewrites nothing.
+  const old = {
+    v: 1, mode: 'auto',
+    light: { wallpaper: 'mist', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+    dark: { wallpaper: 'graphite', tone: 'auto', blur: 12, dim: 0, opacity: 30, customLuma: null, customColor: null },
+  };
+  for (const prefersDark of [false, true]) {
+    const boot = runThemeBoot({ theme: old, prefersDark });
+    assert.deepEqual(boot.writes, []);
+    assert.equal(boot.styles['--glass-tint-top'], undefined);
+    assert.equal(boot.styles['--glass-tint-bottom'], undefined);
+    assert.equal(plain(boot.api.read()).light.glassColor, null);
+    assert.equal(plain(boot.api.read()).dark.glassColor, null);
+  }
+
+  const { api } = runThemeBoot();
+  const normalized = plain(api.normalize({ light: { glassColor: '#4F86F7' }, dark: { glassColor: 'blue' } }));
+  assert.equal(normalized.light.glassColor, '#4f86f7');
+  assert.equal(normalized.dark.glassColor, null);
+  assert.equal(plain(api.normalize({ dark: { glassColor: '#e8628f' } })).dark.glassColor, '#e8628f');
+  assert.equal(plain(api.migrateLegacy({ preset: 'mist', blur: 20 })).settings.light.glassColor, null);
+
+  // Each set paints its own color; the scheme flip swaps to the other set's.
+  const saved = {
+    v: 1, mode: 'auto',
+    light: Object.assign({}, ADMIN_UI_THEME_DEFAULTS.light, { glassColor: '#e8628f' }),
+    dark: Object.assign({}, ADMIN_UI_THEME_DEFAULTS.dark, { glassColor: '#3fb98a' }),
+  };
+  const boot = runThemeBoot({ theme: saved, prefersDark: false });
+  assert.equal(boot.attributes['data-glass'], 'light');
+  assert.equal(boot.styles['--glass-tint-top'], '232, 98, 143');
+  assert.equal(boot.styles['--glass-tint-bottom'], '232, 98, 143');
+  boot.media.matches = true;
+  boot.listeners.forEach((fn) => fn());
+  assert.equal(boot.attributes['data-glass'], 'dark');
+  assert.equal(boot.styles['--glass-tint-top'], '63, 185, 138');
+  assert.equal(boot.styles['--glass-tint-bottom'], '63, 185, 138');
+  assert.deepEqual(boot.writes, []);
+  // Back to null (what Reset writes) drops the inline override so the stylesheet tint returns.
+  boot.api.apply(Object.assign({}, saved, { dark: ADMIN_UI_THEME_DEFAULTS.dark }));
+  assert.equal(boot.styles['--glass-tint-top'], undefined);
+  assert.equal(boot.styles['--glass-tint-bottom'], undefined);
+
+  // Tone still decides data-glass: a light set forced to Dark tone tints dark with its own color.
+  const forced = runThemeBoot({ theme: { mode: 'light', light: { tone: 'dark', glassColor: '#e8628f' } } });
+  assert.equal(forced.attributes['data-glass'], 'dark');
+  assert.equal(forced.styles['--glass-tint-top'], '232, 98, 143');
+});
+
+test('a malformed saved glass color drops only that field and keeps the rest of the theme', () => {
+  // {"toString": null} is valid JSON that String() cannot convert; it must not throw the whole am.theme away.
+  const bad = [42, true, { toString: null }, { toString: null, valueOf: null }, ['#ffffff'], { toString() { return '#ffffff'; } }, '#fff', ' #ffffff', '#ffffff '];
+  const { api } = runThemeBoot();
+  for (const glassColor of bad) {
+    const set = plain(api.normalize({ light: { wallpaper: 'mist', tone: 'dark', blur: 20, dim: 10, opacity: 55, glassColor } })).light;
+    assert.deepEqual(set, Object.assign({}, ADMIN_UI_THEME_DEFAULTS.light, { tone: 'dark', blur: 20, dim: 10, opacity: 55 }), JSON.stringify(String(glassColor && typeof glassColor === 'object' ? 'object' : glassColor)));
+  }
+  const stored = '{"v":1,"mode":"dark","light":{"glassColor":"#e8628f","blur":5},"dark":{"wallpaper":"graphite","tone":"light","blur":30,"dim":20,"opacity":70,"glassColor":{"toString":null}}}';
+  const boot = runThemeBoot({ theme: stored });
+  const theme = plain(boot.api.read());
+  assert.equal(theme.mode, 'dark');
+  assert.equal(theme.light.glassColor, '#e8628f');
+  assert.equal(theme.light.blur, 5);
+  assert.deepEqual(theme.dark, Object.assign({}, ADMIN_UI_THEME_DEFAULTS.dark, { tone: 'light', blur: 30, dim: 20, opacity: 70 }));
+  assert.equal(boot.attributes['data-theme'], 'dark');
+  assert.equal(boot.attributes['data-glass'], 'light');
+  assert.equal(boot.styles['--bg-blur'], '30px');
+  assert.equal(boot.styles['--glass-tint-top'], undefined);
+  assert.deepEqual(boot.writes, []);
+});
+
+test('every glass fill follows the picked glass color and falls back to its stock tint', () => {
+  const css = ADMIN_UI_THEME.replace(/\/\*[\s\S]*?\*\//g, '');
+  const tint = (name) => `rgba\\(var\\(--glass-tint-${name}, `;
+  // [token, light top/bottom fallback, dark top/bottom fallback] — the stock tints from before Glass color.
+  const fills = [
+    ['--a-glass', ['255, 255, 255', '255, 255, 255'], ['30, 42, 88', '12, 18, 46']],
+    ['--a-card-fill', ['255, 255, 255', '255, 255, 255'], ['30, 42, 88', '14, 20, 50']],
+    ['--d-glass', ['255, 255, 255', '248, 250, 255'], ['32, 44, 92', '12, 18, 46']],
+  ];
+  for (const [token, light, dark] of fills) {
+    const values = [...css.matchAll(new RegExp(`${token}: ([^;]+);`, 'g'))].map((match) => match[1]);
+    assert.equal(values.length, 2, `${token} has a light and a dark value`);
+    for (const [value, [top, bottom]] of [[values[0], light], [values[1], dark]]) {
+      assert.match(value, new RegExp(`${tint('top')}${top}\\), `), `${token} top`);
+      assert.match(value, new RegExp(`${tint('bottom')}${bottom}\\), `), `${token} bottom`);
+    }
+  }
+  assert.match(css, /:root \{[^}]*--glass-rgb-top: var\(--glass-tint-top, 255, 255, 255\);\s*--glass-rgb-bottom: var\(--glass-tint-bottom, 255, 255, 255\);/);
+  assert.match(css, /html\[data-glass="dark"\] \{\s*--glass-rgb-top: var\(--glass-tint-top, 40, 48, 90\);\s*--glass-rgb-bottom: var\(--glass-tint-bottom, 20, 24, 56\);/);
+});
+
+test('Memory and Pipeline day cards follow the picked glass color and keep their stock fill', () => {
+  const css = ADMIN_UI_THEME.replace(/\/\*[\s\S]*?\*\//g, '');
+  const values = [...css.matchAll(/--m-group-fill: ([^;]+);/g)].map((match) => match[1]);
+  assert.equal(values.length, 2, '--m-group-fill has a light and a dark value');
+  for (const value of values) {
+    assert.match(value, /^linear-gradient\(180deg, rgba\(var\(--glass-tint-top, [\d, ]+\), [^]+, rgba\(var\(--glass-tint-bottom, [\d, ]+\), /);
+  }
+  // With no glass color the fallbacks apply: exactly the fills master 4d8dd14 painted, alphas included.
+  const stock = (value) => value.replace(/var\(--glass-tint-(?:top|bottom), ([\d, ]+)\)/g, '$1');
+  assert.deepEqual(values.map(stock), [
+    'linear-gradient(180deg, rgba(255, 255, 255, calc(0.50 * var(--glass-scale))), rgba(255, 255, 255, calc(0.30 * var(--glass-scale))))',
+    'linear-gradient(180deg, rgba(28, 40, 86, calc(0.56 * var(--glass-scale))), rgba(12, 18, 46, calc(0.50 * var(--glass-scale))))',
+  ]);
+  assert.match(css, /\.memGroup \{[^}]*background: var\(--m-group-fill\);/);
+});
+
+test('the dark sidebar keeps its stock alphas and takes its tint from the glass color', () => {
+  const css = ADMIN_UI_THEME.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [...css.matchAll(/([^{}]*\.sidebar(?![\w-])[^{}]*)\{([^{}]*)\}/g)]
+    .filter((match) => /background\s*:/.test(match[2]))
+    .map((match) => [match[1].trim(), match[2].match(/background:\s*([^;]+);/)[1]]);
+  const tinted = (top, bottom) => `linear-gradient(180deg, rgba(var(--glass-rgb-top), ${top}), rgba(var(--glass-rgb-bottom), ${bottom}))`;
+  // One rule, the same 0.34/0.22 with or without backdrop-filter support, as on master.
+  assert.deepEqual(rules, [['html[data-glass="dark"] .sidebar.glassSurface', tinted('0.34', '0.22')]]);
+  // With no glass color, --glass-rgb-* resolves to the stock deep blue: the exact gradient master 4d8dd14 painted.
+  const stockTop = css.match(/html\[data-glass="dark"\] \{[^}]*--glass-rgb-top: var\(--glass-tint-top, ([\d, ]+)\);/)[1];
+  const stockBottom = css.match(/html\[data-glass="dark"\] \{[^}]*--glass-rgb-bottom: var\(--glass-tint-bottom, ([\d, ]+)\);/)[1];
+  assert.equal(rules[0][1].replace('var(--glass-rgb-top)', stockTop).replace('var(--glass-rgb-bottom)', stockBottom),
+    'linear-gradient(180deg, rgba(40, 48, 90, 0.34), rgba(20, 24, 56, 0.22))');
+});
+
+test('a picked glass color is painted exactly as picked, whatever the glass tone', () => {
+  const picks = [...ADMIN_UI_GLASS_COLORS.map((color) => color.hex), '#000000', '#ffffff', '#ffff00', '#808080'];
+  for (const hex of picks) {
+    const rgb = [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16)).join(', ');
+    for (const tone of ['light', 'dark']) {
+      const boot = runThemeBoot({ theme: { mode: 'light', light: { tone, glassColor: hex } } });
+      assert.equal(boot.attributes['data-glass'], tone);
+      assert.equal(boot.styles['--glass-tint-top'], rgb, `${hex} on ${tone} glass`);
+      assert.equal(boot.styles['--glass-tint-bottom'], rgb, `${hex} on ${tone} glass`);
+    }
+  }
+  // The picker shows the stored value itself, so what it shows is what is painted.
+  assert.match(renderAdminPageHtml(), /els\.bgGlassColorInput\.value = glassColor \|\| fallback/);
 });
 
 test('glass surfaces are driven by :root variables and the wallpaper is one static layer', () => {
@@ -1296,7 +1480,8 @@ test('glass text keeps AA contrast on every wallpaper preset', () => {
   for (const [tone, selector] of [['light', ':root'], ['dark', 'html[data-glass="dark"]']]) {
     const source = block(selector);
     tones[tone] = {
-      glass: cssVar(source, '--glass-rgb-bottom').split(',').map(Number),
+      // The stock tint is the fallback a picked Glass color (--glass-tint-bottom) replaces.
+      glass: cssVar(source, '--glass-rgb-bottom').match(/^var\(--glass-tint-bottom, (.+)\)$/)[1].split(',').map(Number),
       alpha: Number(cssVar(source, '--glass-a-bottom')),
       text: parseColor(cssVar(source, '--glass-text')),
       text2: parseColor(cssVar(source, '--glass-text-2')),

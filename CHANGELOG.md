@@ -31,6 +31,9 @@ Upgrade note: run `npm run build`, then restart the worker (`agentmem stop`, or 
 ### Removed
 - LLM test-connection endpoint and buttons (`POST /admin/api/llm-test`, Settings and Developer-tools Test connection). The endpoint sent the saved API key to a caller-supplied URL.
 
+### Added
+- Theme: adjustable glass color. The Theme popover has a Glass color row (Default, six presets and a custom color picker) that tints the glass panels, including the sidebar and the Memory/Pipeline day cards. The Light and Dark sets each keep their own color in this browser's `am.theme` storage. Default follows the glass tone, so existing setups look the same until you pick a color; Reset or the Default chip restores it. The color is drawn exactly as picked, with no automatic text-contrast adjustment. A malformed saved color is ignored on its own, without resetting the rest of the theme.
+
 ### Changed
 - README screenshots and `scripts/demo-seed.cjs` use generic fake LLM values (`llm.example.com` / `my-model`); platform badges and install docs mark Windows as primary and macOS/Linux as lightly tested.
 - README rewritten as a short overview with screenshots made from demo data; the previous README now lives in `docs/Reference.md` / `docs/Reference.zh.md`, and install details in `docs/Installation.md` / `docs/Installation.zh.md`. The architecture diagrams no longer name a specific LLM vendor or model.
