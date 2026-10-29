@@ -42,6 +42,7 @@ Upgrade note: run `npm run build`, then restart the worker (`agentmem stop`, or 
 - In-process tests that call the LLM stub no longer write `llm-usage-*.jsonl` under the real `~/.agentmem/logs`. Test helpers pin `AGENTMEM_RUNTIME_DIR` to a temp directory (on Windows `os.homedir()` follows `USERPROFILE`, so setting only `HOME` was not enough).
 - `agentmem bootstrap-win` no longer drops `.env` settings. It updates only `AGENTMEM_LLM_API_KEY`, `AGENTMEM_LLM_API_URL`, `AGENTMEM_LLM_MODEL` and `AGENTMEM_PORT` in place and keeps every other line. It writes no backup copy of `.env` (a copy would be one more file holding the key) and replaces the file atomically, so an interrupted run leaves either the old or the new file.
 - `start-workbench.ps1` failed to parse under Windows PowerShell 5.1 on non-UTF-8 code pages (e.g. GBK/936); it is now pure ASCII. Under 5.1 it also reported every running worker as INACTIVE (`ConvertFrom-Json -Depth` is PowerShell 6.2+), which made `start` rebuild and start a second worker.
+- Theme: in Dark mode the sidebar now follows the Glass opacity slider like the other glass panels. Its alphas used to stay fixed; at the default slider value it looks exactly as before.
 
 ## [2.2.4] - 2026-10-25
 

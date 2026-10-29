@@ -1363,18 +1363,30 @@ test('Memory and Pipeline day cards follow the picked glass color and keep their
   assert.match(css, /\.memGroup \{[^}]*background: var\(--m-group-fill\);/);
 });
 
-test('the dark sidebar keeps its stock alphas and takes its tint from the glass color', () => {
+test('the dark sidebar keeps its stock alphas, follows the opacity slider and takes its tint from the glass color', () => {
   const css = ADMIN_UI_THEME.replace(/\/\*[\s\S]*?\*\//g, '');
   const rules = [...css.matchAll(/([^{}]*\.sidebar(?![\w-])[^{}]*)\{([^{}]*)\}/g)]
     .filter((match) => /background\s*:/.test(match[2]))
     .map((match) => [match[1].trim(), match[2].match(/background:\s*([^;]+);/)[1]]);
+  const scaled = (alpha) => `calc(${alpha} * var(--glass-scale))`;
   const tinted = (top, bottom) => `linear-gradient(180deg, rgba(var(--glass-rgb-top), ${top}), rgba(var(--glass-rgb-bottom), ${bottom}))`;
-  // One rule, the same 0.34/0.22 with or without backdrop-filter support, as on master.
-  assert.deepEqual(rules, [['html[data-glass="dark"] .sidebar.glassSurface', tinted('0.34', '0.22')]]);
-  // With no glass color, --glass-rgb-* resolves to the stock deep blue: the exact gradient master 4d8dd14 painted.
+  // One rule, the same 0.34/0.22 with or without backdrop-filter support, scaled like every other glass fill.
+  assert.deepEqual(rules, [['html[data-glass="dark"] .sidebar.glassSurface', tinted(scaled('0.34'), scaled('0.22'))]]);
+  // Resolve the rule for the --glass-scale the boot script sets from a given Glass opacity slider value.
+  const alphasAt = (opacity) => {
+    const scale = Number(runThemeBoot({ theme: { mode: 'dark', dark: { opacity } } }).styles['--glass-scale']);
+    return [...rules[0][1].matchAll(/calc\(([\d.]+) \* var\(--glass-scale\)\)/g)].map((match) => Math.round(Number(match[1]) * scale * 1000) / 1000);
+  };
+  // At the default slider value (30, --glass-scale 1) the alphas are exactly master's 0.34/0.22 ...
+  assert.match(css, /:root \{[^}]*--glass-scale: 1;/);
+  assert.deepEqual(alphasAt(ADMIN_UI_THEME_DEFAULTS.dark.opacity), [0.34, 0.22]);
+  // ... and moving the slider moves them.
+  assert.deepEqual(alphasAt(15), [0.17, 0.11]);
+  assert.deepEqual(alphasAt(60), [0.68, 0.44]);
+  // With no glass color, --glass-rgb-* resolves to the stock deep blue: at scale 1, the exact gradient master 4d8dd14 painted.
   const stockTop = css.match(/html\[data-glass="dark"\] \{[^}]*--glass-rgb-top: var\(--glass-tint-top, ([\d, ]+)\);/)[1];
   const stockBottom = css.match(/html\[data-glass="dark"\] \{[^}]*--glass-rgb-bottom: var\(--glass-tint-bottom, ([\d, ]+)\);/)[1];
-  assert.equal(rules[0][1].replace('var(--glass-rgb-top)', stockTop).replace('var(--glass-rgb-bottom)', stockBottom),
+  assert.equal(rules[0][1].replace('var(--glass-rgb-top)', stockTop).replace('var(--glass-rgb-bottom)', stockBottom).replace(/calc\(([\d.]+) \* var\(--glass-scale\)\)/g, '$1'),
     'linear-gradient(180deg, rgba(40, 48, 90, 0.34), rgba(20, 24, 56, 0.22))');
 });
 

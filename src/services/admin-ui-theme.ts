@@ -4365,10 +4365,11 @@ ${WALLPAPER_CSS}
     margin-top: 14px;
   }
 
-  /* The dark sidebar keeps its own fixed alphas (not --glass-a-* or the opacity slider) but takes its tint from
-     --glass-rgb-*, so a picked glass color reaches it too. */
+  /* The dark sidebar keeps its own stock alphas (not --glass-a-*) but multiplies them by --glass-scale like the
+     other glass surfaces, so the Glass opacity slider reaches it, and takes its tint from --glass-rgb-*, so a
+     picked glass color reaches it too. */
   html[data-glass="dark"] .sidebar.glassSurface {
-    background: linear-gradient(180deg, rgba(var(--glass-rgb-top), 0.34), rgba(var(--glass-rgb-bottom), 0.22));
+    background: linear-gradient(180deg, rgba(var(--glass-rgb-top), calc(0.34 * var(--glass-scale))), rgba(var(--glass-rgb-bottom), calc(0.22 * var(--glass-scale))));
     box-shadow: var(--glass-shadow);
   }
 
