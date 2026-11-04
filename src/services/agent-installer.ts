@@ -1859,7 +1859,7 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
     issues.push(`Grok AgentMemory profile is missing (${paths.grokProfilePath}).`);
   } else {
     const profileText = fs.readFileSync(paths.grokProfilePath, 'utf8');
-    if (!profileText.includes('agents_md: false') || !profileText.includes('get_project_context') || !profileText.includes('AgentMemory Grok Profile')
+    if (profileText.includes('agents_md: false') || !profileText.includes('get_project_context') || !profileText.includes('AgentMemory Grok Profile')
       || !profileText.includes(AGENTMEM_ENGLISH_RECORDS_MARKER)) {
       issues.push(`Grok AgentMemory profile is missing the startup and boundary workflow (${paths.grokProfilePath}).`);
     }

@@ -186,7 +186,7 @@ description: AgentMemory-aware Grok development agent.
 prompt_mode: full
 model: inherit
 permission_mode: default
-agents_md: false
+agents_md: true
 ---
 
 # AgentMemory Grok Profile
