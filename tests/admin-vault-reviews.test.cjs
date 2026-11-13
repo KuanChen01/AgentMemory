@@ -471,3 +471,28 @@ test('vault days are all "not run" on a database with no checkpoints, runs or re
   assert.equal(body.last_checkpoint_at, null);
   assert.deepEqual(body.checkpoints, []);
 }));
+
+test('VaultAudit checkpoints (last_successful_audit_at) join the old Daily Review history', withDb(async (db) => {
+  await write(db, (tx) => {
+    insertFact(tx, {
+      id: 'cp-review', entityKey: 'obsidian-vault-daily-review', value: '2026-10-11T09:46:13.698761+00:00',
+      effectiveAt: '2026-10-11T09:46:14.000Z',
+    });
+    insertFact(tx, {
+      id: 'cp-audit', entityKey: 'obsidian-vault-daily-audit', factKey: 'last_successful_audit_at',
+      value: '2026-10-13T12:01:32.553580+00:00', effectiveAt: '2026-10-13T12:01:47.000Z',
+    });
+    insertFact(tx, {
+      id: 'cp-audit-wrong-fact', entityKey: 'obsidian-vault-daily-audit', value: '2026-10-18T00:00:00.000Z',
+      effectiveAt: '2026-10-18T00:00:00.000Z',
+    });
+    insertFact(tx, {
+      id: 'cp-review-wrong-fact', entityKey: 'obsidian-vault-daily-review', factKey: 'last_successful_audit_at',
+      value: '2026-10-18T00:00:00.000Z', effectiveAt: '2026-10-18T00:00:00.000Z',
+    });
+  });
+  const body = reviews(db, { limit: 100, readsFrom: '2026-10-18T00:00:00.000Z', readsTo: '2026-10-19T00:00:00.000Z' });
+  assert.deepEqual(body.checkpoints.map((row) => row.id), ['cp-audit', 'cp-review']);
+  assert.equal(body.last_checkpoint_at, '2026-10-13T12:01:32.553Z');
+  assert.equal(body.checkpoints[0].day, '2026-10-13');
+}));

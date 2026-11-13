@@ -20,6 +20,7 @@ function clipRedacted(value: unknown, max: number): string | null {
   return text.length > max ? text.slice(0, max) : text;
 }
 import { cjkOverlapScore, extractCjkBigrams } from './cjk';
+import { vaultCheckpointWhere } from './vault-checkpoint';
 
 // Type definitions
 export interface Observation {
@@ -3129,17 +3130,26 @@ export class DatabaseManager {
       FROM daily_memory_digests WHERE status = 'failed' AND local_date >= ? ORDER BY local_date DESC, project_path LIMIT 5`,
     [localDay(nowMs - 86400000)]);
 
-    const vaultRow = this.db.get(`SELECT value_json, effective_at FROM state_facts
-      WHERE LOWER(entity_key) IN ('obsidian-vault-daily-review', 'automation/obsidian-vault-daily-review')
-        AND fact_key = 'last_successful_review_at' AND superseded_at IS NULL
-      ORDER BY effective_at DESC LIMIT 1`);
+    // Old Daily Review and current VaultAudit checkpoints both count; the newest one wins.
+    const vaultWhere = vaultCheckpointWhere();
+    const vaultRows = this.db.all(`SELECT value_json, effective_at FROM state_facts
+      WHERE ${vaultWhere.sql} AND superseded_at IS NULL`, vaultWhere.params);
     let vaultValue: string | null = null;
-    if (vaultRow) {
+    let vaultMs = Number.NEGATIVE_INFINITY;
+    for (const vaultRow of vaultRows) {
+      let value: string | null = null;
       try {
         const parsed = JSON.parse(vaultRow.value_json);
-        vaultValue = typeof parsed === 'string' && parsed.trim() ? parsed : null;
+        value = typeof parsed === 'string' && parsed.trim() ? parsed : null;
       } catch { /* fall back to the fact's effective time */ }
-      vaultValue = vaultValue || vaultRow.effective_at || null;
+      value = value || vaultRow.effective_at || null;
+      if (!value) continue;
+      const ms = Date.parse(value);
+      const rank = Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+      if (vaultValue === null || rank > vaultMs) {
+        vaultValue = value;
+        vaultMs = rank;
+      }
     }
 
     return {
