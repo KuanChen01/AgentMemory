@@ -77,14 +77,13 @@ export const ADMIN_UI_DEV_PANELS: Array<{ id: string; panel: string; key: string
   { id: 'navDevObservationLedger', panel: 'observationLedgerPanel', key: 'tabs.observationLedger', label: 'Observation Ledger' },
 ];
 
-// The five Home health cards, in ring order (clockwise from 12 o'clock). The ring derives each segment's state
+// The four Home health cards, in ring order (clockwise from 12 o'clock). The ring derives each segment's state
 // from the matching card, so the two never disagree.
 export const ADMIN_UI_HEALTH_CHECKS: Array<{ key: string; id: string; card: string; labelKey: string; label: string }> = [
   { key: 'worker', id: 'homeHealthRingWorker', card: 'homeWorkerCard', labelKey: 'home.workerLabel', label: 'Worker' },
   { key: 'queue', id: 'homeHealthRingQueue', card: 'homeQueueCard', labelKey: 'home.queueLabel', label: 'Queue' },
   { key: 'llm', id: 'homeHealthRingLlm', card: 'homeLlmCard', labelKey: 'home.llmLabel', label: 'LLM today' },
   { key: 'digest', id: 'homeHealthRingDigest', card: 'homeDigestCard', labelKey: 'home.digestLabel', label: 'Last digest' },
-  { key: 'vault', id: 'homeHealthRingVault', card: 'homeVaultCard', labelKey: 'home.vaultLabel', label: 'Vault review' },
 ];
 
 // Views still waiting for their page. Empty for now; the shape stays for the next placeholder.
@@ -322,7 +321,7 @@ function renderHomeView(): string {
   return `
       <section id="homeView" class="appView is-active" aria-labelledby="pageTitle">
         ${renderPageHead('homeLead', 'home.lead', 'Worker health, today\'s memories, and what needs attention.', 'homeUpdated')}
-        <div class="homeHealth">${renderHealthCard('homeWorkerCard', 'settingsView', 'home.workerLabel', 'Worker')}${renderHealthCard('homeQueueCard', 'pipelineView', 'home.queueLabel', 'Queue')}${renderHealthCard('homeLlmCard', 'pipelineView', 'home.llmLabel', 'LLM today')}${renderHealthCard('homeDigestCard', 'digestsView', 'home.digestLabel', 'Last digest')}${renderHealthCard('homeVaultCard', 'digestsView', 'home.vaultLabel', 'Vault review')}
+        <div class="homeHealth">${renderHealthCard('homeWorkerCard', 'settingsView', 'home.workerLabel', 'Worker')}${renderHealthCard('homeQueueCard', 'pipelineView', 'home.queueLabel', 'Queue')}${renderHealthCard('homeLlmCard', 'pipelineView', 'home.llmLabel', 'LLM today')}${renderHealthCard('homeDigestCard', 'digestsView', 'home.digestLabel', 'Last digest')}
         </div>
 
         <div class="homeRow">
@@ -752,7 +751,7 @@ function renderDigestStat(id: string, icon: string, labelKey: string, label: str
               </div>`;
 }
 
-// Digests & Reviews: the two status cards (nightly digest scheduler, Vault review), then the digests grouped by the
+// Digests: the nightly digest scheduler card, then the digests grouped by the
 // day they cover. The client fills #digList keyed by day and digest id; the detail drawer is the one Activity owns,
 // moved in on open, with a digest body of its own.
 function renderDigestsView(): string {
@@ -762,7 +761,7 @@ function renderDigestsView(): string {
     `<div class="actPopover actMenu" id="${id}" role="listbox" data-i18n-aria-label="${key}" aria-label="${label}" hidden></div>`;
   return `
       <section id="digestsView" class="appView digestsView" aria-labelledby="pageTitle">
-        ${renderPageHead('digLead', 'digests.lead', 'Nightly project digests and Vault review activity across your workspace.', 'digUpdated', '', 'memLead pipeLead')}
+        ${renderPageHead('digLead', 'digests.lead', 'Nightly project digests across your workspace.', 'digUpdated', '', 'memLead pipeLead')}
 
         <div class="memToolbar viewToolbar digToolbar digGlass glassSurface glassBlur" id="digToolbar" role="search" data-i18n-aria-label="digests.toolbarLabel" aria-label="Digest filters">
           ${renderSearchField('digSearchInput', 'digests.searchLabel', 'Search digests', 'digests.searchPlaceholder', 'Search digests…', 'digSearchClear', 'digests.searchClear', 'Clear search')}
@@ -781,22 +780,6 @@ function renderDigestsView(): string {
               <span class="digChip statusChip is-neutral is-muted" id="digNightlyChip"><span class="digChipDot" aria-hidden="true"></span><span id="digNightlyChipText">—</span></span>
             </header>
             <div class="digStats">${renderDigestStat('digNextRun', 'moon', 'digests.nextRun', 'Next run')}${renderDigestStat('digLastRun', 'clock', 'digests.lastRun', 'Last run')}${renderDigestStat('digLastProjects', 'layers', 'digests.projectsLabel', 'Projects', true)}
-            </div>
-          </section>
-          <section class="digCard digGlass glassCard glassBlur" id="digVaultCard" aria-labelledby="digVaultTitle">
-            <header class="digCardHead">
-              <span class="digCardIcon is-vault" aria-hidden="true">${renderAdminIcon('memory', 'digCardGlyph')}</span>
-              <h2 class="digCardTitle" id="digVaultTitle" data-i18n="digests.vaultTitle">Vault review</h2>
-              <span class="digChip statusChip is-neutral is-muted" id="digVaultChip"><span class="digChipDot" aria-hidden="true"></span><span id="digVaultChipText">—</span></span>
-            </header>
-            <div class="digStats digVaultStats">
-              <div class="digStat" id="digVaultLast">
-                <span class="digStatText">
-                  <span class="digStatLabel" data-i18n="digests.vaultLastCheckpoint">Last checkpoint</span>
-                  <span class="digStatValue" id="digVaultLastValue">—</span>
-                </span>
-              </div>
-              <div class="digDots" id="digVaultDots" role="img" data-i18n-aria-label="digests.vaultDotsLabel" aria-label="Vault review checkpoints over the last 14 days"></div>
             </div>
           </section>
         </div>

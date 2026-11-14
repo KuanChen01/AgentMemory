@@ -340,13 +340,7 @@ Daily digest reads use the same read gate as startup context, and manual digest 
 }
 ```
 
-AgentMemory does not copy or take ownership of the Vault `vault-sync` skill. If the skill is currently installed only in the Codex skills directory, expose the same skill folder at OpenCode's supported global agent skill path:
-```powershell
-New-Item -ItemType Junction `
-  -Path "$env:USERPROFILE\.agents\skills\vault-sync" `
-  -Target "$env:USERPROFILE\.codex\skills\vault-sync"
-```
-OpenCode can then discover and load the same `SKILL.md` with its `skill` tool; the global rules recommend it only for verified, durable project outcomes.
+AgentMemory does not manage Vault rules or the `vault-sync` skill. The OpenCode managed block covers AgentMemory only; a Vault rule in `AGENTS.md` is yours to maintain outside that block. Older installs wrote a `vault-sync` line inside the block; a reinstall or uninstall moves that line to just below the block instead of deleting it.
 
 #### 2. Claude Code
 Claude Code uses two different files:

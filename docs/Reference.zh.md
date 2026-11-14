@@ -340,13 +340,7 @@ workbench 还会通过 loopback-only 的 admin API 驱动网页交互：
 }
 ```
 
-AgentMemory 不复制或接管 Vault 的 `vault-sync` 技能。若技能目前只安装在 Codex 技能目录，可将同一个技能目录暴露到 OpenCode 支持的全局 agent 技能路径：
-```powershell
-New-Item -ItemType Junction `
-  -Path "$env:USERPROFILE\.agents\skills\vault-sync" `
-  -Target "$env:USERPROFILE\.codex\skills\vault-sync"
-```
-这样 OpenCode 能通过 `skill` 工具发现并按需加载同一份 `SKILL.md`；全局规则只在项目结果已验证且具有长期价值时提示使用它。
+AgentMemory 不管理 Vault 规则，也不管理 `vault-sync` 技能。OpenCode 的 managed block 只包含 AgentMemory 自己的规则；`AGENTS.md` 里的 Vault 规则由你在 block 之外自行维护。旧版安装曾在 block 内写入一行 `vault-sync` 规则；重装或卸载时，这一行会被移到 block 下方保留，而不是删除。
 
 #### 2. Claude Code 客户端
 Claude Code 当前使用两份不同配置文件：

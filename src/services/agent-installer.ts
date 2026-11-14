@@ -199,8 +199,25 @@ function renderOpenCodeGlobalRulesBody(): string {
 - Treat AgentMemory results as unverified working memory and check them against the current workspace before relying on them.
 - Tool activity is captured automatically. Use record_memory only for a deliberate cross-session milestone, not routine progress.
 ${AGENTMEM_ENGLISH_RECORDS_RULE}
-- For a verified, durable project outcome, load and follow the vault-sync skill when it is available. Do not sync read-only investigations or temporary debugging to Vault.
 `;
+}
+
+/**
+ * Older installs wrote a vault-sync line inside the managed block. Vault rules are user-owned now, so a
+ * reinstall or uninstall moves those lines out of the block (right after it) instead of dropping them.
+ */
+function splitOpenCodeGlobalRules(normalized: string): { before: string; block: string; after: string } | null {
+  const start = normalized.indexOf(OPENCODE_RULES_START);
+  const end = normalized.indexOf(OPENCODE_RULES_END);
+  if (start < 0 || end <= start) return null;
+  const afterEnd = end + OPENCODE_RULES_END.length;
+  return { before: normalized.slice(0, start), block: normalized.slice(start, afterEnd), after: normalized.slice(afterEnd) };
+}
+
+function preservedOpenCodeVaultLines(parts: { before: string; block: string; after: string }): string {
+  const outside = new Set(`${parts.before}\n${parts.after}`.split('\n').map((line) => line.trim()));
+  const lines = parts.block.split('\n').filter((line) => /vault-sync/i.test(line) && !outside.has(line.trim()));
+  return lines.length > 0 ? `\n\n${lines.join('\n')}\n` : '';
 }
 
 function renderOpenCodeGlobalRules(): string {
@@ -215,13 +232,11 @@ function hasOpenCodeGlobalRules(text: string): boolean {
 
 function mergeOpenCodeGlobalRules(existing: string): string {
   const normalized = existing.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const start = normalized.indexOf(OPENCODE_RULES_START);
-  const end = normalized.indexOf(OPENCODE_RULES_END);
+  const parts = splitOpenCodeGlobalRules(normalized);
   const managedRules = renderOpenCodeGlobalRules().trimEnd();
 
-  if (start >= 0 && end > start) {
-    const afterEnd = end + OPENCODE_RULES_END.length;
-    return `${normalized.slice(0, start)}${managedRules}${normalized.slice(afterEnd)}`
+  if (parts) {
+    return `${parts.before}${managedRules}${preservedOpenCodeVaultLines(parts)}${parts.after}`
       .replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
   }
   if (!normalized.trim()) return `${managedRules}\n`;
@@ -230,11 +245,9 @@ function mergeOpenCodeGlobalRules(existing: string): string {
 
 function removeOpenCodeGlobalRules(existing: string): string {
   const normalized = existing.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const start = normalized.indexOf(OPENCODE_RULES_START);
-  const end = normalized.indexOf(OPENCODE_RULES_END);
-  if (start >= 0 && end > start) {
-    const afterEnd = end + OPENCODE_RULES_END.length;
-    return `${normalized.slice(0, start)}${normalized.slice(afterEnd)}`
+  const parts = splitOpenCodeGlobalRules(normalized);
+  if (parts) {
+    return `${parts.before}${preservedOpenCodeVaultLines(parts)}${parts.after}`
       .replace(/\n{3,}/g, '\n\n').trim();
   }
   return existing;
@@ -1898,8 +1911,6 @@ export function validateInstalledFiles(paths: InstallPaths, antigravityConfigPat
   if (!fs.existsSync(opencodePaths.globalRulesPath) ||
     !hasOpenCodeGlobalRules(fs.readFileSync(opencodePaths.globalRulesPath, 'utf8'))) {
     issues.push(`OpenCode global AgentMemory rules are missing (${opencodePaths.globalRulesPath}).`);
-  } else if (!fs.readFileSync(opencodePaths.globalRulesPath, 'utf8').includes('vault-sync')) {
-    issues.push(`OpenCode global AgentMemory rules do not reference the Vault sync skill (${opencodePaths.globalRulesPath}).`);
   } else if (!fs.readFileSync(opencodePaths.globalRulesPath, 'utf8').includes(AGENTMEM_ENGLISH_RECORDS_MARKER)) {
     issues.push(`OpenCode global AgentMemory rules predate the English-records rule; reinstall OpenCode (${opencodePaths.globalRulesPath}).`);
   }

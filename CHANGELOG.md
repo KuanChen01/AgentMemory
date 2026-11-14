@@ -30,6 +30,8 @@ Upgrade note: run `npm run build`, then restart the worker (`agentmem stop`, or 
 
 ### Removed
 - LLM test-connection endpoint and buttons (`POST /admin/api/llm-test`, Settings and Developer-tools Test connection). The endpoint sent the saved API key to a caller-supplied URL.
+- AgentMemory no longer manages Vault rules. The OpenCode managed rules block drops its `vault-sync` line and `agentmem doctor` no longer reports a missing Vault sync reference. On reinstall or uninstall, a `vault-sync` line that an older install wrote inside the block is moved just below the block, not deleted. Vault rules already in agent rule files are left as they are.
+- Admin: the Vault review card (Digests view), the Vault review health card and ring segment on Home, and the stale-checkpoint attention item. `GET /admin/api/vault-reviews` and the `vault_review` field of `/admin/api/home-summary` are gone. Stored checkpoint facts are not touched. `AGENTMEMORY_SKIP_CAPTURE` and the work-overview / review-reads / review-runs reader APIs stay.
 
 ### Added
 - Theme: adjustable glass color. The Theme popover has a Glass color row (Default, six presets and a custom color picker) that tints the glass panels, including the sidebar and the Memory/Pipeline day cards. The Light and Dark sets each keep their own color in this browser's `am.theme` storage. Default follows the glass tone, so existing setups look the same until you pick a color; Reset or the Default chip restores it. The color is drawn exactly as picked, with no automatic text-contrast adjustment. A malformed saved color is ignored on its own, without resetting the rest of the theme.

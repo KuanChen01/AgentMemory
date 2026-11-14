@@ -282,7 +282,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const DIGEST_SCHEDULER_REFRESH_MS = 60000;
   const HOME_CHART_DAYS = 30;
   const V21_SWITCH_DAY = "2026-10-15";
-  const VAULT_STALE_MS = 26 * 60 * 60 * 1000;
   // Activity reads one window of at most 120 local days. The first request asks for 50 cards and later pages follow
   // next_cursor; a refresh re-reads the loaded head (up to the API's 100) and merges it by memory id.
   const ACTIVITY_DAY_MS = 86400000;
@@ -538,8 +537,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       groupNodes: new Map(),
       signatures: {},
     },
-    // Digests & Reviews: the list pages through digest-list by covered day (window holds the from/to days the cursor
-    // was issued under). scheduler and vault feed the two status cards and load on their own slower cadence.
+    // Digests: the list pages through digest-list by covered day (window holds the from/to days the cursor
+    // was issued under). scheduler and lastRun feed the Nightly status card and load on their own slower cadence.
     digests: {
       query: "",
       project: "",
@@ -570,9 +569,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       signatures: {},
       scheduler: null,
       schedulerAt: 0,
-      vault: null,
-      vaultAt: 0,
-      vaultSeq: 0,
+      cardsAt: 0,
+      cardsSeq: 0,
       // Unfiltered digest-list stats for the Nightly card's Last run (filters must not move it).
       lastRun: null,
     },
@@ -823,7 +821,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     homeQueueCard: document.getElementById("homeQueueCard"),
     homeLlmCard: document.getElementById("homeLlmCard"),
     homeDigestCard: document.getElementById("homeDigestCard"),
-    homeVaultCard: document.getElementById("homeVaultCard"),
     homeTodayDate: document.getElementById("homeTodayDate"),
     homeTodayCount: document.getElementById("homeTodayCount"),
     homeKindOutcome: document.getElementById("homeKindOutcome"),
@@ -1003,10 +1000,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     digLastRunValue: document.getElementById("digLastRunValue"),
     digLastProjectsValue: document.getElementById("digLastProjectsValue"),
     digLastProjectsSub: document.getElementById("digLastProjectsSub"),
-    digVaultChip: document.getElementById("digVaultChip"),
-    digVaultChipText: document.getElementById("digVaultChipText"),
-    digVaultLastValue: document.getElementById("digVaultLastValue"),
-    digVaultDots: document.getElementById("digVaultDots"),
     digList: document.getElementById("digList"),
     digNotice: document.getElementById("digNotice"),
     digNoticeTitle: document.getElementById("digNoticeTitle"),
@@ -2859,11 +2852,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return Math.round((today.getTime() - then.getTime()) / 86400000);
   }
 
-  function formatDayLabel(date) {
-    const days = calendarDaysAgo(date);
-    return days === 0 ? t("home.today") : days === 1 ? t("home.yesterday") : formatShortDate(date);
-  }
-
   function formatDuration(ms) {
     const minutes = Math.max(0, Math.floor(ms / 60000));
     const days = Math.floor(minutes / 1440);
@@ -2992,26 +2980,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           formatShortDate(covered),
           meta,
           [projectBasename(latest.project_path), formatShortDate(covered), status.replace(/_/g, " "), generatedAt ? formatUiDate(generatedAt, "dateTime") : ""].filter(Boolean).join(" · ")
-        );
-      }
-    }
-
-    if (!summary) {
-      renderHealthCard(els.homeVaultCard, "idle", "—", t("home.loading"));
-    } else {
-      const checkpoint = parseTimestamp(summary.vault_review && summary.vault_review.last_successful_review_at);
-      if (!checkpoint) {
-        renderHealthCard(els.homeVaultCard, "idle", "—", t("home.vaultNone"));
-      } else {
-        const age = now - checkpoint.getTime();
-        const daysAgo = calendarDaysAgo(checkpoint);
-        const ageText = formatDuration(age);
-        renderHealthCard(
-          els.homeVaultCard,
-          age > VAULT_STALE_MS ? "warn" : "ok",
-          daysAgo <= 1 ? formatClock(checkpoint) : formatShortDate(checkpoint),
-          daysAgo <= 1 ? t("home.vaultMeta", { day: formatDayLabel(checkpoint), age: ageText }) : t("home.vaultAge", { age: ageText }),
-          formatUiDate(checkpoint, "dateTime")
         );
       }
     }
@@ -3170,23 +3138,18 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
           digestDate: digest.local_date || "",
         });
       });
-      const checkpoint = parseTimestamp(summary.vault_review && summary.vault_review.last_successful_review_at);
-      if (checkpoint && Date.now() - checkpoint.getTime() > VAULT_STALE_MS) {
-        items.push({ severity: "warn", text: t("home.attnVaultStale", { age: formatDuration(Date.now() - checkpoint.getTime()) }), target: "digestsView" });
-      }
     }
     return items;
   }
 
-  // Ring segments mirror the five health cards: a card that is ok, warn or error passes that state through;
-  // an idle card (no tasks, no digest or checkpoint yet) counts as passing once its data has loaded.
+  // Ring segments mirror the four health cards: a card that is ok, warn or error passes that state through;
+  // an idle card (no tasks or no digest yet) counts as passing once its data has loaded.
   function getHealthCheckStates() {
     const loaded = {
       homeWorkerCard: !!state.overview || state.overviewError,
       homeQueueCard: !!state.overview,
       homeLlmCard: !!state.homeSummary,
       homeDigestCard: !!state.homeSummary,
-      homeVaultCard: !!state.homeSummary,
     };
     return HEALTH_CHECKS.map((check) => {
       const status = state.healthStatus[check.card];
@@ -7030,7 +6993,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
-  // ---------- Digests & Reviews ----------
+  // ---------- Digests ----------
 
   const DIGEST_PAGE = 50;
   const DIGEST_RANGE_DAYS = { "7d": 7, "30d": 30, "90d": 90 };
@@ -7040,9 +7003,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
   const DIGEST_CARDS_REFRESH_MS = 60 * 1000;
   const DIGEST_FACTS_PREVIEW = 3;
   const DIGEST_SOURCES_PREVIEW = 5;
-  const VAULT_DAYS = 14;
-  // A checkpoint within a day and a half counts as on schedule (the review runs daily).
-  const VAULT_ON_SCHEDULE_MS = 36 * 60 * 60 * 1000;
 
   function findDigestItem(id) {
     return state.digests.items.find((item) => item.id === id) || null;
@@ -7207,34 +7167,23 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     }
   }
 
-  // The scheduler card and the Vault card. Both requests are cheap; neither blocks the list.
+  // The Nightly card: scheduler state plus the unfiltered last run. Both requests are cheap; neither blocks the list.
   async function loadDigestCards(force) {
     const dig = state.digests;
-    if (!force && Date.now() - dig.vaultAt < DIGEST_CARDS_REFRESH_MS) return;
-    dig.vaultAt = Date.now();
-    const seq = dig.vaultSeq + 1;
-    dig.vaultSeq = seq;
+    if (!force && Date.now() - dig.cardsAt < DIGEST_CARDS_REFRESH_MS) return;
+    dig.cardsAt = Date.now();
+    const seq = dig.cardsSeq + 1;
+    dig.cardsSeq = seq;
     const tz = String(-new Date().getTimezoneOffset());
-    const params = new URLSearchParams({ tz_offset_minutes: tz });
     const lastRunParams = new URLSearchParams({ limit: "1", stats: "1", tz_offset_minutes: tz });
     const results = await Promise.allSettled([
       fetchJson("/admin/api/digest-scheduler"),
-      fetchJson("/admin/api/vault-reviews?" + params.toString()),
       fetchJson("/admin/api/digest-list?" + lastRunParams.toString()),
     ]);
-    if (seq !== dig.vaultSeq) return;
+    if (seq !== dig.cardsSeq) return;
     if (results[0].status === "fulfilled") dig.scheduler = results[0].value;
     if (results[1].status === "fulfilled") {
-      const vault = results[1].value;
-      if (vault && vault.disabled) {
-        dig.vault = null;
-        applyReadPolicyToViews({ readEnabled: false });
-      } else {
-        dig.vault = vault;
-      }
-    }
-    if (results[2].status === "fulfilled") {
-      const last = results[2].value;
+      const last = results[1].value;
       if (last && last.disabled) {
         dig.lastRun = null;
         applyReadPolicyToViews({ readEnabled: false });
@@ -7500,11 +7449,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     return formatPipelineStamp(date);
   }
 
-  function formatDigestAgo(ms) {
-    const hours = Math.max(1, Math.round(ms / 3600000));
-    return hours < 48 ? t("digests.agoHours", { n: formatCount(hours) }) : t("digests.agoDays", { n: formatCount(Math.floor(hours / 24)) });
-  }
-
   // Nightly digest: the scheduler's switch and next run, and the newest covered day across every project (the
   // scheduler's own last run is not stored; list filters must not move this).
   function renderDigestNightly() {
@@ -7539,59 +7483,10 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     setAttr(els.digLastProjectsSub, "title", projects.join(String.fromCharCode(10)));
   }
 
-  // Vault review: the newest checkpoint, a derived schedule chip and one dot per local day (oldest first).
-  function renderDigestVault() {
-    const dig = state.digests;
-    const vault = dig.readsDisabled ? null : dig.vault;
-    const last = vault ? parseTimestamp(vault.last_checkpoint_at) : null;
-    setText(els.digVaultLastValue, last ? formatShortDate(last) + " " + formatClock(last) : "—");
-    let tone = "muted";
-    let text = "—";
-    if (vault) {
-      if (!last) {
-        text = t("digests.vaultNone");
-      } else {
-        const rawAge = Number(vault.last_checkpoint_age_ms);
-        const age = Number.isFinite(rawAge) && vault.last_checkpoint_age_ms !== null ? rawAge : Date.now() - last.getTime();
-        tone = age <= VAULT_ON_SCHEDULE_MS ? "ok" : "warn";
-        text = age <= VAULT_ON_SCHEDULE_MS ? t("digests.vaultOnSchedule") : t("digests.vaultBehind", { ago: formatDigestAgo(age) });
-      }
-    }
-    setDigestChip(els.digVaultChip, els.digVaultChipText, tone, text);
-    setAttr(els.digVaultChip, "title", vault && Number(vault.reads_total) > 0 ? t("digests.vaultReads", { n: formatCount(vault.reads_total) }) : "");
-    const todayKey = localDayKey(new Date());
-    let days = vault && Array.isArray(vault.days) ? vault.days.slice(-VAULT_DAYS) : [];
-    // Until the first answer, the same fourteen days show as empty dots so the card keeps its shape.
-    if (!days.length) {
-      days = [];
-      for (let index = VAULT_DAYS - 1; index >= 0; index -= 1) days.push({ day: localDayKey(shiftDays(new Date(), -index)), ran: false, runs: 0, reads: 0, pending: true });
-    }
-    const signature = [state.locale, todayKey, JSON.stringify(days)].join("|");
-    if (dig.signatures.vaultDots === signature) return;
-    dig.signatures.vaultDots = signature;
-    els.digVaultDots.innerHTML = days.map((day) => {
-      const date = parseLocalDay(day.day);
-      const runs = Number(day.runs || 0);
-      const reads = Number(day.reads || 0);
-      const ran = !!day.ran || runs > 0;
-      const isToday = day.day === todayKey;
-      const kind = day.pending ? "none" : ran ? "ran" : isToday ? "today" : reads > 0 ? "reads" : "none";
-      const name = date ? formatShortDate(date) : day.day;
-      const label = date ? String(date.getDate()) : String(day.day || "");
-      const tip = day.pending ? name
-        : ran ? t(runs === 1 ? "digests.vaultDayRanOne" : "digests.vaultDayRan", { day: name, n: formatCount(runs || 1) }) + (reads > 0 ? " · " + t("digests.vaultReads", { n: formatCount(reads) }) : "")
-          : isToday ? t("digests.vaultDayToday", { day: name })
-            : reads > 0 ? t("digests.vaultDayReads", { day: name, n: formatCount(reads) }) : t("digests.vaultDayNone", { day: name });
-      return '<span class="digDot is-' + kind + (isToday ? ' is-today' : '') + '" title="' + escapeHtml(tip) + '"><span class="digDotMark" aria-hidden="true"></span>' +
-        '<span class="digDotLabel" aria-hidden="true">' + escapeHtml(label) + '</span></span>';
-    }).join("");
-  }
-
   function renderDigestCards() {
     if (!els.digCards) return;
     setHidden(els.digCards, !!state.digests.readsDisabled);
     renderDigestNightly();
-    renderDigestVault();
   }
 
   function renderDigestToolbar() {
@@ -10623,7 +10518,7 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
       return;
     }
     if (mem.readsDisabled && mem.items.length === 0 && !mem.nextCursor && pipe.readsDisabled && pipe.items.length === 0 && !pipe.nextCursor && !drawer.taskItem &&
-      dig.readsDisabled && dig.items.length === 0 && !dig.nextCursor && !dig.vault && !dig.lastRun && !drawer.digestPayload &&
+      dig.readsDisabled && dig.items.length === 0 && !dig.nextCursor && !dig.lastRun && !drawer.digestPayload &&
       prj.readsDisabled && prj.items.length === 0 && !prj.nextCursor && !prj.summary && !drawer.projectPayload &&
       skl.readsDisabled && skl.items.length === 0 && !skl.nextCursor && !skl.summary && !drawer.skillPayload &&
       !drawer.payload && (!isMemoryDrawerOpen() || drawer.readsDisabled) && early.payload === null && early.key === "" && !early.loadedAt && early.readsDisabled) return;
@@ -10664,7 +10559,6 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     dig.days = [];
     dig.stats = null;
     dig.facets = null;
-    dig.vault = null;
     dig.lastRun = null;
     dig.nextCursor = null;
     dig.window = null;
@@ -10677,8 +10571,8 @@ export function renderAdminWorkbenchClientScript(pollIntervalMs: number): string
     dig.busySeq = 0;
     dig.moreSeq = 0;
     dig.seq += 1;
-    dig.vaultSeq += 1;
-    dig.vaultAt = 0;
+    dig.cardsSeq += 1;
+    dig.cardsAt = 0;
     if (els.digList) els.digList.innerHTML = "";
     prj.items = [];
     prj.summary = null;

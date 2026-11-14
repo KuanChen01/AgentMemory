@@ -64,7 +64,7 @@ import {
   stuckTaskCount, taskIdleMs, taskRetryMs, TaskTrigger,
 } from './task-consolidation';
 import { getAdminPipeline } from './pipeline-query';
-import { getAdminDigestDetail, getAdminDigestList, getAdminVaultReviews } from './digest-query';
+import { getAdminDigestDetail, getAdminDigestList } from './digest-query';
 import { getAdminProjectDetail, getAdminProjectList } from './project-query';
 import { getAdminSkillDetail, getAdminSkillsSummary } from './skill-query';
 import {
@@ -290,8 +290,6 @@ const ADMIN_PIPELINE_DISABLED_FIELDS = ['generated_at', 'filters', 'stages', 'it
 const ADMIN_DIGEST_LIST_DISABLED_FIELDS = ['generated_at', 'filters', 'items', 'next_cursor', 'days', 'stats', 'facets'] as const;
 
 const ADMIN_DIGEST_DETAIL_DISABLED_FIELDS = ['digest', 'sources', 'sources_truncated'] as const;
-
-const ADMIN_VAULT_REVIEWS_DISABLED_FIELDS = ['generated_at', 'filters', 'checkpoints', 'next_cursor', 'last_checkpoint_at', 'last_checkpoint_age_ms', 'days', 'reads_total', 'runs', 'schedule'] as const;
 
 const ADMIN_PROJECT_LIST_DISABLED_FIELDS = ['generated_at', 'filters', 'summary', 'items', 'next_cursor'] as const;
 
@@ -882,36 +880,6 @@ app.get('/admin/api/skill-detail', adminOnlyGuard, async (req, res) => {
       return;
     }
     console.error('Error fetching admin skill detail:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/admin/api/vault-reviews', adminOnlyGuard, async (req, res) => {
-  try {
-    if (!(await isReadEnabled())) {
-      sendAdminReadsDisabled(res, ADMIN_VAULT_REVIEWS_DISABLED_FIELDS);
-      return;
-    }
-    const readQuery = adminReadQuery(req, 'vault-reviews');
-    const tz = adminGiven(readQuery('tz_offset_minutes'));
-    const limit = adminGiven(readQuery('limit'));
-    const cursor = adminGiven(readQuery('cursor'));
-    res.json(getAdminVaultReviews(dbManager, {
-      from: adminGiven(readQuery('from')),
-      to: adminGiven(readQuery('to')),
-      tzOffsetMinutes: adminStrictInteger('vault-reviews', tz, 'tz_offset_minutes'),
-      limit: adminStrictInteger('vault-reviews', limit, 'limit'),
-      cursor: cursor ?? null,
-      readsFrom: adminGiven(readQuery('reads_from')),
-      readsTo: adminGiven(readQuery('reads_to')),
-      stats: adminStatsFlag('vault-reviews', adminGiven(readQuery('stats'))),
-    }));
-  } catch (err: any) {
-    if (typeof err?.message === 'string' && err.message.startsWith('Invalid vault-reviews request:')) {
-      res.status(400).json({ error: err.message });
-      return;
-    }
-    console.error('Error fetching admin vault reviews:', err);
     res.status(500).json({ error: err.message });
   }
 });

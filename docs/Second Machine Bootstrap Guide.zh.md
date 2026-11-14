@@ -208,4 +208,3 @@ bootstrap 成功后，再做以下 live acceptance：
   - 确认插件指向当前 checkout 的 `dist/hooks/opencode-session-start.js`、`dist/hooks/opencode-user-prompt.js` 与 `dist/hooks/opencode-post-tool.js`
   - 确认 `mcp.agentmem.environment.AGENTMEM_AGENT_ID` 为 `opencode`，且 `%USERPROFILE%\.config\opencode\AGENTS.md` 有 AgentMemory managed block
   - 完全退出并重启 OpenCode，使新插件文件生效
-  - 如需使用 Vault，同一份 `vault-sync` 技能可通过 junction 暴露在 `%USERPROFILE%\.agents\skills\vault-sync\SKILL.md`；OpenCode 的 `skill` 工具应能列出 `vault-sync`
