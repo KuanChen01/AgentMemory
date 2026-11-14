@@ -1839,7 +1839,7 @@ ${WALLPAPER_CSS}
   /* Home */
   .homeHealth {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 16px;
   }
 
@@ -7010,11 +7010,6 @@ ${WALLPAPER_CSS}
     --d-muted-ink: #5d6478;
     --d-muted-dot: #a3aabb;
     --d-open-ink: #c46a00;
-    --d-dot-none: rgba(150, 158, 190, 0.32);
-    --d-ran: radial-gradient(circle at 35% 30%, #93f0b4, #24b85c 72%);
-    --d-ran-glow: 0 0 0 3px rgba(52, 199, 89, 0.14), 0 2px 6px -1px rgba(30, 160, 80, 0.55);
-    --d-reads: radial-gradient(circle at 35% 30%, #ffd78f, #f59e0b 72%);
-    --d-reads-glow: 0 0 0 3px rgba(245, 158, 11, 0.14), 0 2px 6px -1px rgba(220, 130, 20, 0.50);
     --d-decision: #8e6cf6;
     --d-next: #34c759;
     --d-accent: #2f7cf6;
@@ -7058,9 +7053,6 @@ ${WALLPAPER_CSS}
     --d-muted-ink: #b4bbd0;
     --d-muted-dot: #6b738e;
     --d-open-ink: #ffb84d;
-    --d-dot-none: rgba(160, 175, 220, 0.22);
-    --d-ran-glow: 0 0 0 3px rgba(52, 199, 89, 0.18), 0 0 10px -1px rgba(60, 220, 120, 0.65);
-    --d-reads-glow: 0 0 0 3px rgba(255, 170, 50, 0.18), 0 0 10px -1px rgba(255, 170, 50, 0.60);
     --d-decision: #a98bff;
     --d-next: #3ad46e;
     --d-accent: #6fb0ff;
@@ -7183,7 +7175,7 @@ ${WALLPAPER_CSS}
   /* Status cards. */
   .digCards {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
     margin-top: 16px;
   }
@@ -7211,10 +7203,6 @@ ${WALLPAPER_CSS}
     background: var(--d-tile);
     box-shadow: var(--d-tile-shadow);
     color: var(--d-accent);
-  }
-
-  .digCardIcon.is-vault {
-    color: var(--d-decision);
   }
 
   .digCardGlyph {
@@ -7261,10 +7249,6 @@ ${WALLPAPER_CSS}
   .digChip.is-err { background: var(--d-err-fill); color: var(--d-err-ink); }
   .digChip.is-err .digChipDot { background: var(--d-err-dot); }
 
-  #digVaultChip {
-    margin-left: auto;
-  }
-
   .digStats {
     display: flex;
     align-items: center;
@@ -7284,8 +7268,7 @@ ${WALLPAPER_CSS}
     padding-left: 4px;
   }
 
-  .digStat + .digStat,
-  .digDots {
+  .digStat + .digStat {
     box-shadow: -1px 0 0 var(--a-line);
   }
 
@@ -7341,68 +7324,7 @@ ${WALLPAPER_CSS}
     white-space: nowrap;
   }
 
-  .digVaultStats .digStat {
-    flex: 0 0 auto;
-    padding-right: 20px;
-  }
-
-  /* Fourteen days, oldest first: green ran, amber read but no checkpoint, grey nothing, today hollow until it runs. */
-  .digDots {
-    display: grid;
-    flex: 1 1 auto;
-    grid-template-columns: repeat(14, minmax(0, 1fr));
-    min-width: 0;
-    padding-left: 12px;
-  }
-
-  .digDot {
-    display: grid;
-    justify-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .digDotMark {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--d-dot-none);
-    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.45);
-  }
-
-  .digDot.is-ran .digDotMark {
-    background: var(--d-ran);
-    box-shadow: var(--d-ran-glow);
-  }
-
-  .digDot.is-reads .digDotMark {
-    background: var(--d-reads);
-    box-shadow: var(--d-reads-glow);
-  }
-
-  .digDot.is-today:not(.is-ran) .digDotMark {
-    background: transparent;
-    box-shadow: inset 0 0 0 1.5px var(--d-ok-dot);
-  }
-
-  .digDotLabel {
-    color: var(--text-3);
-    font-size: 11.5px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  /* "Oct 6" ends under its dot and runs left into the gutter, so it never meets the next label. */
-  .digDot:first-child .digDotLabel {
-    justify-self: end;
-    margin-right: calc(50% - 0.6em);
-  }
-
   @media (max-width: 1439px) {
-    .digCards {
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    }
-
     .digCard {
       padding: 14px 16px 16px;
     }
@@ -7425,14 +7347,6 @@ ${WALLPAPER_CSS}
       width: 21px;
       height: 21px;
       flex-basis: 21px;
-    }
-
-    .digVaultStats .digStat {
-      padding-right: 14px;
-    }
-
-    .digDots {
-      padding-left: 8px;
     }
   }
 
@@ -7628,12 +7542,6 @@ ${WALLPAPER_CSS}
     .digestsView.is-drawer-open .digRow {
       grid-template-columns: 38px minmax(120px, 176px) minmax(0, 1fr) minmax(44px, max-content);
       column-gap: 12px;
-    }
-  }
-
-  @media (max-width: 1180px) {
-    .digCards {
-      grid-template-columns: minmax(0, 1fr);
     }
   }
 

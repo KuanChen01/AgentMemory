@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db';
 import { agentMatchSql, presentedAgents } from './agent-id';
 import { sanitizeLastError, sanitizeText } from './pipeline-query';
-import { vaultCheckpointWhere } from './vault-checkpoint';
 
 const DIGEST_STATUSES = ['succeeded', 'skipped', 'failed'] as const;
 type DigestStatus = typeof DIGEST_STATUSES[number];
@@ -13,13 +12,10 @@ const COUNT_KEYS = [
 ] as const;
 
 const DAY_MS = 86_400_000;
-const READS_MAX_WINDOW_MS = 31 * DAY_MS;
-const VAULT_RUN_LIMIT = 20;
 const SOURCE_LIMIT = 50;
 
 const CURSOR_TOKEN = /^[A-Za-z0-9_-]+$/;
 const FILTER_HASH = /^[0-9a-f]{12}$/;
-const ISO_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 // Date, optional time, optional Z or numeric offset. Stored rows also use 'YYYY-MM-DD HH:MM:SS'.
 const STAMP_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?)?(?:Z|([+-])(\d{2}):(\d{2}))?$/i;
 
@@ -44,25 +40,8 @@ export interface AdminDigestDetailOptions {
   id?: string;
 }
 
-export interface AdminVaultReviewsOptions {
-  from?: string;
-  to?: string;
-  tzOffsetMinutes?: number;
-  limit?: number;
-  cursor?: string | null;
-  readsFrom?: string;
-  readsTo?: string;
-  stats?: boolean;
-}
-
 interface DigestCursor {
   d: string;
-  k: string;
-  f: string;
-}
-
-interface VaultCursor {
-  t: string;
   k: string;
   f: string;
 }
@@ -82,22 +61,6 @@ interface NormalizedDigestList {
   offset: number;
   limit: number;
   cursor: DigestCursor | null;
-  stats: boolean;
-  filterHash: string;
-}
-
-interface NormalizedVault {
-  fromMs: number | null;
-  toMs: number | null;
-  fromIso: string | null;
-  toIso: string | null;
-  offset: number;
-  limit: number;
-  cursor: VaultCursor | null;
-  readsFromMs: number;
-  readsToMs: number;
-  readsFromIso: string;
-  readsToIso: string;
   stats: boolean;
   filterHash: string;
 }
@@ -161,11 +124,6 @@ function isLocalMidnight(ms: number, offsetMinutes: number): boolean {
 function addDays(day: string, count: number): string {
   const [year, month, date] = day.split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, date + count)).toISOString().slice(0, 10);
-}
-
-function localMidnightUtcMs(day: string, offsetMinutes: number): number {
-  const [year, month, date] = day.split('-').map(Number);
-  return Date.UTC(year, month - 1, date) - offsetMinutes * 60_000;
 }
 
 function daysDescending(fromDay: string, toDay: string): string[] {
@@ -271,19 +229,6 @@ function decodeDigestCursor(cursor: string): DigestCursor {
   if (typeof key !== 'string' || key.length < 1 || key.length > 512) throw invalid('digest-list', 'cursor');
   if (typeof hash !== 'string' || !FILTER_HASH.test(hash)) throw invalid('digest-list', 'cursor');
   return { d: day, k: key, f: hash };
-}
-
-function decodeVaultCursor(cursor: string): VaultCursor {
-  const parsed = decodeCursor(cursor, 'vault-reviews');
-  const time = parsed?.t;
-  const key = parsed?.k;
-  const hash = parsed?.f;
-  if (typeof time !== 'string' || !ISO_MS.test(time)) throw invalid('vault-reviews', 'cursor');
-  const ms = Date.parse(time);
-  if (!Number.isFinite(ms) || new Date(ms).toISOString() !== time) throw invalid('vault-reviews', 'cursor');
-  if (typeof key !== 'string' || key.length < 1 || key.length > 512) throw invalid('vault-reviews', 'cursor');
-  if (typeof hash !== 'string' || !FILTER_HASH.test(hash)) throw invalid('vault-reviews', 'cursor');
-  return { t: time, k: key, f: hash };
 }
 
 function takeCursor(cursor: string | null | undefined, name: string): string | null {
@@ -692,234 +637,5 @@ export function getAdminDigestDetail(db: DatabaseManager, options: AdminDigestDe
     },
     sources,
     sources_truncated: truncated,
-  };
-}
-
-function vaultInstant(value: string | undefined, field: 'from' | 'to' | 'reads_from' | 'reads_to'): number | null {
-  if (value === undefined) return null;
-  if (typeof value !== 'string') throw invalid('vault-reviews', field);
-  const text = value.trim();
-  if (text === '') throw invalid('vault-reviews', field);
-  return queryInstantMs(text, 'vault-reviews', field);
-}
-
-function normalizeVault(options: AdminVaultReviewsOptions, nowMs: number): NormalizedVault {
-  const offset = strictOffset(options.tzOffsetMinutes, 'vault-reviews');
-  const fromMs = vaultInstant(options.from, 'from');
-  const toMs = vaultInstant(options.to, 'to');
-  if (fromMs !== null && toMs !== null && !(toMs > fromMs)) throw invalid('vault-reviews', 'from');
-  const readsFromGiven = options.readsFrom !== undefined;
-  const readsToGiven = options.readsTo !== undefined;
-  let readsFromMs: number;
-  let readsToMs: number;
-  if (!readsFromGiven && !readsToGiven) {
-    const today = localDay(nowMs, offset);
-    readsFromMs = localMidnightUtcMs(addDays(today, -13), offset);
-    readsToMs = localMidnightUtcMs(addDays(today, 1), offset);
-  } else {
-    if (!readsFromGiven) throw invalid('vault-reviews', 'reads_from');
-    if (!readsToGiven) throw invalid('vault-reviews', 'reads_to');
-    const from = vaultInstant(options.readsFrom, 'reads_from');
-    const to = vaultInstant(options.readsTo, 'reads_to');
-    if (from === null || to === null || !(to > from)) throw invalid('vault-reviews', 'reads_from');
-    if (to - from > READS_MAX_WINDOW_MS) throw invalid('vault-reviews', 'reads_to');
-    readsFromMs = from;
-    readsToMs = to;
-  }
-  const fromIso = fromMs === null ? null : new Date(fromMs).toISOString();
-  const toIso = toMs === null ? null : new Date(toMs).toISOString();
-  const filterHash = hashFilters({ from: fromIso, to: toIso });
-  let cursor: VaultCursor | null = null;
-  const rawCursor = takeCursor(options.cursor, 'vault-reviews');
-  if (rawCursor) {
-    cursor = decodeVaultCursor(rawCursor);
-    if (cursor.f !== filterHash) throw invalid('vault-reviews', 'cursor');
-  }
-  return {
-    fromMs,
-    toMs,
-    fromIso,
-    toIso,
-    offset,
-    limit: strictLimit(options.limit, 'vault-reviews', 20),
-    cursor,
-    readsFromMs,
-    readsToMs,
-    readsFromIso: new Date(readsFromMs).toISOString(),
-    readsToIso: new Date(readsToMs).toISOString(),
-    stats: strictStats(options.stats, 'vault-reviews'),
-    filterHash,
-  };
-}
-
-function valueRaw(valueJson: unknown): string | null {
-  if (valueJson == null) return null;
-  const text = String(valueJson);
-  try {
-    const parsed = JSON.parse(text);
-    return typeof parsed === 'string' ? parsed : text;
-  } catch {
-    return text;
-  }
-}
-
-interface VaultCheckpoint {
-  id: string;
-  checkpoint_at: string | null;
-  ms: number | null;
-  day: string | null;
-  value_raw: string | null;
-  effective_at: string | null;
-  recorded_at: string | null;
-  superseded_at: string | null;
-  current: boolean;
-  project_path: string;
-}
-
-function loadCheckpoints(db: DatabaseManager, offset: number): VaultCheckpoint[] {
-  const where = vaultCheckpointWhere();
-  const rows = db.sqlAll(
-    `SELECT id, project_path, value_json, effective_at, recorded_at, superseded_at
-     FROM state_facts
-     WHERE ${where.sql}`,
-    where.params,
-  );
-  return rows.map((row) => {
-    const raw = valueRaw(row.value_json);
-    const fromValue = raw ? parseStamp(raw.trim()) : null;
-    const fromEffective = parseStamp(String(row.effective_at ?? '').trim());
-    const ms = fromValue?.ms ?? fromEffective?.ms ?? null;
-    return {
-      id: row.id,
-      checkpoint_at: ms === null ? null : new Date(ms).toISOString(),
-      ms,
-      day: ms === null ? null : localDay(ms, offset),
-      value_raw: raw,
-      effective_at: normalizeTimestamp(row.effective_at),
-      recorded_at: normalizeTimestamp(row.recorded_at),
-      superseded_at: row.superseded_at == null ? null : normalizeTimestamp(row.superseded_at),
-      current: row.superseded_at == null,
-      project_path: row.project_path,
-    };
-  }).sort((a, b) => {
-    const am = a.ms ?? Number.NEGATIVE_INFINITY;
-    const bm = b.ms ?? Number.NEGATIVE_INFINITY;
-    if (am !== bm) return bm - am;
-    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-  });
-}
-
-/** Day dots for the Vault card: one entry per local day of the window, oldest first. */
-function vaultDays(db: DatabaseManager, checkpoints: VaultCheckpoint[], fromMs: number, toMs: number, offset: number) {
-  const start = localDay(fromMs, offset);
-  const end = localDay(toMs - 1, offset);
-  const dayList = daysDescending(start, end).reverse();
-  const buckets = new Map<string, { runs: number; reads: number; readers: Set<string> }>();
-  for (const day of dayList) buckets.set(day, { runs: 0, reads: 0, readers: new Set() });
-  // Every checkpoint row (current or superseded) is one successful run.
-  for (const row of checkpoints) {
-    if (row.ms === null || row.ms < fromMs || row.ms >= toMs) continue;
-    const bucket = buckets.get(localDay(row.ms, offset));
-    if (bucket) bucket.runs += 1;
-  }
-  // One row per (reader, item): a re-read moves read_at, so a day counts items whose latest read fell that day.
-  // read_at is CURRENT_TIMESTAMP (UTC); the SQL prefilter keeps the scan to the window (one day of slack for odd formats).
-  for (const row of db.sqlAll(`SELECT reader, read_at FROM review_reads WHERE julianday(read_at) >= julianday(?) - 1 AND julianday(read_at) < julianday(?) + 1`,
-    [new Date(fromMs).toISOString(), new Date(toMs).toISOString()])) {
-    const parsed = parseStamp(String(row.read_at ?? '').trim());
-    if (!parsed || parsed.ms < fromMs || parsed.ms >= toMs) continue;
-    const bucket = buckets.get(localDay(parsed.ms, offset));
-    if (!bucket) continue;
-    bucket.reads += 1;
-    bucket.readers.add(String(row.reader));
-  }
-  const days = dayList.map((day) => {
-    const bucket = buckets.get(day)!;
-    return { day, ran: bucket.runs > 0, runs: bucket.runs, reads: bucket.reads, readers: bucket.readers.size };
-  });
-  return { days, reads_total: days.reduce((sum, day) => sum + day.reads, 0) };
-}
-
-function reviewRuns(db: DatabaseManager) {
-  const rows = db.sqlAll(
-    `SELECT run_id, reader, since, until, status, started_at, updated_at FROM review_runs`,
-  );
-  return rows.map((row) => {
-    const parsed = parseStamp(String(row.started_at ?? '').trim());
-    return { row, ms: parsed ? parsed.ms : Number.NEGATIVE_INFINITY };
-  }).sort((a, b) => {
-    if (a.ms !== b.ms) return b.ms - a.ms;
-    return a.row.run_id < b.row.run_id ? 1 : a.row.run_id > b.row.run_id ? -1 : 0;
-  }).slice(0, VAULT_RUN_LIMIT).map(({ row }) => ({
-    run_id: row.run_id,
-    reader: row.reader,
-    since: row.since ?? null,
-    until: row.until ?? null,
-    status: row.status ?? null,
-    started_at: normalizeTimestamp(row.started_at),
-    updated_at: normalizeTimestamp(row.updated_at),
-  }));
-}
-
-/**
- * Vault review checkpoints (including superseded history), read counts, and review runs.
- * The Vault job is an external automation, so schedule is always null.
- */
-export function getAdminVaultReviews(db: DatabaseManager, options: AdminVaultReviewsOptions = {}, runtime: DigestQueryRuntime = {}) {
-  const nowMs = nowMsOf(runtime);
-  const normalized = normalizeVault(options, nowMs);
-  const all = loadCheckpoints(db, normalized.offset);
-  const latestRow = all.find((row) => row.ms !== null) || null;
-  const filtered = all.filter((row) => {
-    if (row.ms === null) return normalized.fromMs === null && normalized.toMs === null;
-    if (normalized.fromMs !== null && row.ms < normalized.fromMs) return false;
-    if (normalized.toMs !== null && row.ms >= normalized.toMs) return false;
-    return true;
-  });
-  const start = normalized.cursor
-    ? filtered.findIndex((row) => {
-      const time = row.checkpoint_at;
-      if (time === null) return false;
-      return time < normalized.cursor!.t || (time === normalized.cursor!.t && row.id < normalized.cursor!.k);
-    })
-    : 0;
-  const rest = start < 0 ? [] : filtered.slice(start);
-  const page = rest.slice(0, normalized.limit);
-  const last = page[page.length - 1];
-  const nextCursor = rest.length > normalized.limit && last?.checkpoint_at
-    ? Buffer.from(JSON.stringify({ t: last.checkpoint_at, k: last.id, f: normalized.filterHash })).toString('base64url')
-    : null;
-  const wantStats = !normalized.cursor && normalized.stats;
-  const dayInfo = wantStats ? vaultDays(db, all, normalized.readsFromMs, normalized.readsToMs, normalized.offset) : null;
-  const checkpoints = page.map((row) => ({
-    id: row.id,
-    checkpoint_at: row.checkpoint_at,
-    day: row.day,
-    value_raw: row.value_raw,
-    effective_at: row.effective_at,
-    recorded_at: row.recorded_at,
-    superseded_at: row.superseded_at,
-    current: row.current,
-    project_path: row.project_path,
-  }));
-  return {
-    status: 'ok' as const,
-    disabled: false,
-    generated_at: new Date(nowMs).toISOString(),
-    filters: {
-      from: normalized.fromIso,
-      to: normalized.toIso,
-      tz_offset_minutes: normalized.offset,
-      reads_from: normalized.readsFromIso,
-      reads_to: normalized.readsToIso,
-    },
-    checkpoints,
-    next_cursor: nextCursor,
-    last_checkpoint_at: wantStats ? latestRow?.checkpoint_at ?? null : null,
-    last_checkpoint_age_ms: wantStats && latestRow ? nowMs - (latestRow.ms as number) : null,
-    days: dayInfo ? dayInfo.days : null,
-    reads_total: dayInfo ? dayInfo.reads_total : null,
-    runs: wantStats ? reviewRuns(db) : null,
-    schedule: null,
   };
 }

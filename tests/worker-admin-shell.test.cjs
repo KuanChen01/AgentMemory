@@ -64,7 +64,7 @@ test('sidebar lists the eight sections with stable ids, targets and i18n keys', 
 });
 
 test('Home view exposes the health cards, attention and recent cards', () => {
-  for (const id of ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard', 'homeVaultCard']) {
+  for (const id of ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard']) {
     assert.match(elementTag(id), /class="healthCard glassCard glassBlur/);
     elementTag(`${id}Value`);
     elementTag(`${id}Meta`);
@@ -154,9 +154,11 @@ test('Needs attention shows the health ring with one segment per health card and
   assert.ok(attention.includes('id="homeStatusHero"'));
   assert.doesNotMatch(html, /allClearOrb/);
 
-  assert.deepEqual(ADMIN_UI_HEALTH_CHECKS.map((check) => check.key), ['worker', 'queue', 'llm', 'digest', 'vault']);
+  assert.deepEqual(ADMIN_UI_HEALTH_CHECKS.map((check) => check.key), ['worker', 'queue', 'llm', 'digest']);
   assert.deepEqual(ADMIN_UI_HEALTH_CHECKS.map((check) => check.card),
-    ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard', 'homeVaultCard']);
+    ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard']);
+  // The Vault review health card, its ring segment and its stale-checkpoint attention item are gone.
+  assert.doesNotMatch(html, /homeVaultCard|homeHealthRingVault|home\.vault|attnVaultStale|vault_review/);
   const segments = [...attention.matchAll(/<circle class="ringSeg" id="([^"]+)" data-check="([^"]+)"/g)].map((match) => [match[1], match[2]]);
   assert.deepEqual(segments, ADMIN_UI_HEALTH_CHECKS.map((check) => [check.id, check.key]));
   for (const check of ADMIN_UI_HEALTH_CHECKS) {
@@ -1436,14 +1438,14 @@ test('glass surfaces share one gradient rim and thickness shadow instead of flat
   assert.doesNotMatch(css, /border: 1px solid var\(--glass-border\)/);
 });
 
-test('Home blurs nine static surfaces: the sidebar, five health cards and three content cards', () => {
+test('Home blurs eight static surfaces: the sidebar, four health cards and three content cards', () => {
   const homeView = html.slice(html.indexOf('id="homeView"'), html.indexOf('id="activityView"'));
   const blurredOnHome = [...homeView.matchAll(/class="[^"]*\bglassBlur\b[^"]*"[^>]*\bid="([^"]+)"|\bid="([^"]+)"[^>]*class="[^"]*\bglassBlur\b/g)];
   const ids = [...homeView.matchAll(/<[a-z]+ class="([^"]*)" id="([^"]+)"/g)]
     .filter((match) => /\bglassBlur\b/.test(match[1]))
     .map((match) => match[2]);
   assert.ok(blurredOnHome.length >= ids.length);
-  assert.deepEqual(ids, ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard', 'homeVaultCard',
+  assert.deepEqual(ids, ['homeWorkerCard', 'homeQueueCard', 'homeLlmCard', 'homeDigestCard',
     'homeTodayCard', 'homeAttentionCard', 'homeRecentCard']);
   assert.match(elementTag('appSidebar'), /\bglassBlur\b/);
   // Table rows, chips and the ring never carry glassBlur.
@@ -1560,11 +1562,6 @@ test('home summary aggregates days by kind in the caller time zone', withDb(asyn
   await digest(projectB, 'success', '2026-10-17T03:40:00.000Z');
   await digest(projectA, 'failed', '2026-10-17T03:49:00.000Z', 'model timed out');
 
-  await db.saveStateFact({
-    project_path: projectA, entity_type: 'automation', entity_key: 'obsidian-vault-daily-review',
-    fact_key: 'last_successful_review_at', value: '2026-10-16T09:58:35.000Z', effective_at: '2026-10-16T09:58:35.000Z',
-  });
-
   const now = new Date('2026-10-17T04:00:00.000Z');
   const shanghai = await db.getAdminHomeSummary({ tzOffsetMinutes: 480, days: 30, now });
   assert.equal(shanghai.daily.length, 30);
@@ -1594,19 +1591,7 @@ test('home summary aggregates days by kind in the caller time zone', withDb(asyn
   assert.equal(shanghai.digests.latest.project_path, projectA);
   assert.equal(shanghai.digests.latest_day_projects, 2);
   assert.deepEqual(shanghai.digests.failed_recent.map((row) => [row.project_path, row.last_error]), [[projectA, 'model timed out']]);
-  assert.equal(shanghai.vault_review.last_successful_review_at, '2026-10-16T09:58:35.000Z');
-
-  // The VaultAudit checkpoint counts too; the newer of the two is reported, an older one never replaces it.
-  await db.saveStateFact({
-    project_path: projectA, entity_type: 'automation', entity_key: 'obsidian-vault-daily-audit',
-    fact_key: 'last_successful_audit_at', value: '2026-10-17T03:30:00.123456+00:00', effective_at: '2026-10-17T03:30:01.000Z',
-  });
-  await db.saveStateFact({
-    project_path: projectA, entity_type: 'automation', entity_key: 'obsidian-vault-daily-audit',
-    fact_key: 'unrelated_fact', value: '2026-10-17T03:59:00.000Z', effective_at: '2026-10-17T03:59:00.000Z',
-  });
-  const audited = await db.getAdminHomeSummary({ tzOffsetMinutes: 480, days: 30, now });
-  assert.equal(audited.vault_review.last_successful_review_at, '2026-10-17T03:30:00.123456+00:00');
+  assert.equal('vault_review' in shanghai, false);
 
   // In UTC the 17:30 explicit memory belongs to the previous day.
   const utc = await db.getAdminHomeSummary({ tzOffsetMinutes: 0, days: 7, now });
@@ -1622,7 +1607,7 @@ test('home summary is empty-safe', withDb(async (db) => {
   assert.deepEqual(summary.recent, []);
   assert.equal(summary.digests.latest, null);
   assert.deepEqual(summary.digests.failed_recent, []);
-  assert.equal(summary.vault_review.last_successful_review_at, null);
+  assert.equal('vault_review' in summary, false);
 }));
 
 test('worker serves the shell, the home summary route and the worker start time', async () => {

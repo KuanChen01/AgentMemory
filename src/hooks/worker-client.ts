@@ -230,7 +230,7 @@ async function ensureWorkerAvailable(port: string | number): Promise<boolean> {
 }
 
 /**
- * Set by automated jobs that must not be captured as work (the Obsidian daily review launcher sets
+ * Set by automated jobs that must not be captured as work (any non-false value, e.g.
  * AGENTMEMORY_SKIP_CAPTURE=daily_review). Every hook goes through fetchAgentMemoryWorker, so one check here keeps
  * the job's own tool events, prompts and session starts out of the memory pipeline for all agents.
  */

@@ -486,8 +486,8 @@ function pipelineBehaviourPrelude() {
         rowNodes: new Map(), groupNodes: new Map(), signatures: {},
       },
       digests: {
-        items: [], days: [], stats: null, facets: null, vault: null, nextCursor: null, window: null, loaded: false, error: "",
-        readsDisabled: false, stale: false, seq: 0, busySeq: 0, moreSeq: 0, vaultSeq: 0, vaultAt: 0,
+        items: [], days: [], stats: null, facets: null, nextCursor: null, window: null, loaded: false, error: "",
+        readsDisabled: false, stale: false, seq: 0, busySeq: 0, moreSeq: 0, cardsSeq: 0, cardsAt: 0,
         rowNodes: new Map(), groupNodes: new Map(),
       },
       projects: {
@@ -1123,7 +1123,6 @@ test('Home queue duplicates and fallbacks today open Pipeline without the wrong 
       homeQueueCard: makeCard("homeQueueCard"),
       homeLlmCard: makeCard("homeLlmCard"),
       homeDigestCard: makeCard("homeDigestCard"),
-      homeVaultCard: makeCard("homeVaultCard"),
     };
     function t(key, vars) {
       const template = en[key] || key;

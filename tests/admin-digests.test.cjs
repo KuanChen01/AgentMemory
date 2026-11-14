@@ -531,15 +531,12 @@ test('digest routes reject bad queries, page, and disable reads', async () => {
       status: 'reads_disabled', disabled: true, message: READ_DISABLED_MESSAGE,
       digest: null, sources: null, sources_truncated: null,
     };
-    const vaultOff = {
-      status: 'reads_disabled', disabled: true, message: READ_DISABLED_MESSAGE,
-      generated_at: null, filters: null, checkpoints: null, next_cursor: null, last_checkpoint_at: null, last_checkpoint_age_ms: null, days: null, reads_total: null, runs: null, schedule: null,
-    };
     assert.deepEqual((await getJson(base, '/admin/api/digest-list?agent=codex&limit=0')).body, listOff);
     assert.deepEqual((await getJson(base, '/admin/api/digest-list')).body, listOff);
     assert.deepEqual((await getJson(base, '/admin/api/digest-detail')).body, detailOff);
     assert.deepEqual((await getJson(base, '/admin/api/digest-detail?id=http-b')).body, detailOff);
-    assert.deepEqual((await getJson(base, '/admin/api/vault-reviews?reads_from=2020-01-01T00:00:00.000Z&reads_to=2020-03-01T00:00:00.000Z')).body, vaultOff);
+    // The Vault review endpoint was removed with its admin card.
+    assert.equal((await fetch(base + '/admin/api/vault-reviews', { signal: AbortSignal.timeout(15000) })).status, 404);
   });
 });
 
@@ -551,7 +548,7 @@ test('digest routes are unreachable from non-loopback addresses', async (t) => {
     return;
   }
   await withWorker(async ({ port, base }) => {
-    for (const route of ['/admin/api/digest-list', '/admin/api/digest-detail?id=missing', '/admin/api/vault-reviews']) {
+    for (const route of ['/admin/api/digest-list', '/admin/api/digest-detail?id=missing']) {
       const local = await getJson(base, route);
       assert.equal(local.status, route.includes('missing') ? 404 : 200, route);
       await assertLanRefused(external.address, port, route);

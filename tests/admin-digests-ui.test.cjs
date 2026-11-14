@@ -61,11 +61,13 @@ test('Digests view replaces the placeholder and follows Pipeline directly', () =
   assert.ok(pipelineAt < uiHtml.indexOf('<section id="digestsView"'));
   for (const id of ['digLead', 'digUpdated', 'digToolbar', 'digProjectButton', 'digAgentButton', 'digStatusChip', 'digRangeControl', 'digRange7d',
     'digRange30d', 'digRange90d', 'digRangeCustom', 'digCards', 'digNightlyCard', 'digNightlyChip', 'digNextRunValue', 'digLastRunValue',
-    'digLastProjectsValue', 'digLastProjectsSub', 'digVaultCard', 'digVaultChip', 'digVaultLastValue', 'digVaultDots', 'digList', 'digNotice',
+    'digLastProjectsValue', 'digLastProjectsSub', 'digList', 'digNotice',
     'digNoticeAction', 'digLoadMore', 'digProjectPopover', 'digAgentPopover', 'digCustomPopover', 'digCustomFrom', 'digCustomTo']) {
     assert.ok(view.includes(`id="${id}"`), `#${id} lives in the Digests view`);
   }
   for (const [, id] of view.matchAll(/\sid="([^"]+)"/g)) assert.match(id, /^dig/, `${id} uses the dig prefix`);
+  // The Vault review card is gone: the Digests view shows only the Nightly status card.
+  assert.doesNotMatch(view, /digVault|Vault review/);
   const markup = uiHtml.replace(/<script>[\s\S]*<\/script>/, '');
   const ids = [...markup.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(ids.filter((id, index) => ids.indexOf(id) !== index), []);
@@ -102,10 +104,10 @@ test('every Digests i18n key exists in en and zh-CN', () => {
   }
 });
 
-test('Digests client reads digest-list by covered day with the tz offset, and the two status cards', () => {
+test('Digests client reads digest-list by covered day with the tz offset, and the Nightly status card', () => {
   assert.match(uiScript, /"\/admin\/api\/digest-list\?"/);
   assert.match(uiScript, /"\/admin\/api\/digest-detail\?id="/);
-  assert.match(uiScript, /"\/admin\/api\/vault-reviews\?"/);
+  assert.doesNotMatch(uiScript, /vault-reviews|renderDigestVault|digVault|homeVaultCard|vault_review/);
   assert.match(uiScript, /fetchJson\("\/admin\/api\/digest-scheduler"\)/);
   const url = uiClientFunction('digestsUrl');
   assert.match(url, /stats: cursor \? "0" : "1"/);
@@ -123,14 +125,12 @@ test('Digests client reads digest-list by covered day with the tz offset, and th
   const cards = uiClientFunction('loadDigestCards');
   assert.match(cards, /limit: "1", stats: "1", tz_offset_minutes: tz/);
   assert.match(cards, /"\/admin\/api\/digest-list\?" \+ lastRunParams/);
-  assert.match(cards, /if \(seq !== dig\.vaultSeq\) return;/);
+  assert.match(cards, /if \(seq !== dig\.cardsSeq\) return;/);
   assert.match(uiClientFunction('renderDigestNightly'), /dig\.lastRun/);
   assert.doesNotMatch(uiClientFunction('renderDigestNightly'), /dig\.stats/);
   assert.match(uiClientFunction('bindDigestEvents'), /openDigestMenu/);
   assert.match(uiClientFunction('bindDigestEvents'), /openDigestCustom/);
   assert.match(uiClientFunction('bindDigestEvents'), /applyDigestCustomRange/);
-  assert.match(uiClientFunction('renderDigestVault'), /String\(date\.getDate\(\)\)/);
-  assert.doesNotMatch(uiClientFunction('renderDigestVault'), /index === 0/);
 });
 
 test('getDigestRange covers whole local days ending today', () => {
@@ -304,7 +304,7 @@ test('project and agent pickers list All first and use first-page facets', () =>
 
 test('Home last-digest headline uses the covered local_date, not generated_at', () => {
   const health = uiClientFunction('renderHomeHealth');
-  const digestBlock = health.slice(health.indexOf('const latest = summary.digests'), health.indexOf('els.homeVaultCard'));
+  const digestBlock = health.slice(health.indexOf('const latest = summary.digests'));
   assert.match(digestBlock, /parseLocalDay\(latest\.local_date\)/);
   assert.match(digestBlock, /formatShortDate\(covered\)/);
   assert.doesNotMatch(digestBlock, /formatShortDate\(generatedAt\)|formatClock\(generatedAt\)/);
