@@ -1596,6 +1596,18 @@ test('home summary aggregates days by kind in the caller time zone', withDb(asyn
   assert.deepEqual(shanghai.digests.failed_recent.map((row) => [row.project_path, row.last_error]), [[projectA, 'model timed out']]);
   assert.equal(shanghai.vault_review.last_successful_review_at, '2026-10-16T09:58:35.000Z');
 
+  // The VaultAudit checkpoint counts too; the newer of the two is reported, an older one never replaces it.
+  await db.saveStateFact({
+    project_path: projectA, entity_type: 'automation', entity_key: 'obsidian-vault-daily-audit',
+    fact_key: 'last_successful_audit_at', value: '2026-10-17T03:30:00.123456+00:00', effective_at: '2026-10-17T03:30:01.000Z',
+  });
+  await db.saveStateFact({
+    project_path: projectA, entity_type: 'automation', entity_key: 'obsidian-vault-daily-audit',
+    fact_key: 'unrelated_fact', value: '2026-10-17T03:59:00.000Z', effective_at: '2026-10-17T03:59:00.000Z',
+  });
+  const audited = await db.getAdminHomeSummary({ tzOffsetMinutes: 480, days: 30, now });
+  assert.equal(audited.vault_review.last_successful_review_at, '2026-10-17T03:30:00.123456+00:00');
+
   // In UTC the 17:30 explicit memory belongs to the previous day.
   const utc = await db.getAdminHomeSummary({ tzOffsetMinutes: 0, days: 7, now });
   assert.equal(utc.daily.length, 7);

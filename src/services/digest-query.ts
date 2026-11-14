@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db';
 import { agentMatchSql, presentedAgents } from './agent-id';
 import { sanitizeLastError, sanitizeText } from './pipeline-query';
+import { vaultCheckpointWhere } from './vault-checkpoint';
 
 const DIGEST_STATUSES = ['succeeded', 'skipped', 'failed'] as const;
 type DigestStatus = typeof DIGEST_STATUSES[number];
@@ -15,7 +16,6 @@ const DAY_MS = 86_400_000;
 const READS_MAX_WINDOW_MS = 31 * DAY_MS;
 const VAULT_RUN_LIMIT = 20;
 const SOURCE_LIMIT = 50;
-const VAULT_ENTITY_KEYS = ['obsidian-vault-daily-review', 'automation/obsidian-vault-daily-review'];
 
 const CURSOR_TOKEN = /^[A-Za-z0-9_-]+$/;
 const FILTER_HASH = /^[0-9a-f]{12}$/;
@@ -777,13 +777,12 @@ interface VaultCheckpoint {
 }
 
 function loadCheckpoints(db: DatabaseManager, offset: number): VaultCheckpoint[] {
-  const marks = VAULT_ENTITY_KEYS.map(() => '?').join(',');
+  const where = vaultCheckpointWhere();
   const rows = db.sqlAll(
     `SELECT id, project_path, value_json, effective_at, recorded_at, superseded_at
      FROM state_facts
-     WHERE LOWER(entity_key) IN (${marks})
-       AND fact_key = 'last_successful_review_at'`,
-    VAULT_ENTITY_KEYS,
+     WHERE ${where.sql}`,
+    where.params,
   );
   return rows.map((row) => {
     const raw = valueRaw(row.value_json);
